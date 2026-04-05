@@ -10,6 +10,9 @@ import { WebSocketServer } from "ws";
 import twilio from "twilio";
 import { generateCallId, createSession, getSession, getSessionByCallSid, listSessions, sessionEvents, appendTranscriptEntry } from "./sessions.js";
 import { appendEvent, writeTranscript } from "../logs/sessionLog.js";
+import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
+import { buildSystemInstruction } from "../audio/systemInstruction.js";
+import { readRuntime } from "../runtime.js";
 
 // --- Constants ---
 
@@ -84,7 +87,11 @@ const httpServer = createHttpServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 httpServer.on("upgrade", (req, socket, head) => {
-  if (req.url?.startsWith("/conversation-relay")) {
+  if (req.url?.startsWith("/media-stream")) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else if (req.url?.startsWith("/conversation-relay")) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
@@ -94,9 +101,97 @@ httpServer.on("upgrade", (req, socket, head) => {
 });
 
 wss.on("connection", (ws, req) => {
+  const reqUrl = new URL(req.url ?? "", `http://${req.headers.host}`);
+  const path = reqUrl.pathname;
+
+  if (path.startsWith("/media-stream")) {
+    handleMediaStreamConnection(ws, reqUrl);
+  } else {
+    handleConversationRelayConnection(ws, reqUrl);
+  }
+});
+
+function handleMediaStreamConnection(ws: import("ws").WebSocket, _reqUrl: URL): void {
+  console.log(`[media-stream] WebSocket connected — waiting for start event with callId`);
+
+  // Twilio's <Stream> delivers customParameters in the "start" event, not in the URL.
+  // We listen for the first message to resolve the session, then set up the bridge.
+  let initialized = false;
+
+  ws.on("message", (data) => {
+    if (initialized) return; // Bridge handles subsequent messages
+
+    try {
+      const msg = JSON.parse(data.toString()) as {
+        event: string;
+        start?: {
+          streamSid?: string;
+          callSid?: string;
+          customParameters?: Record<string, string>;
+        };
+      };
+
+      if (msg.event === "start") {
+        const callId = msg.start?.customParameters?.callId ?? "";
+        const session = callId ? getSession(callId) : undefined;
+
+        if (!session) {
+          console.error(`[media-stream] No session found for callId=${callId}`);
+          ws.close();
+          return;
+        }
+
+        console.log(`[media-stream] Start event received for call ${callId}`);
+        session.ws = ws;
+        session.lastActivityTime = Date.now();
+        if (msg.start?.streamSid) session.streamSid = msg.start.streamSid;
+        if (msg.start?.callSid) session.callSid = msg.start.callSid;
+        session.status = "in_progress";
+
+        const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+        if (!apiKey) {
+          console.error("[media-stream] GOOGLE_GENERATIVE_AI_API_KEY not set");
+          ws.close();
+          return;
+        }
+
+        const model = process.env.GEMINI_MODEL ?? "models/gemini-3.1-flash-live-preview";
+        const systemInstruction = session.systemInstruction ?? "You are a helpful phone assistant.";
+        const voiceName = session.voiceName ?? process.env.GEMINI_VOICE ?? "Aoede";
+
+        const bridge = new MediaStreamsBridge({
+          twilioWs: ws,
+          callId,
+          session,
+          apiKey,
+          model,
+          systemInstruction,
+          voiceName,
+        });
+
+        session.bridge = bridge;
+        initialized = true;
+
+        bridge.connectGemini().catch((err) => {
+          console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
+          bridge.cleanup();
+        });
+      }
+    } catch {
+      // ignore non-JSON or unexpected messages before init
+    }
+  });
+
+  ws.on("close", () => {
+    if (!initialized) {
+      console.log("[media-stream] WebSocket closed before initialization");
+    }
+  });
+}
+
+function handleConversationRelayConnection(ws: import("ws").WebSocket, reqUrl: URL): void {
   // Try to extract callId from URL query params (may not be present — Twilio
   // sends custom attributes in the setup message instead)
-  const reqUrl = new URL(req.url ?? "", `http://${req.headers.host}`);
   let callId = reqUrl.searchParams.get("callId") ?? "";
   let session = callId ? getSession(callId) : undefined;
 
@@ -180,7 +275,7 @@ wss.on("connection", (ws, req) => {
       });
     }
   });
-});
+}
 
 // --- IPC server (Unix domain socket) ---
 
@@ -218,51 +313,117 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const to = params.to as string;
   const from = params.from as string;
   const campaign = (params.campaign as string) || undefined;
-  const ttsProvider = (params.ttsProvider as string) || "ElevenLabs";
-  const sttProvider = (params.sttProvider as string) || "Deepgram";
-  const voice = (params.voice as string) || "";
+  const backend = (params.backend as string) || "gemini-live";
   const welcomeGreeting = (params.welcomeGreeting as string) || "";
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const webhookBaseUrl = process.env.OUTREACH_WEBHOOK_URL;
 
   if (!accountSid || !authToken) {
     return { error: "config_error", message: "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set" };
   }
+
+  // Resolve webhook URL from env or runtime.json
+  let webhookBaseUrl = process.env.OUTREACH_WEBHOOK_URL;
   if (!webhookBaseUrl) {
-    return { error: "config_error", message: "OUTREACH_WEBHOOK_URL must be set" };
+    const runtime = await readRuntime();
+    if (runtime?.webhook_url) {
+      webhookBaseUrl = runtime.webhook_url;
+    }
+  }
+  if (!webhookBaseUrl) {
+    return { error: "config_error", message: "OUTREACH_WEBHOOK_URL must be set (or run 'outreach init')" };
   }
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
+  session.backend = backend as "gemini-live" | "conversation-relay";
 
-  try {
-    const client = twilio(accountSid, authToken);
-    const twilioCall = await client.calls.create({
-      to,
-      from,
-      url: `${webhookBaseUrl}/webhook/voice?callId=${id}&ttsProvider=${encodeURIComponent(ttsProvider)}&sttProvider=${encodeURIComponent(sttProvider)}&voice=${encodeURIComponent(voice)}&welcomeGreeting=${encodeURIComponent(welcomeGreeting)}`,
+  if (backend === "gemini-live") {
+    // V2: Gemini Live via Media Streams
+    const objective = (params.objective as string) || undefined;
+    const persona = (params.persona as string) || undefined;
+    const hangupWhen = (params.hangupWhen as string) || undefined;
+
+    const sysInstruction = buildSystemInstruction({
+      persona,
+      objective,
+      hangupWhen,
+      welcomeGreeting,
     });
+    session.systemInstruction = sysInstruction;
+    session.voiceName = process.env.GEMINI_VOICE ?? "Aoede";
 
-    session.callSid = twilioCall.sid;
+    // Extract host from webhook URL for WebSocket connection
+    let wsHost: string;
+    try {
+      wsHost = new URL(webhookBaseUrl).host;
+    } catch {
+      wsHost = `localhost:${PORT}`;
+    }
 
-    // Log call.started event
-    const campaignId = campaign || id;
-    await appendEvent(campaignId, {
-      type: "call.started",
-      callId: id,
-      callSid: twilioCall.sid,
-      from,
-      to,
-      ts: Date.now(),
-    });
+    const twiml = `<Response><Connect><Stream url="wss://${wsHost}/media-stream"><Parameter name="callId" value="${escapeXml(id)}" /></Stream></Connect></Response>`;
 
-    resetIdleTimer();
-    return { id, status: "ringing" };
-  } catch (err) {
-    session.status = "ended";
-    return { error: "twilio_error", message: (err as Error).message };
+    try {
+      const client = twilio(accountSid, authToken);
+      const twilioCall = await client.calls.create({
+        to,
+        from,
+        twiml,
+      });
+
+      session.callSid = twilioCall.sid;
+
+      const campaignId = campaign || id;
+      await appendEvent(campaignId, {
+        type: "call.started",
+        callId: id,
+        callSid: twilioCall.sid,
+        from,
+        to,
+        backend: "gemini-live",
+        ts: Date.now(),
+      });
+
+      resetIdleTimer();
+      return { id, status: "ringing", backend: "gemini-live" };
+    } catch (err) {
+      session.status = "ended";
+      return { error: "twilio_error", message: (err as Error).message };
+    }
+  } else {
+    // V1: ConversationRelay
+    const ttsProvider = (params.ttsProvider as string) || "ElevenLabs";
+    const sttProvider = (params.sttProvider as string) || "Deepgram";
+    const voice = (params.voice as string) || "";
+
+    try {
+      const client = twilio(accountSid, authToken);
+      const twilioCall = await client.calls.create({
+        to,
+        from,
+        url: `${webhookBaseUrl}/webhook/voice?callId=${id}&ttsProvider=${encodeURIComponent(ttsProvider)}&sttProvider=${encodeURIComponent(sttProvider)}&voice=${encodeURIComponent(voice)}&welcomeGreeting=${encodeURIComponent(welcomeGreeting)}`,
+      });
+
+      session.callSid = twilioCall.sid;
+
+      const campaignId = campaign || id;
+      await appendEvent(campaignId, {
+        type: "call.started",
+        callId: id,
+        callSid: twilioCall.sid,
+        from,
+        to,
+        backend: "conversation-relay",
+        ts: Date.now(),
+      });
+
+      resetIdleTimer();
+      return { id, status: "ringing", backend: "conversation-relay" };
+    } catch (err) {
+      session.status = "ended";
+      return { error: "twilio_error", message: (err as Error).message };
+    }
   }
 }
 
@@ -426,7 +587,24 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
 
   const durationSec = Math.floor((Date.now() - session.startTime) / 1000);
 
-  // End via Twilio REST API
+  // If V2 bridge exists, use its cleanup (handles both Gemini + Twilio WS)
+  if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
+    // Still hang up via Twilio REST API to be sure
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    if (accountSid && authToken && session.callSid) {
+      try {
+        const client = twilio(accountSid, authToken);
+        await client.calls(session.callSid).update({ status: "completed" });
+      } catch (err) {
+        console.error(`[daemon] Failed to hangup call ${id} via Twilio:`, (err as Error).message);
+      }
+    }
+    (session.bridge as MediaStreamsBridge).cleanup();
+    return { id, status: "ended", duration_sec: durationSec };
+  }
+
+  // V1: End via Twilio REST API
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
 

@@ -8,6 +8,9 @@ export interface OutreachConfig {
   OUTREACH_DEFAULT_FROM: string;
   OUTREACH_PERSONAL_CALLER_ID: string;
   OUTREACH_WEBHOOK_URL: string;
+  GOOGLE_GENERATIVE_AI_API_KEY: string;
+  GEMINI_MODEL: string;
+  GEMINI_VOICE: string;
 }
 
 export const outreachConfig: OutreachConfig = {
@@ -16,4 +19,7 @@ export const outreachConfig: OutreachConfig = {
   OUTREACH_DEFAULT_FROM: process.env.OUTREACH_DEFAULT_FROM ?? "",
   OUTREACH_PERSONAL_CALLER_ID: process.env.OUTREACH_PERSONAL_CALLER_ID ?? "",
   OUTREACH_WEBHOOK_URL: process.env.OUTREACH_WEBHOOK_URL ?? "",
+  GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? "",
+  GEMINI_MODEL: process.env.GEMINI_MODEL ?? "models/gemini-3.1-flash-live-preview",
+  GEMINI_VOICE: process.env.GEMINI_VOICE ?? "Aoede",
 };

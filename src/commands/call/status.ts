@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { ensureDaemon } from "../../daemon/lifecycle.js";
+import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
@@ -15,9 +15,9 @@ export function registerStatusCommand(parent: Command): void {
     .requiredOption("--id <callId>", "Call ID")
     .action(async (opts: StatusOptions) => {
       try {
-        await ensureDaemon();
+        await requireRuntime();
       } catch (err) {
-        outputError(INFRA_ERROR, `Failed to start daemon: ${(err as Error).message}`);
+        outputError(INFRA_ERROR, (err as Error).message);
         process.exit(INFRA_ERROR);
         return;
       }

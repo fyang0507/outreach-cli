@@ -3,6 +3,9 @@ import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// Re-export requireRuntime for use by call commands
+export { requireRuntime } from "../runtime.js";
+
 const PID_FILE = "/tmp/outreach-daemon.pid";
 const HEALTH_URL = "http://127.0.0.1:{PORT}/health";
 const DEFAULT_PORT = 3001;
