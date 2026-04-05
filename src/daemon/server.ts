@@ -279,25 +279,35 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
   if (wait) {
     // Check if there are already new entries
     const currentLen = session.transcriptBuffer.length;
-    if (currentLen > session.lastListenIndex) {
-      // New entries already available
-    } else {
+    if (currentLen <= session.lastListenIndex) {
       // Wait for new transcript entries or timeout
+      // Use a debounce: after first event, wait 300ms for more chunks
+      // before returning, so we collect a full utterance
       await new Promise<void>((resolve) => {
         const eventName = `transcript:${id}`;
-        let timer: ReturnType<typeof setTimeout>;
+        let mainTimer: ReturnType<typeof setTimeout>;
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-        const onTranscript = () => {
-          clearTimeout(timer);
+        const finish = () => {
+          clearTimeout(mainTimer);
+          if (debounceTimer) clearTimeout(debounceTimer);
+          sessionEvents.removeListener(eventName, onTranscript);
           resolve();
         };
 
-        timer = setTimeout(() => {
+        const onTranscript = () => {
+          // Got a chunk — debounce: wait 300ms for more before resolving
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(finish, 300);
+        };
+
+        mainTimer = setTimeout(() => {
           sessionEvents.removeListener(eventName, onTranscript);
+          if (debounceTimer) clearTimeout(debounceTimer);
           resolve();
         }, timeout);
 
-        sessionEvents.once(eventName, onTranscript);
+        sessionEvents.on(eventName, onTranscript);
       });
     }
   }
