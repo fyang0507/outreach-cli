@@ -45,17 +45,30 @@ Research conducted 2026-04-05. Prices and capabilities may have changed.
 
 | Model | Protocol | Latency | Mulaw/g711 | Text control | Transcripts | $/min |
 |---|---|---|---|---|---|---|
+| **Gemini Live (gemini-3.1-flash-live-preview)** | WebSocket | ~300-800ms | No (transcoding needed) | Yes (system prompt) | Yes (both directions) | ~$0.04-0.08 |
 | **OpenAI Realtime (GPT-4o)** | WebSocket | ~300-500ms | Yes (native) | Yes (system prompt) | Yes (dual modality) | ~$0.30 |
-| **Gemini Live** | WebSocket | ~300-600ms | No (needs transcoding) | Yes | Yes | ~$0.02-0.04 |
 | **Hume EVI 2** | WebSocket | ~500ms | Yes | Yes | Yes | TBD |
 | **Ultravox** | API/self-host | ~500-800ms | Yes | Yes | Yes | Varies |
 
-**Recommendation:** OpenAI Realtime API for telephony (native mulaw, official Twilio examples, lowest latency).
+**Recommendation: Gemini Live API** — 5-7x cheaper than OpenAI Realtime, comparable latency with transcoding bridge, official Google Twilio integration sample exists, user already has Google API account.
+
+### Gemini Live API details
+
+- **Model:** `gemini-3.1-flash-live-preview`
+- **Audio input:** PCM 16-bit, 16kHz, little-endian (requires mulaw→PCM transcoding for telephony)
+- **Audio output:** PCM 16-bit, 24kHz, little-endian (requires PCM→mulaw transcoding for telephony)
+- **System instructions:** text `systemInstruction` in setup message, audio for conversation
+- **Transcription:** text transcripts of both user input and model output
+- **Barge-in:** native — continuous audio awareness, not VAD-triggered
+- **Function calling:** supported during live audio sessions
+- **Languages:** 70+
+- **Twilio integration:** official Google sample repo (`GoogleCloudPlatform/generative-ai`) shows Media Streams bridge pattern
+- **Transcoding overhead:** ~1-3ms per audio chunk (negligible)
 
 ## Optimal latency pipeline (Option A)
 
 Deepgram Nova-2 + Haiku + Cartesia Sonic = ~200-400ms audio processing + ~500ms LLM = **~0.8-1.2s total**
 
-## Optimal latency (Option B)
+## Optimal latency (Option B — preferred)
 
-OpenAI Realtime API = **~0.3-0.5s total** (single hop, audio-native)
+Gemini Live API + transcoding bridge = **~0.5-1.0s total** (model ~0.3-0.8s + bridge ~100-200ms)

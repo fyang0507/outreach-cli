@@ -81,7 +81,7 @@ See `docs/plan/` for V2 architecture options:
 - `v2-vendor-research.md` — full comparison tables for telephony, STT, TTS, and voice-native providers
 - `latency-analysis.md` — measured V1 latency data from live testing
 
-Key V2 decision: whether to use GPT-4o Realtime API (~0.3-0.5s latency, autonomous calls) vs raw Deepgram+Cartesia pipeline (~0.8-1.2s, full agent control). Not yet decided — depends on latency vs voice-cloning priority.
+Key V2 decision: leaning towards Gemini Live API (`gemini-3.1-flash-live-preview`) as voice-native backend — ~0.5-1.0s latency, ~$0.04-0.08/min, 5-7x cheaper than OpenAI Realtime. Requires mulaw↔PCM transcoding bridge. Raw Deepgram+Cartesia pipeline (~0.8-1.2s) remains an option for voice cloning use cases.
 
 ## Design doc
 

@@ -49,41 +49,72 @@ Cartesia Sonic (streaming TTS, ~90-130ms TTFB)
 
 **Cost:** ~$0.05/min (Twilio $0.014 + Deepgram $0.004 + Cartesia $0.04)
 
-## Option B: Voice-Native Model (OpenAI Realtime API)
+## Option B: Voice-Native Model (Gemini Live API) — PREFERRED
 
-Replace the entire STT→LLM→TTS pipeline with a single audio-native model.
+Replace the entire STT→LLM→TTS pipeline with a single audio-native model. After evaluation, **Gemini Live API is the preferred choice** over OpenAI Realtime due to cost and existing account.
 
 **Architecture:**
 ```
 Phone audio (mulaw/8kHz) ←→ Twilio Media Streams (WebSocket)
   ↕
-Daemon bridges audio to OpenAI Realtime API (WebSocket)
+Daemon transcodes audio (mulaw 8kHz ↔ PCM 16kHz)
   ↕
-GPT-4o processes audio natively, outputs audio + text transcript
+Gemini Live API (gemini-3.1-flash-live-preview)
+  - receives PCM 16kHz audio
+  - processes natively (no separate STT/TTS)
+  - returns PCM 24kHz audio + text transcript
 ```
 
-**Expected latency:** ~0.3-0.5s per turn
+**Expected latency:** ~0.5-1.0s per turn (0.3-0.8s model + ~100-200ms transcoding bridge)
 
 **Pros:**
 - Dramatically lower latency (2-3x better than Option A)
-- Only 2 hops (audio in → model → audio out) vs 6
-- Text transcripts built in (dual modality output)
+- Only 2 hops (audio in → model → audio out) plus thin transcoding layer
+- Text transcripts built in (both input and output)
 - Text system prompt controls persona/task — the orchestrator still delegates via text
-- Native mulaw/g711 support — no codec conversion needed
-- Official Twilio Media Streams integration examples exist
-- Simplest daemon code — just a WebSocket bridge, no audio processing
+- **5-7x cheaper than OpenAI Realtime** (~$0.04-0.08/min vs ~$0.30/min)
+- User already has Google API account provisioned
+- Official Google sample repo for Twilio Media Streams integration exists
+- Function calling supported during live audio sessions
+- Barge-in/interruption handled natively by the model (continuous audio awareness)
+- 70+ language support
 
 **Cons:**
-- GPT-4o is the brain, not Claude — model lock-in for on-call reasoning
-- No voice cloning (limited to OpenAI's built-in voices) — conflicts with "sound like me" goal
+- No native mulaw/g711 — requires transcoding middleware (mulaw 8kHz ↔ PCM 16kHz). Adds ~1-3ms per chunk (negligible).
+- Gemini Flash is the brain, not Claude — model lock-in for on-call reasoning
+- No voice cloning (limited to Gemini's built-in voices) — conflicts with "sound like me" goal
 - Less fine-grained control (model decides what to say autonomously)
-- Most expensive option (~$0.30/min)
 - Sub-agent can't intervene mid-call (fire-and-forget with system prompt)
 
-**Cost:** ~$0.30/min (audio I/O pricing)
+**Cost:** ~$0.04-0.08/min (audio I/O pricing)
 
-**Other voice-native models:**
-- Gemini Live API: cheaper (~$0.02-0.04/min) but no native mulaw, no official Twilio path
+**Transcoding bridge (daemon):**
+```
+Inbound:  Twilio mulaw 8kHz → decode to PCM 16-bit → resample 8kHz→16kHz → base64 → Gemini WS
+Outbound: Gemini PCM 24kHz → resample 24kHz→8kHz → encode to mulaw → base64 → Twilio WS
+```
+This is a thin layer (~50 lines of code) using Node.js buffers. Google's sample repo demonstrates the pattern.
+
+**Gemini Live API setup message:**
+```json
+{
+  "setup": {
+    "model": "models/gemini-3.1-flash-live-preview",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "voiceConfig": { "prebuiltVoiceConfig": { "voiceName": "Aoede" } }
+      }
+    },
+    "systemInstruction": {
+      "parts": [{ "text": "You are Fredy's assistant. Be friendly and concise..." }]
+    }
+  }
+}
+```
+
+**Alternative voice-native models (evaluated, not chosen):**
+- OpenAI Realtime API (GPT-4o): native mulaw, ~0.3-0.5s latency, but ~$0.30/min (5-7x more expensive)
 - Hume EVI 2: purpose-built voice AI with emotion, has Twilio support, ~500ms latency
 - Ultravox: open-weight, self-hostable, supports Twilio Media Streams
 
@@ -100,15 +131,16 @@ Use Realtime for latency-critical calls to humans, Pipeline for calls requiring 
 
 ## Comparison
 
-| Factor | V1 (current) | A: Raw Pipeline | B: Voice-Native | C: Hybrid |
+| Factor | V1 (current) | A: Raw Pipeline | B: Gemini Live | C: Hybrid |
 |---|---|---|---|---|
-| Latency | ~1.5-3s | ~0.8-1.2s | ~0.3-0.5s | Best of both |
-| Cost/min | ~$0.08 | ~$0.05 | ~$0.30 | Varies |
-| Brain | Claude/Haiku | Claude/Haiku | GPT-4o | Either |
+| Latency | ~1.5-3s | ~0.8-1.2s | ~0.5-1.0s | Best of both |
+| Cost/min | ~$0.08 | ~$0.05 | ~$0.04-0.08 | Varies |
+| Brain | Claude/Haiku | Claude/Haiku | Gemini Flash | Either |
 | Voice cloning | Via ElevenLabs | Via ElevenLabs/Cartesia | No | Pipeline only |
 | Control | Full (agent per turn) | Full (agent per turn) | System prompt only | Either |
-| Complexity | Low | Medium | Low | High |
+| Complexity | Low | Medium | Low-Medium (transcoding) | High |
 | CLI changes | None | Internal only | New `--objective` flow | Both |
+| Account | Twilio | Twilio+Deepgram+Cartesia | Twilio+Google (both exist) | All |
 
 ## CLI interface changes for Option B
 
@@ -117,12 +149,12 @@ When using voice-native backend, the interaction model changes. The sub-agent no
 ```
 outreach call place \
   --to "+15551234567" \
-  --backend realtime \
+  --backend gemini-live \
   --objective "Get a plumbing quote for kitchen sink repair" \
   --persona "You are Fredy's assistant. Be friendly and concise." \
   --hangup-when "You have the quote and availability info"
 
-# Call runs autonomously — GPT-4o handles the conversation
+# Call runs autonomously — Gemini handles the conversation
 
 outreach call wait --id call_xxx --timeout 300000
 # Blocks until call ends, returns result
@@ -137,11 +169,17 @@ New commands needed:
 
 ## Decision status
 
-**Not yet decided.** Pending:
-1. User testing feedback on whether V1 latency is usable for real outreach tasks
-2. Priority assessment: latency vs voice cloning vs cost
-3. Whether the "sound like me" goal requires voice cloning (rules out Option B alone)
+**Leaning Option B (Gemini Live).** V1 latency confirmed unnatural in live testing. Gemini Live is preferred over OpenAI Realtime due to:
+- 5-7x cheaper (~$0.04-0.08/min vs ~$0.30/min)
+- User already has Google API account
+- Comparable latency (~0.5-1.0s vs ~0.3-0.5s)
+- Official Twilio integration sample exists
+
+Remaining questions:
+1. Does Gemini Flash reasoning quality hold up for complex call scenarios (IVR navigation, screening)?
+2. Transcoding bridge reliability and latency in practice
+3. Whether the "sound like me" goal requires voice cloning (would need Option A or C eventually)
 
 ## Recommendation
 
-Start with Option B (voice-native) for the latency improvement — it's the simplest to build and the biggest UX leap. Add Option A later for voice cloning use cases. This naturally leads to Option C (hybrid) over time.
+Start with Option B (Gemini Live) for the latency and cost improvement. The transcoding bridge is lightweight (~50 lines) and Google's sample repo provides a reference implementation. If voice cloning becomes critical, add Option A as a second backend, leading to Option C (hybrid).
