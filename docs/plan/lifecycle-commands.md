@@ -85,10 +85,31 @@ This replaces the current approach of PID files in `/tmp/` which:
 - Can go stale without detection
 - Don't store the webhook URL
 
+## Separation of concerns: orchestrator vs sub-agent
+
+The orchestrator manages infrastructure lifecycle. Sub-agents only execute tasks.
+
+```
+Orchestrator (owns environment):
+  1. outreach init              ← provision
+  2. spawn sub-agents for tasks
+  3. collect results
+  4. outreach teardown          ← cleanup
+
+Sub-agent (owns task execution):
+  1. outreach call place ...
+  2. listen/say/dtmf loop
+  3. outreach call hangup
+  4. outreach log append ...
+  (never touches init/teardown)
+```
+
+This means `call place` should **fail with a clear error if init hasn't been run**, not silently auto-start the daemon. `ensureDaemon()` is replaced by a check for `runtime.json` — if absent, exit with: `{"error":"not_initialized","message":"Run 'outreach init' first"}`.
+
 ## Impact on existing commands
 
-- `call place` currently calls `ensureDaemon()`. This should check for `runtime.json` first. If not found, either auto-run init or error with "run `outreach init` first".
-- The webhook URL is currently read from `.env`. With init, it's discovered automatically from ngrok and stored in `runtime.json`.
+- Remove `ensureDaemon()` auto-start from `call place`. Replace with a `requireRuntime()` check that reads `runtime.json` and fails if not found.
+- The webhook URL is discovered automatically by `init` (from ngrok) and stored in `runtime.json`. Sub-agent commands read it from there, not `.env`.
 
 ## Stale state recovery
 
