@@ -19,10 +19,10 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 ```
 
 - **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,status,hangup}`, `outreach log {append,read}`
-- **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`.
+- **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding.
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
-- **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), and transcript extraction.
+- **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
 - **Session logs** (`src/logs/sessionLog.ts`): JSONL files in `~/.outreach/sessions/` and `~/.outreach/transcripts/`. Append-only, file-system-native.
 
@@ -61,7 +61,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | Source | Contains | Example |
 |---|---|---|
 | `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `outreach.config.yaml` | Application behavior | Gemini model, voice, VAD, thinking level, persona, see `docs/plan/tuning-reference.md` for full parameter documentation. |
+| `outreach.config.yaml` | Application behavior | Gemini model, voice, VAD, thinking level, persona, see `docs/done/tuning-reference.md` for full parameter documentation. |
 
 ## Running a call
 
@@ -99,7 +99,7 @@ The voice agent handles the entire call autonomously. Use `call listen` to monit
 
 ## V1 legacy
 
-V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain). V1 code has been removed — all ConversationRelay paths, `say`/`dtmf` commands, and related WebSocket handlers are gone. V2 is the only supported backend.
+V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.4s per-turn latency. V1 code has been removed — all ConversationRelay paths, `say`/`dtmf` commands, and related WebSocket handlers are gone. V2 is the only supported backend, achieving sub-1s latency via voice-native Gemini Live and pre-connected sessions.
 
 ## Reference docs
 
@@ -107,5 +107,12 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain). V1 code
 |---|---|
 | `docs/design.md` | Initial engineering design document |
 | `docs/done/tuning-reference.md` | Full parameter reference for Gemini config |
+| `docs/done/v2-architecture-options.md` | V2 architecture options analysis |
+| `docs/done/v2-vendor-research.md` | Voice API vendor comparison |
+| `docs/done/latency-analysis.md` | Latency measurement and optimization |
+| `docs/done/lifecycle-commands.md` | Init/teardown/status design |
+| `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
+| `docs/done/v1-legacy-cleanup.md` | V1 code removal checklist |
+| `docs/done/voice-clone.md` | Voice cloning research |
+| `docs/done/integration-test-ivr.md` | IVR integration test plan |
 | `docs/plan/memory-layer.md` | Memory/context layer design (planned) |
-| `docs/done/` | Completed planning docs (V2 options, vendor research, latency analysis) |
