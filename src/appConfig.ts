@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 export interface VoiceAgentConfig {
   default_persona: string;
@@ -48,64 +49,64 @@ export async function loadAppConfig(): Promise<AppConfig> {
   if (_cached) return _cached;
 
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const configPath = join(thisDir, "..", "outreach.config.json");
+  const configPath = join(thisDir, "..", "outreach.config.yaml");
 
   let raw: string;
   try {
     raw = await readFile(configPath, "utf-8");
   } catch {
     throw new Error(
-      `outreach.config.json not found at ${configPath}. This file is required — copy it from the project root.`
+      `outreach.config.yaml not found at ${configPath}. This file is required.`
     );
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseYaml(raw);
   } catch (err) {
     throw new Error(
-      `outreach.config.json is not valid JSON: ${(err as Error).message}`
+      `outreach.config.yaml is not valid YAML: ${(err as Error).message}`
     );
   }
 
   const config = parsed as Record<string, unknown>;
 
   if (!config.voice_agent || typeof config.voice_agent !== "object") {
-    throw new Error("outreach.config.json: missing required section 'voice_agent'");
+    throw new Error("outreach.config.yaml: missing required section 'voice_agent'");
   }
   if (!config.gemini || typeof config.gemini !== "object") {
-    throw new Error("outreach.config.json: missing required section 'gemini'");
+    throw new Error("outreach.config.yaml: missing required section 'gemini'");
   }
 
   const gemini = config.gemini as Record<string, unknown>;
   const voiceAgent = config.voice_agent as Record<string, unknown>;
 
   if (!voiceAgent.default_persona || typeof voiceAgent.default_persona !== "string") {
-    throw new Error("outreach.config.json: voice_agent.default_persona is required");
+    throw new Error("outreach.config.yaml: voice_agent.default_persona is required");
   }
   if (!gemini.model || typeof gemini.model !== "string") {
-    throw new Error("outreach.config.json: gemini.model is required");
+    throw new Error("outreach.config.yaml: gemini.model is required");
   }
   if (!gemini.speech || typeof gemini.speech !== "object") {
-    throw new Error("outreach.config.json: gemini.speech is required");
+    throw new Error("outreach.config.yaml: gemini.speech is required");
   }
   const speech = gemini.speech as Record<string, unknown>;
   if (!speech.voice_name || typeof speech.voice_name !== "string") {
-    throw new Error("outreach.config.json: gemini.speech.voice_name is required");
+    throw new Error("outreach.config.yaml: gemini.speech.voice_name is required");
   }
   if (!gemini.thinking || typeof gemini.thinking !== "object") {
-    throw new Error("outreach.config.json: gemini.thinking is required");
+    throw new Error("outreach.config.yaml: gemini.thinking is required");
   }
   const thinking = gemini.thinking as Record<string, unknown>;
   if (!thinking.thinking_level || typeof thinking.thinking_level !== "string") {
-    throw new Error("outreach.config.json: gemini.thinking.thinking_level is required");
+    throw new Error("outreach.config.yaml: gemini.thinking.thinking_level is required");
   }
   if (!gemini.turn_taking || typeof gemini.turn_taking !== "object") {
-    throw new Error("outreach.config.json: gemini.turn_taking is required");
+    throw new Error("outreach.config.yaml: gemini.turn_taking is required");
   }
   const turnTaking = gemini.turn_taking as Record<string, unknown>;
   if (!turnTaking.activity_handling || typeof turnTaking.activity_handling !== "string") {
-    throw new Error("outreach.config.json: gemini.turn_taking.activity_handling is required");
+    throw new Error("outreach.config.yaml: gemini.turn_taking.activity_handling is required");
   }
 
   _cached = parsed as AppConfig;
