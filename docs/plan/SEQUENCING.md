@@ -1,6 +1,8 @@
 # Issue Sequencing
 
-Six open issues in `docs/plan/`. Here's the dependency graph and recommended order.
+Five open issues in `docs/plan/`. Here's the dependency graph and recommended order.
+
+> **Note**: `voice-agent-cli-bridge` (#6) was closed — CLI stays as orchestrator's management tool, voice agent keeps native function calls. See `docs/plan/voice-agent-cli-bridge.md` for decision record.
 
 ## Dependency graph
 
@@ -14,9 +16,7 @@ init-teardown-stress-test
 integration-test-ivr
   ↓ (validates core V2 call flow works)
 memory-layer
-  ↓ (adds contact/campaign CLI commands)
-voice-agent-cli-bridge
-    (bridges new CLI commands to voice agent)
+    (adds contact/campaign CLI commands)
 ```
 
 ## Why this order
@@ -39,19 +39,13 @@ With clean CLI, cost guardrails, and reliable init/teardown, we can safely run l
 
 ### 5. `memory-layer` — fifth
 
-Adds `outreach contact` and `outreach campaign` commands. Depends on the CLI surface being stable (after cleanup) and lifecycle being reliable (after init hardening). These commands become the first real test candidates for the CLI bridge.
-
-### 6. `voice-agent-cli-bridge` — last
-
-Depends on having CLI commands worth bridging. The memory layer commands (`contact get`, `log append`, etc.) are the primary use case. Also needs the experiment to validate that Gemini can learn CLI — no point building the bridge if the model can't use it. Run the experiment after memory layer ships so there are real commands to test with.
+Adds `outreach contact` and `outreach campaign` commands. Depends on the CLI surface being stable (after cleanup) and lifecycle being reliable (after init hardening).
 
 ## Parallelism
 
 Issues 1-3 are strictly sequential (each changes overlapping files).
 
 Issues 4 and 5 can partially overlap — IVR tests exercise existing commands while memory layer adds new ones, with no file conflicts.
-
-Issue 6 waits for 5.
 
 ```
 Time →
@@ -61,5 +55,4 @@ Time →
 3. init-teardown-stress        ████
 4. integration-test-ivr            ████
 5. memory-layer                    ██████
-6. voice-agent-cli-bridge                ████
 ```

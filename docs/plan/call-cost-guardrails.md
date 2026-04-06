@@ -89,6 +89,14 @@ Register a Twilio status callback URL when placing calls. Twilio sends webhooks 
 - With a status callback, we could detect orphaned calls and clean up faster
 - Also provides accurate duration from Twilio's perspective (for cost logging)
 
+## Design constraint: `end_call` is not a clean shutdown
+
+Live voice models always end their turn with audio/text output — tool calls are mid-turn actions, not session terminators. When Gemini calls `end_call`, it receives the tool response and then attempts to generate more audio (e.g., "Goodbye!"). The model has no concept of "call this tool and then stop."
+
+**Implication for all guardrails**: every forced termination (max duration, inactivity, voicemail detection) must happen at the **connection level** — the bridge force-closes the Gemini session and hangs up Twilio. We cannot rely on the model to end itself cleanly. The current `end_call` handler in `mediaStreamsBridge.ts` sends the tool response then immediately calls `cleanup()`, which is a race condition (model's post-tool audio gets dropped). This works in practice but is not a clean contract.
+
+Proper fix: after sending the `end_call` tool response, wait for `generationComplete` (or a brief drain timeout) before calling `cleanup()`. This applies to both agent-initiated hangup (`end_call`) and system-initiated hangup (guardrail timers).
+
 ## Implementation order
 
 1. **G2** — Fix V2 inactivity timer (small, P0, prevents billing leak now)

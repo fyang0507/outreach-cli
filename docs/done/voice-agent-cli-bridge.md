@@ -1,5 +1,8 @@
 # Voice Agent CLI Bridge
 
+> **Status: CLOSED — not pursuing.**
+> After discussion, we concluded the CLI is a management tool for the orchestrator, not an operational tool for the voice agent. See [Decision](#decision) at the bottom for full reasoning.
+
 ## Idea
 
 Give the voice agent access to the same CLI that the orchestrator uses, via a single generic `cli` function calling tool. The bridge receives the function call, execs the command locally, and returns stdout as the tool response.
@@ -63,7 +66,14 @@ The voice agent should not be able to run every command. Proposed tiers:
 
 **Keep as native function calls:**
 - `send_dtmf` — latency-sensitive, happens mid-conversation, needs direct Twilio API access
-- `end_call` — must be instant and in-process to cleanly close the bridge
+
+**⚠ `end_call` — design limitation (applies regardless of CLI bridge):**
+
+Live voice models are designed to always end their turn with audio/text output — tool calls are mid-turn actions, not session terminators. When Gemini calls `end_call`, it will receive the tool response and then try to speak (e.g., "Goodbye!"). The model has no concept of "call this tool and then stop existing."
+
+This means `end_call` is not a clean agent-level shutdown. The actual termination must happen at the **connection level**: the bridge monitors for the end signal (Twilio call status change, or the model's post-tool audio completing), then force-closes the Gemini session. The model doesn't end itself — we end it.
+
+Current code (`mediaStreamsBridge.ts`) sends the tool response then immediately calls `cleanup()`, which is a race condition we're getting away with (the model's post-tool audio gets dropped). A proper fix would wait for `generationComplete` or a brief drain period before closing. `FunctionResponseScheduling.SILENT` (tell model not to respond to the tool result) would be ideal but is not yet supported in Gemini 3.1 Flash Live.
 
 ### Timing
 
@@ -72,6 +82,17 @@ The user's insight: the voice agent wouldn't call CLI mid-conversation. It would
 - **After the conversation ends** — record outcome, update contact, log campaign event
 
 This means latency from fork+exec (~50-100ms) is not a concern — these aren't in the audio hot path.
+
+### Post-call action constraint
+
+LLM APIs require the agent to end its turn with an assistant message. This creates a problem for post-call CLI actions: after `end_call` fires, the Gemini session closes — there's no turn left to run `outreach log append`.
+
+Three options considered:
+- **(a) Pre-hangup logging** — model calls `cli` before `end_call`. Works but burns Twilio seconds on bookkeeping.
+- **(b) Keep Gemini alive after call end** — hang up Twilio but hold the Gemini session open for post-call tool use. Cleanest but adds bridge lifecycle complexity.
+- **(c) Orchestrator handles post-call** — voice agent's job ends at hangup. The orchestrator (watching via `call listen --wait`) sees the call end and runs `outreach log append` itself.
+
+**Recommendation: option (c).** It sidesteps the constraint entirely and aligns with the existing architecture — orchestrator owns lifecycle and logging. The CLI bridge then only needs **pre-call** tools (contact lookup, calendar check), which run before the audio session starts with no turn-ending issue.
 
 ## Open questions
 
@@ -123,3 +144,24 @@ Recommend (a) for simplicity — the bridge is already the trust boundary.
 - No security escapes (blocked commands stay blocked)
 - Adding a new voice agent capability = adding a CLI command (no bridge code change)
 - `send_dtmf` and `end_call` remain native function calls (latency-sensitive, mid-conversation)
+
+## Decision
+
+**Not pursuing.** The CLI bridge idea was explored and rejected after deeper analysis of the voice agent's role and the live model's capabilities.
+
+### Why not
+
+1. **CLI is a management plane, not an operational plane.** The CLI provides abstractions for the orchestrator to dispatch and monitor voice agents — it's a manager's tool (`init`, `teardown`, `call place`, `call listen`, `log append`). The voice agent is an executor that operates within a call, not a manager that dispatches work. Giving the voice agent CLI access conflates these two layers.
+
+2. **`end_call` exposes a fundamental model limitation, not a CLI opportunity.** Live voice models always end their turn with audio/text output — tool calls are mid-turn actions. `end_call` is a "dirty" workaround where the bridge force-terminates at the connection level after the tool fires. It doesn't offer feature parity with other `outreach call` commands and shouldn't be treated as one.
+
+3. **Post-call actions belong to the orchestrator.** The voice agent can't run CLI commands after hangup (Gemini session is dead). The orchestrator is already watching via `call listen --wait` and naturally handles post-call logging (`outreach log append`). Pre-call actions (contact lookup, calendar) are also orchestrator decisions — the orchestrator prepares context and passes it to the voice agent via `--objective` and system instructions.
+
+4. **`send_dtmf` should stay native.** Even though it could theoretically be wrapped as `outreach call dtmf`, it's a mid-conversation action that needs to be in-process. Wrapping it in fork+exec adds unnecessary complexity for no architectural benefit.
+
+### What stays
+
+- Voice agent keeps `send_dtmf` and `end_call` as native Gemini function calls
+- Orchestrator keeps all CLI commands (`call place`, `call listen`, `log append`, etc.)
+- New voice agent capabilities (if needed) are added as native function calls, not CLI wrappers
+- The separation is clean: **orchestrator manages via CLI, voice agent operates via function calls**
