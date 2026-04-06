@@ -30,8 +30,7 @@ gemini:
 
   thinking:
     # Reasoning depth: minimal, low, medium, high.
-    # Higher = smarter responses but more latency. "minimal" is best for most calls.
-    # "medium" or "high" for complex scenarios (IVR navigation, negotiation).
+    # Higher = smarter responses but more latency. "minimal" is best for most calls for minimal latency.
     thinking_level: "minimal"
     # Return thought tokens in the response. Only useful for debugging.
     include_thoughts: false
