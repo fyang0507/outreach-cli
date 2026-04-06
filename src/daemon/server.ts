@@ -11,6 +11,7 @@ import { generateCallId, createSession, getSession, listSessions, sessionEvents,
 import type { CallSession } from "./sessions.js";
 import { appendEvent, writeTranscript } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
+import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
 import { readRuntime } from "../runtime.js";
 import { loadAppConfig } from "../appConfig.js";
@@ -163,6 +164,10 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         const appConfig = await loadAppConfig();
         const systemInstruction = session.systemInstruction ?? "You are a helpful phone assistant.";
 
+        // Use pre-connected Gemini session if available (issue #9)
+        const preConnected = session.preConnectedGemini ?? undefined;
+        session.preConnectedGemini = undefined; // consumed
+
         const bridge = new MediaStreamsBridge({
           twilioWs: ws,
           callId,
@@ -170,6 +175,7 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           apiKey,
           geminiConfig: appConfig.gemini,
           systemInstruction,
+          preConnectedGemini: preConnected,
         });
 
         session.bridge = bridge;
@@ -184,10 +190,15 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           }, session.maxDurationMs);
         }
 
-        bridge.connectGemini().catch((err) => {
-          console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
-          bridge.cleanup();
-        });
+        if (preConnected) {
+          console.log(`[media-stream] Using pre-connected Gemini session for call ${callId}`);
+        } else {
+          // Fallback: connect Gemini now (pre-connect failed or wasn't attempted)
+          bridge.connectGemini().catch((err) => {
+            console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
+            bridge.cleanup();
+          });
+        }
       }
     } catch {
       // ignore non-JSON or unexpected messages before init
@@ -283,6 +294,35 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
   const twiml = `<Response><Connect><Stream url="wss://${wsHost}/media-stream"><Parameter name="callId" value="${escapeXml(id)}" /></Stream></Connect></Response>`;
 
+  // Pre-connect Gemini session so it's warm when callee answers (issue #9)
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  if (!apiKey) {
+    session.status = "ended";
+    return { error: "config_error", message: "GOOGLE_GENERATIVE_AI_API_KEY not set" };
+  }
+
+  const geminiSession = new GeminiLiveSession({
+    apiKey,
+    geminiConfig: appConfig.gemini,
+    systemInstruction: sysInstruction,
+    // No-op callbacks during pre-connect — bridge will rebind when media stream connects
+    onAudio: () => {},
+    onTranscript: () => {},
+    onToolCall: () => {},
+    onEnd: () => {
+      console.log(`[daemon] Pre-connected Gemini session ended before media stream for call ${id}`);
+    },
+  });
+
+  try {
+    await geminiSession.connect();
+    session.preConnectedGemini = geminiSession;
+    console.log(`[daemon] Gemini pre-connected for call ${id}`);
+  } catch (err) {
+    console.error(`[daemon] Gemini pre-connect failed for call ${id}:`, (err as Error).message);
+    // Fall back to connecting after media stream starts — don't block the call
+  }
+
   try {
     const client = twilio(accountSid, authToken);
     const twilioCall = await client.calls.create({
@@ -307,6 +347,8 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     return { id, status: "ringing" };
   } catch (err) {
     session.status = "ended";
+    // Clean up pre-connected Gemini if Twilio call fails
+    geminiSession.close();
     return { error: "twilio_error", message: (err as Error).message };
   }
 }

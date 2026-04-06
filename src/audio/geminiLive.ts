@@ -173,6 +173,18 @@ export class GeminiLiveSession {
     });
   }
 
+  rebindCallbacks(cbs: {
+    onAudio: GeminiLiveSessionOptions["onAudio"];
+    onTranscript: GeminiLiveSessionOptions["onTranscript"];
+    onToolCall: GeminiLiveSessionOptions["onToolCall"];
+    onEnd: GeminiLiveSessionOptions["onEnd"];
+  }): void {
+    this.opts.onAudio = cbs.onAudio;
+    this.opts.onTranscript = cbs.onTranscript;
+    this.opts.onToolCall = cbs.onToolCall;
+    this.opts.onEnd = cbs.onEnd;
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import type { TranscriptEntry } from "../logs/sessionLog.js";
+import type { GeminiLiveSession } from "../audio/geminiLive.js";
 
 export interface CallSession {
   id: string;
@@ -21,6 +22,7 @@ export interface CallSession {
   streamSid?: string;
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
+  preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
 }
 
 const sessions = new Map<string, CallSession>();

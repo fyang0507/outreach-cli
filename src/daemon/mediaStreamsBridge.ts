@@ -13,6 +13,7 @@ export interface MediaStreamsBridgeOptions {
   apiKey: string;
   geminiConfig: GeminiConfig;
   systemInstruction: string;
+  preConnectedGemini?: GeminiLiveSession;
 }
 
 export class MediaStreamsBridge {
@@ -27,35 +28,66 @@ export class MediaStreamsBridge {
     this.callId = opts.callId;
     this.session = opts.session;
 
-    this.gemini = new GeminiLiveSession({
-      apiKey: opts.apiKey,
-      geminiConfig: opts.geminiConfig,
-      systemInstruction: opts.systemInstruction,
-      onAudio: (base64Pcm24k: string) => {
-        if (this.cleaned || !this.session.streamSid) return;
-        const mulawPayload = geminiToTwilio(base64Pcm24k);
-        try {
-          this.twilioWs.send(JSON.stringify({
-            event: "media",
-            streamSid: this.session.streamSid,
-            media: { payload: mulawPayload },
-          }));
-        } catch {
-          // Twilio WS may have closed
-        }
-      },
-      onTranscript: (speaker: "remote" | "local", text: string) => {
-        if (this.cleaned) return;
-        appendTranscriptEntry(this.session, { speaker, text, ts: Date.now() });
-      },
-      onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
-        this.handleToolCall(name, args, id);
-      },
-      onEnd: () => {
-        console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
-        this.cleanup();
-      },
-    });
+    if (opts.preConnectedGemini) {
+      // Use pre-connected session and wire up callbacks
+      this.gemini = opts.preConnectedGemini;
+      this.gemini.rebindCallbacks({
+        onAudio: (base64Pcm24k: string) => {
+          if (this.cleaned || !this.session.streamSid) return;
+          const mulawPayload = geminiToTwilio(base64Pcm24k);
+          try {
+            this.twilioWs.send(JSON.stringify({
+              event: "media",
+              streamSid: this.session.streamSid,
+              media: { payload: mulawPayload },
+            }));
+          } catch {
+            // Twilio WS may have closed
+          }
+        },
+        onTranscript: (speaker: "remote" | "local", text: string) => {
+          if (this.cleaned) return;
+          appendTranscriptEntry(this.session, { speaker, text, ts: Date.now() });
+        },
+        onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
+          this.handleToolCall(name, args, id);
+        },
+        onEnd: () => {
+          console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
+          this.cleanup();
+        },
+      });
+    } else {
+      this.gemini = new GeminiLiveSession({
+        apiKey: opts.apiKey,
+        geminiConfig: opts.geminiConfig,
+        systemInstruction: opts.systemInstruction,
+        onAudio: (base64Pcm24k: string) => {
+          if (this.cleaned || !this.session.streamSid) return;
+          const mulawPayload = geminiToTwilio(base64Pcm24k);
+          try {
+            this.twilioWs.send(JSON.stringify({
+              event: "media",
+              streamSid: this.session.streamSid,
+              media: { payload: mulawPayload },
+            }));
+          } catch {
+            // Twilio WS may have closed
+          }
+        },
+        onTranscript: (speaker: "remote" | "local", text: string) => {
+          if (this.cleaned) return;
+          appendTranscriptEntry(this.session, { speaker, text, ts: Date.now() });
+        },
+        onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
+          this.handleToolCall(name, args, id);
+        },
+        onEnd: () => {
+          console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
+          this.cleanup();
+        },
+      });
+    }
 
     // Wire up Twilio WS messages
     this.twilioWs.on("message", (data: Buffer | string) => {
