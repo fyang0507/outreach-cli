@@ -3,6 +3,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
+export interface CallConfig {
+  max_duration_seconds: number;
+}
+
 export interface VoiceAgentConfig {
   default_persona: string;
 }
@@ -39,6 +43,7 @@ export interface GeminiConfig {
 }
 
 export interface AppConfig {
+  call: CallConfig;
   voice_agent: VoiceAgentConfig;
   gemini: GeminiConfig;
 }
@@ -70,6 +75,15 @@ export async function loadAppConfig(): Promise<AppConfig> {
   }
 
   const config = parsed as Record<string, unknown>;
+
+  // Default call config if not present
+  if (!config.call || typeof config.call !== "object") {
+    (config as Record<string, unknown>).call = { max_duration_seconds: 300 };
+  }
+  const call = config.call as Record<string, unknown>;
+  if (call.max_duration_seconds == null || typeof call.max_duration_seconds !== "number") {
+    call.max_duration_seconds = 300;
+  }
 
   if (!config.voice_agent || typeof config.voice_agent !== "object") {
     throw new Error("outreach.config.yaml: missing required section 'voice_agent'");

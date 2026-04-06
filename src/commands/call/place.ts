@@ -13,6 +13,7 @@ interface PlaceOptions {
   objective?: string;
   persona?: string;
   hangupWhen?: string;
+  maxDuration?: string;
 }
 
 export function registerPlaceCommand(parent: Command): void {
@@ -26,6 +27,7 @@ export function registerPlaceCommand(parent: Command): void {
     .option("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
+    .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 300s)")
     .action(async (opts: PlaceOptions) => {
       const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
       if (!from) {
@@ -51,6 +53,7 @@ export function registerPlaceCommand(parent: Command): void {
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
+          maxDuration: opts.maxDuration ? parseInt(opts.maxDuration, 10) : undefined,
         });
 
         const res = result as { error?: string; message?: string };

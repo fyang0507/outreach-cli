@@ -16,6 +16,8 @@ export interface CallSession {
   lastListenIndex: number;
   lastSpeechTime: number;
   lastActivityTime: number;
+  lastTranscriptTime: number;
+  maxDurationMs?: number;
   streamSid?: string;
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
@@ -34,6 +36,7 @@ export function appendTranscriptEntry(
   session.fullTranscript.push(entry);
   session.lastSpeechTime = Date.now();
   session.lastActivityTime = Date.now();
+  session.lastTranscriptTime = Date.now();
   sessionEvents.emit(`transcript:${session.id}`);
 }
 
@@ -58,6 +61,7 @@ export function createSession(params: {
     lastListenIndex: 0,
     lastSpeechTime: now,
     lastActivityTime: now,
+    lastTranscriptTime: now,
   };
   sessions.set(session.id, session);
   return session;
@@ -65,13 +69,6 @@ export function createSession(params: {
 
 export function getSession(id: string): CallSession | undefined {
   return sessions.get(id);
-}
-
-export function getSessionByCallSid(callSid: string): CallSession | undefined {
-  for (const session of sessions.values()) {
-    if (session.callSid === callSid) return session;
-  }
-  return undefined;
 }
 
 export function deleteSession(id: string): void {

@@ -4,8 +4,6 @@ import { registerAppendCommand } from "./commands/log/append.js";
 import { registerReadCommand } from "./commands/log/read.js";
 import { registerPlaceCommand } from "./commands/call/place.js";
 import { registerListenCommand } from "./commands/call/listen.js";
-import { registerSayCommand } from "./commands/call/say.js";
-import { registerDtmfCommand } from "./commands/call/dtmf.js";
 import { registerStatusCommand as registerCallStatusCommand } from "./commands/call/status.js";
 import { registerHangupCommand } from "./commands/call/hangup.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -29,8 +27,6 @@ const call = program.command("call").description("Voice call commands");
 
 registerPlaceCommand(call);
 registerListenCommand(call);
-registerSayCommand(call);
-registerDtmfCommand(call);
 registerCallStatusCommand(call);
 registerHangupCommand(call);
 

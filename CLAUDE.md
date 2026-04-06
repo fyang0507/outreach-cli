@@ -18,7 +18,7 @@ node dist/cli.js --help
 Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 ```
 
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,say,dtmf,status,hangup}`, `outreach log {append,read}`
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,status,hangup}`, `outreach log {append,read}`
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding.
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
@@ -45,7 +45,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/commands/init.ts` | `outreach init` — start ngrok + daemon, write runtime |
 | `src/commands/teardown.ts` | `outreach teardown` — stop everything, clean up |
 | `src/commands/runtimeStatus.ts` | `outreach status` — show runtime state |
-| `src/commands/call/*.ts` | One file per call command (place, listen, say, dtmf, status, hangup) |
+| `src/commands/call/*.ts` | One file per call command (place, listen, status, hangup) |
 | `src/commands/log/*.ts` | Session log commands (append, read) |
 | `src/logs/sessionLog.ts` | JSONL file helpers for session logs and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
@@ -99,7 +99,7 @@ The voice agent handles the entire call autonomously. Use `call listen` to monit
 
 ## V1 legacy
 
-V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain). Code still exists in `src/daemon/server.ts` under `/conversation-relay` WebSocket path for backward compatibility. V1 had ~2.4s latency per turn.
+V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain). V1 code has been removed — all ConversationRelay paths, `say`/`dtmf` commands, and related WebSocket handlers are gone. V2 is the only supported backend.
 
 ## Reference docs
 

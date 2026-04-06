@@ -4,11 +4,11 @@ config({ quiet: true });
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { writeFile, unlink } from "node:fs/promises";
-import { URL } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
 import twilio from "twilio";
-import { generateCallId, createSession, getSession, getSessionByCallSid, listSessions, sessionEvents, appendTranscriptEntry } from "./sessions.js";
+import { generateCallId, createSession, getSession, listSessions, sessionEvents, appendTranscriptEntry } from "./sessions.js";
+import type { CallSession } from "./sessions.js";
 import { appendEvent, writeTranscript } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
@@ -22,6 +22,7 @@ const PID_FILE = "/tmp/outreach-daemon.pid";
 const SOCKET_PATH = "/tmp/outreach-daemon.sock";
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const CALL_INACTIVITY_MS = 60 * 1000; // 60 seconds
+const VOICEMAIL_SILENCE_MS = 90 * 1000; // 90 seconds without transcript = likely voicemail/hold
 
 // --- Express app ---
 
@@ -32,45 +33,6 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/health", (_req, res) => {
   const activeSessions = listSessions().filter((s) => s.status !== "ended");
   res.json({ status: "ok", calls: activeSessions.length });
-});
-
-app.post("/webhook/voice", (req, res) => {
-  const callId = (req.query.callId as string) ?? "";
-  const ttsProvider = (req.query.ttsProvider as string) ?? "google";
-  const sttProvider = (req.query.sttProvider as string) ?? "google";
-  const voice = (req.query.voice as string) ?? "en-US-Journey-O";
-  const welcomeGreeting = (req.query.welcomeGreeting as string) ?? "";
-
-  // Derive WebSocket host from request or config
-  const webhookUrl = process.env.OUTREACH_WEBHOOK_URL;
-  let wsHost: string;
-  if (webhookUrl) {
-    try {
-      wsHost = new URL(webhookUrl).host;
-    } catch {
-      wsHost = req.headers.host ?? `localhost:${PORT}`;
-    }
-  } else {
-    wsHost = req.headers.host ?? `localhost:${PORT}`;
-  }
-
-  const twiml = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    "<Response>",
-    "  <Connect>",
-    `    <ConversationRelay url="wss://${wsHost}/conversation-relay?callId=${encodeURIComponent(callId)}"`,
-    `      ttsProvider="${escapeXml(ttsProvider)}"`,
-    `      sttProvider="${escapeXml(sttProvider)}"`,
-    `      voice="${escapeXml(voice)}"`,
-    `      dtmfDetection="true"`,
-    `      interruptible="true"`,
-    `      welcomeGreeting="${escapeXml(welcomeGreeting)}"`,
-    `      callId="${escapeXml(callId)}" />`,
-    "  </Connect>",
-    "</Response>",
-  ].join("\n");
-
-  res.type("text/xml").send(twiml);
 });
 
 function escapeXml(s: string): string {
@@ -92,27 +54,69 @@ httpServer.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
-  } else if (req.url?.startsWith("/conversation-relay")) {
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
   } else {
     socket.destroy();
   }
 });
 
-wss.on("connection", (ws, req) => {
-  const reqUrl = new URL(req.url ?? "", `http://${req.headers.host}`);
-  const path = reqUrl.pathname;
-
-  if (path.startsWith("/media-stream")) {
-    handleMediaStreamConnection(ws, reqUrl);
-  } else {
-    handleConversationRelayConnection(ws, reqUrl);
-  }
+wss.on("connection", (ws) => {
+  handleMediaStreamConnection(ws);
 });
 
-function handleMediaStreamConnection(ws: import("ws").WebSocket, _reqUrl: URL): void {
+// --- Guardrail helpers ---
+
+function logCallCost(session: CallSession): void {
+  const durationSec = (Date.now() - session.startTime) / 1000;
+  const durationMin = durationSec / 60;
+  const twilioCost = durationMin * 0.014; // ~$0.014/min outbound US
+  const geminiCost = durationMin * 0.01;  // ~$0.01/min audio
+  console.log(JSON.stringify({
+    event: "call_ended",
+    id: session.id,
+    duration_seconds: Math.round(durationSec),
+    estimated_cost: {
+      twilio_usd: +twilioCost.toFixed(4),
+      gemini_usd: +geminiCost.toFixed(4),
+      total_usd: +(twilioCost + geminiCost).toFixed(4),
+    },
+  }));
+}
+
+async function forceHangup(session: CallSession, reason: string): Promise<void> {
+  if (session.status === "ended") return;
+
+  console.log(`[daemon] ${reason}`);
+
+  // Append transcript entry for the forced hangup
+  appendTranscriptEntry(session, {
+    speaker: "local",
+    text: `[Call ended: ${reason}]`,
+    ts: Date.now(),
+  });
+
+  // Hang up via Twilio REST API
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (accountSid && authToken && session.callSid) {
+    try {
+      const client = twilio(accountSid, authToken);
+      await client.calls(session.callSid).update({ status: "completed" });
+    } catch (err) {
+      console.error(`[daemon] Failed to hangup call ${session.id} via Twilio:`, (err as Error).message);
+    }
+  }
+
+  // Clean up bridge (closes Gemini session + Twilio WS)
+  if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
+    (session.bridge as MediaStreamsBridge).cleanup();
+  }
+
+  session.status = "ended";
+  logCallCost(session);
+  await writeTranscript(session.id, session.fullTranscript);
+}
+
+function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
   console.log(`[media-stream] WebSocket connected — waiting for start event with callId`);
 
   // Twilio's <Stream> delivers customParameters in the "start" event, not in the URL.
@@ -171,6 +175,15 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket, _reqUrl: URL): 
         session.bridge = bridge;
         initialized = true;
 
+        // G1: Hard max call duration timer
+        if (session.maxDurationMs) {
+          setTimeout(() => {
+            if (session.status !== "ended") {
+              forceHangup(session, `Call ${callId} hit max duration (${Math.round(session.maxDurationMs! / 1000)}s) — force hangup`);
+            }
+          }, session.maxDurationMs);
+        }
+
         bridge.connectGemini().catch((err) => {
           console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
           bridge.cleanup();
@@ -188,101 +201,11 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket, _reqUrl: URL): 
   });
 }
 
-function handleConversationRelayConnection(ws: import("ws").WebSocket, reqUrl: URL): void {
-  // Try to extract callId from URL query params (may not be present — Twilio
-  // sends custom attributes in the setup message instead)
-  let callId = reqUrl.searchParams.get("callId") ?? "";
-  let session = callId ? getSession(callId) : undefined;
-
-  if (session) {
-    session.ws = ws;
-    session.lastActivityTime = Date.now();
-    console.log(`[conversation-relay] connected for call ${callId}`);
-  } else {
-    console.log(`[conversation-relay] connected — awaiting setup for callId`);
-  }
-
-  ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data.toString()) as {
-        type: string;
-        voicePrompt?: string;
-        digit?: string;
-        callSid?: string;
-        customParameters?: Record<string, string>;
-        [key: string]: unknown;
-      };
-
-      if (session) {
-        session.lastActivityTime = Date.now();
-      }
-
-      switch (msg.type) {
-        case "setup": {
-          // Resolve session — try URL param first, then customParameters, then callSid lookup
-          if (!session && msg.customParameters?.callId) {
-            callId = msg.customParameters.callId;
-            session = getSession(callId);
-          }
-          if (!session && msg.callSid) {
-            session = getSessionByCallSid(msg.callSid);
-            if (session) callId = session.id;
-          }
-          if (session) {
-            session.ws = ws;
-            session.status = "in_progress";
-            session.lastActivityTime = Date.now();
-            if (msg.callSid) session.callSid = msg.callSid;
-          }
-          console.log(`[conversation-relay] setup for call ${callId}`, msg);
-          break;
-        }
-
-        case "prompt":
-          if (session && msg.voicePrompt) {
-            appendTranscriptEntry(session, { speaker: "remote", text: msg.voicePrompt, ts: Date.now() });
-          }
-          break;
-
-        case "interrupt":
-          if (session) {
-            console.log(`[conversation-relay] interrupt on call ${callId}`);
-          }
-          break;
-
-        case "dtmf":
-          if (session && msg.digit) {
-            appendTranscriptEntry(session, { speaker: "remote", text: msg.digit, ts: Date.now() });
-          }
-          break;
-
-        default:
-          console.log(`[conversation-relay] unhandled message type: ${msg.type}`);
-      }
-    } catch {
-      console.log("[conversation-relay] non-JSON message:", data.toString());
-    }
-  });
-
-  ws.on("close", () => {
-    console.log(`[conversation-relay] connection closed for call ${callId}`);
-    if (session) {
-      session.status = "ended";
-      session.ws = undefined;
-      writeTranscript(session.id, session.fullTranscript).catch((err) => {
-        console.error(`[conversation-relay] failed to write transcript for ${callId}:`, err);
-      });
-    }
-  });
-}
-
 // --- IPC server (Unix domain socket) ---
 
 type IpcMethod =
   | "call.place"
   | "call.listen"
-  | "call.say"
-  | "call.dtmf"
   | "call.status"
   | "call.hangup";
 
@@ -295,10 +218,6 @@ async function handleIpcMessage(msg: {
       return handleCallPlace(msg.params);
     case "call.listen":
       return handleCallListen(msg.params);
-    case "call.say":
-      return handleCallSay(msg.params);
-    case "call.dtmf":
-      return handleCallDtmf(msg.params);
     case "call.status":
       return handleCallStatus(msg.params);
     case "call.hangup":
@@ -316,6 +235,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const objective = (params.objective as string) || undefined;
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
+  const maxDuration = (params.maxDuration as number) || undefined;
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -340,6 +260,10 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
+
+  // G1: Set max duration from flag or config default
+  const maxDurationSec = maxDuration ?? appConfig.call.max_duration_seconds;
+  session.maxDurationMs = maxDurationSec * 1000;
 
   const sysInstruction = await buildSystemInstruction({
     persona: persona || appConfig.voice_agent.default_persona,
@@ -446,70 +370,6 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
   };
 }
 
-async function handleCallSay(params: Record<string, unknown>): Promise<object> {
-  const id = params.id as string;
-  const message = params.message as string;
-  const interrupt = params.interrupt as boolean ?? false;
-
-  const session = getSession(id);
-  if (!session) {
-    return { error: "session_not_found", message: `No session with id ${id}` };
-  }
-  if (session.status !== "in_progress" || !session.ws) {
-    return { error: "call_not_active", message: "Call is not active or WebSocket not connected" };
-  }
-
-  if (interrupt) {
-    session.ws.send(JSON.stringify({ type: "clear" }));
-  }
-
-  session.ws.send(JSON.stringify({ type: "text", token: message, last: true }));
-  session.lastActivityTime = Date.now();
-  appendTranscriptEntry(session, { speaker: "local", text: message, ts: Date.now() });
-
-  return { id, status: "in_progress", spoke: true };
-}
-
-async function handleCallDtmf(params: Record<string, unknown>): Promise<object> {
-  const id = params.id as string;
-  const keys = params.keys as string;
-
-  const session = getSession(id);
-  if (!session) {
-    return { error: "session_not_found", message: `No session with id ${id}` };
-  }
-  if (session.status !== "in_progress") {
-    return { error: "call_not_active", message: "Call is not active" };
-  }
-
-  // Send DTMF via ConversationRelay WebSocket if available,
-  // otherwise fall back to Twilio REST API with TwiML redirect
-  if (session.ws) {
-    // ConversationRelay supports sending DTMF via a "dtmf" message
-    session.ws.send(JSON.stringify({ type: "dtmf", digits: keys }));
-    session.lastActivityTime = Date.now();
-    return { id, status: "in_progress", sent: keys };
-  }
-
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-  if (!accountSid || !authToken || !session.callSid) {
-    return { error: "config_error", message: "Missing Twilio credentials or call SID" };
-  }
-
-  try {
-    const client = twilio(accountSid, authToken);
-    // Use TwiML to play DTMF tones on the call
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Play digits="${escapeXml(keys)}"/><Connect><ConversationRelay url="wss://${process.env.OUTREACH_WEBHOOK_URL ? new URL(process.env.OUTREACH_WEBHOOK_URL).host : "localhost:" + PORT}/conversation-relay" callId="${escapeXml(id)}" /></Connect></Response>`;
-    await client.calls(session.callSid).update({ twiml });
-    session.lastActivityTime = Date.now();
-    return { id, status: "in_progress", sent: keys };
-  } catch (err) {
-    return { error: "twilio_error", message: (err as Error).message };
-  }
-}
-
 async function handleCallStatus(params: Record<string, unknown>): Promise<object> {
   const id = params.id as string;
 
@@ -547,27 +407,9 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
 
   const durationSec = Math.floor((Date.now() - session.startTime) / 1000);
 
-  // If V2 bridge exists, use its cleanup (handles both Gemini + Twilio WS)
-  if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
-    // Still hang up via Twilio REST API to be sure
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    if (accountSid && authToken && session.callSid) {
-      try {
-        const client = twilio(accountSid, authToken);
-        await client.calls(session.callSid).update({ status: "completed" });
-      } catch (err) {
-        console.error(`[daemon] Failed to hangup call ${id} via Twilio:`, (err as Error).message);
-      }
-    }
-    (session.bridge as MediaStreamsBridge).cleanup();
-    return { id, status: "ended", duration_sec: durationSec };
-  }
-
-  // V1: End via Twilio REST API
+  // Hang up via Twilio REST API
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-
   if (accountSid && authToken && session.callSid) {
     try {
       const client = twilio(accountSid, authToken);
@@ -577,15 +419,13 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
     }
   }
 
-  // Close WebSocket
-  if (session.ws) {
-    session.ws.close();
-    session.ws = undefined;
+  // Clean up bridge (handles Gemini session close + Twilio WS close)
+  if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
+    (session.bridge as MediaStreamsBridge).cleanup();
   }
 
   session.status = "ended";
-
-  // Write transcript
+  logCallCost(session);
   await writeTranscript(id, session.fullTranscript);
 
   return { id, status: "ended", duration_sec: durationSec };
@@ -640,18 +480,20 @@ function resetIdleTimer(): void {
 const activityInterval = setInterval(() => {
   const now = Date.now();
   for (const session of listSessions()) {
+    if (session.status === "ended") continue;
+
+    // G2: Inactivity timer — no audio activity at all
+    if (now - session.lastActivityTime > CALL_INACTIVITY_MS) {
+      forceHangup(session, `Call ${session.id} inactive for 60s — auto-hangup`);
+      continue;
+    }
+
+    // G3: Voicemail/hold music detection — audio flowing but no transcript
     if (
-      session.status !== "ended" &&
-      now - session.lastActivityTime > CALL_INACTIVITY_MS
+      now - session.lastActivityTime < CALL_INACTIVITY_MS &&
+      now - session.lastTranscriptTime > VOICEMAIL_SILENCE_MS
     ) {
-      console.log(
-        `[daemon] Call ${session.id} inactive for 60s — auto-hangup`,
-      );
-      session.status = "ended";
-      if (session.ws) {
-        session.ws.close();
-        session.ws = undefined;
-      }
+      forceHangup(session, `Call ${session.id} — no conversational activity detected (likely voicemail/hold music) — auto-hangup`);
     }
   }
 }, 10_000);
