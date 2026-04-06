@@ -1,40 +1,44 @@
-import type { VoiceAgentConfig } from "../appConfig.js";
+import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const STATIC_PROMPT_PATH = join(thisDir, "..", "..", "prompts", "voice-agent.md");
+
+let _staticPrompt: string | null = null;
+
+async function loadStaticPrompt(): Promise<string> {
+  if (_staticPrompt) return _staticPrompt;
+  _staticPrompt = await readFile(STATIC_PROMPT_PATH, "utf-8");
+  return _staticPrompt;
+}
 
 export interface SystemInstructionParams {
-  persona?: string;
+  persona: string;
   objective?: string;
   hangupWhen?: string;
   welcomeGreeting?: string;
-  voiceAgentConfig: VoiceAgentConfig;
 }
 
-export function buildSystemInstruction(params: SystemInstructionParams): string {
-  const t = params.voiceAgentConfig.system_prompt_template;
+export async function buildSystemInstruction(params: SystemInstructionParams): Promise<string> {
+  const staticPrompt = await loadStaticPrompt();
   const parts: string[] = [];
 
-  // Persona — CLI override > config default
-  parts.push(`## Who you are\n${params.persona || t.persona}`);
+  parts.push(`## Who you are\n${params.persona}`);
 
-  // Objective
   if (params.objective) {
     parts.push(`## Your objective\n${params.objective}`);
   }
 
-  // Welcome greeting
   if (params.welcomeGreeting) {
     parts.push(`## Opening line\nWhen the call connects and someone answers, start by saying: "${params.welcomeGreeting}"`);
   }
 
-  // Hangup condition
   if (params.hangupWhen) {
     parts.push(`## When to end the call specifically\n${params.hangupWhen}`);
   }
 
-  // Standard instructions from config
-  parts.push(`## Phone navigation (IVR)\n${t.ivr_instructions}`);
-  parts.push(`## Call screening\n${t.call_screening_instructions}`);
-  parts.push(`## Ending the call\n${t.ending_instructions}`);
-  parts.push(`## Conversation style\n${t.conversation_style}`);
+  parts.push(staticPrompt);
 
   return parts.join("\n\n");
 }

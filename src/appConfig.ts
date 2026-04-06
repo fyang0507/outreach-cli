@@ -3,13 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface VoiceAgentConfig {
-  system_prompt_template: {
-    persona: string;
-    conversation_style: string;
-    ivr_instructions: string;
-    call_screening_instructions: string;
-    ending_instructions: string;
-  };
+  default_persona: string;
 }
 
 export interface GeminiConfig {
@@ -76,7 +70,6 @@ export async function loadAppConfig(): Promise<AppConfig> {
 
   const config = parsed as Record<string, unknown>;
 
-  // Validate required top-level sections
   if (!config.voice_agent || typeof config.voice_agent !== "object") {
     throw new Error("outreach.config.json: missing required section 'voice_agent'");
   }
@@ -87,7 +80,9 @@ export async function loadAppConfig(): Promise<AppConfig> {
   const gemini = config.gemini as Record<string, unknown>;
   const voiceAgent = config.voice_agent as Record<string, unknown>;
 
-  // Validate required gemini fields
+  if (!voiceAgent.default_persona || typeof voiceAgent.default_persona !== "string") {
+    throw new Error("outreach.config.json: voice_agent.default_persona is required");
+  }
   if (!gemini.model || typeof gemini.model !== "string") {
     throw new Error("outreach.config.json: gemini.model is required");
   }
@@ -111,17 +106,6 @@ export async function loadAppConfig(): Promise<AppConfig> {
   const turnTaking = gemini.turn_taking as Record<string, unknown>;
   if (!turnTaking.activity_handling || typeof turnTaking.activity_handling !== "string") {
     throw new Error("outreach.config.json: gemini.turn_taking.activity_handling is required");
-  }
-
-  // Validate required voice_agent fields
-  if (!voiceAgent.system_prompt_template || typeof voiceAgent.system_prompt_template !== "object") {
-    throw new Error("outreach.config.json: voice_agent.system_prompt_template is required");
-  }
-  const spt = voiceAgent.system_prompt_template as Record<string, unknown>;
-  for (const field of ["persona", "conversation_style", "ivr_instructions", "call_screening_instructions", "ending_instructions"]) {
-    if (!spt[field] || typeof spt[field] !== "string") {
-      throw new Error(`outreach.config.json: voice_agent.system_prompt_template.${field} is required`);
-    }
   }
 
   _cached = parsed as AppConfig;

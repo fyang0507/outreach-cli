@@ -35,14 +35,15 @@ These override or supplement the config for a specific call.
 
 ## 2. System instruction composition
 
-File: `src/audio/systemInstruction.ts`
-Config: `outreach.config.json` → `voice_agent.system_prompt_template`
+Builder: `src/audio/systemInstruction.ts`
+Static prompt: `prompts/voice-agent.md`
+Default persona: `outreach.config.json` → `voice_agent.default_persona`
 
-The system instruction sent to Gemini is composed from **CLI flags (dynamic, per-call)** + **config template (static, shared)**:
+The system instruction sent to Gemini is composed from **CLI flags (dynamic, per-call)** + **static prompt file**:
 
 ```
 ## Who you are
-{--persona flag, or config persona if not provided}
+{--persona flag, or config default_persona if not provided}
 
 ## Your objective                          ← only if --objective provided
 {--objective flag}
@@ -53,25 +54,21 @@ When the call connects, start by saying: "{--welcome-greeting}"
 ## When to end the call specifically       ← only if --hangup-when provided
 {--hangup-when flag}
 
-## Phone navigation (IVR)                  ← always, from config
-{config.voice_agent.system_prompt_template.ivr_instructions}
-
-## Call screening                          ← always, from config
-{config.voice_agent.system_prompt_template.call_screening_instructions}
-
-## Ending the call                         ← always, from config
-{config.voice_agent.system_prompt_template.ending_instructions}
-
-## Conversation style                      ← always, from config
-{config.voice_agent.system_prompt_template.conversation_style}
+{contents of prompts/voice-agent.md}         ← always appended
+  - Phone navigation (IVR)
+  - Call screening
+  - Ending the call
+  - Conversation style
 ```
 
+**To iterate on the static prompt:** edit `prompts/voice-agent.md` directly. No config parsing, no JSON — just a markdown file.
+
 **Key areas to iterate on:**
-- **`conversation_style`**: currently generic. Make it specific per use case (professional vs casual).
-- **`ivr_instructions`**: may need examples for complex phone trees.
-- **`call_screening_instructions`**: tune for how to get past iOS Live Voicemail / Pixel Call Screen.
-- **Filler words**: add to conversation_style: "use natural filler words like 'um', 'let me think' to fill pauses."
-- **Pacing**: add: "pause briefly between sentences for natural cadence."
+- **Conversation style**: currently generic. Make it specific per use case (professional vs casual).
+- **IVR handling**: may need examples for complex phone trees.
+- **Call screening**: tune for how to get past iOS Live Voicemail / Pixel Call Screen.
+- **Filler words**: add "use natural filler words like 'um', 'let me think' to fill pauses."
+- **Pacing**: add "pause briefly between sentences for natural cadence."
 
 ## 3. Voice selection
 

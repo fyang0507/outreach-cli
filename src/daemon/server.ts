@@ -341,12 +341,11 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const id = generateCallId();
   const session = createSession({ id, from, to });
 
-  const sysInstruction = buildSystemInstruction({
-    persona,
+  const sysInstruction = await buildSystemInstruction({
+    persona: persona || appConfig.voice_agent.default_persona,
     objective,
     hangupWhen,
     welcomeGreeting,
-    voiceAgentConfig: appConfig.voice_agent,
   });
   session.systemInstruction = sysInstruction;
 

@@ -3,13 +3,7 @@
   "$comment": "Outreach CLI application config. See docs/plan/tuning-reference.md for parameter details.",
 
   "voice_agent": {
-    "system_prompt_template": {
-      "persona": "You are a helpful phone assistant making a call on behalf of the user.",
-      "conversation_style": "Be natural and conversational. Keep responses concise — long monologues feel unnatural on the phone. Listen carefully and respond to what was actually said. If you don't understand something, ask for clarification. Be polite and professional.",
-      "ivr_instructions": "When you hear an automated phone menu (e.g. 'press 1 for...'), use the send_dtmf tool to press the appropriate keypad buttons. Listen carefully to all options before choosing. If you need to enter a number sequence followed by pound/hash, include the # in the digits.",
-      "call_screening_instructions": "If the call is being screened (e.g. 'state your name and reason for calling'), clearly state who you are and why you're calling. Be concise and trustworthy — the person is reading your transcript to decide whether to pick up.",
-      "ending_instructions": "Use the end_call tool when your objective has been accomplished, the other party hangs up or says goodbye, you are unable to make progress after multiple attempts, or the conversation has naturally concluded. Always provide a brief reason when ending the call."
-    }
+    "default_persona": "You are a helpful phone assistant making a call on behalf of the user."
   },
 
   "gemini": {
