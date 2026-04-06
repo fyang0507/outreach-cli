@@ -1,5 +1,5 @@
 import { config } from "dotenv";
-config();
+config({ quiet: true });
 
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";

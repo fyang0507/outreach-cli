@@ -10,16 +10,19 @@ npm run build
 node dist/cli.js --help
 ```
 
-## Architecture (V1)
+## Architecture (V2 — Gemini Live)
 
-**Twilio ConversationRelay** handles STT/TTS. The CLI is a text-in/text-out interface — no raw audio.
+**Gemini Live API** (`gemini-3.1-flash-live-preview`) handles the entire call autonomously — STT, reasoning, and TTS in a single voice-native model. No sub-agent needed during the call.
 
 ```
-Orchestrator Agent → Sub-Agent (LLM) → CLI commands → Daemon → Twilio ConversationRelay
+Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 ```
 
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Subcommands: `outreach call {place,listen,say,dtmf,status,hangup}`, `outreach log {append,read}`
-- **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio ConversationRelay WebSocket connections, transcript buffers, call state. Auto-starts on first `call place`, auto-stops after 5min idle.
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,say,dtmf,status,hangup}`, `outreach log {append,read}`
+- **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`.
+- **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding.
+- **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
+- **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), and transcript extraction.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
 - **Session logs** (`src/logs/sessionLog.ts`): JSONL files in `~/.outreach/sessions/` and `~/.outreach/transcripts/`. Append-only, file-system-native.
 
@@ -28,43 +31,62 @@ Orchestrator Agent → Sub-Agent (LLM) → CLI commands → Daemon → Twilio Co
 | Path | Purpose |
 |---|---|
 | `src/cli.ts` | CLI entrypoint, wires all commands |
-| `src/daemon/server.ts` | Daemon: HTTP server, WebSocket handler, IPC handler, all call logic |
+| `src/daemon/server.ts` | Daemon: HTTP server, WebSocket handler, IPC handler, call logic |
+| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams ↔ Gemini Live audio bridge |
 | `src/daemon/sessions.ts` | In-memory call session store with EventEmitter for transcript events |
-| `src/daemon/lifecycle.ts` | `ensureDaemon()` — auto-start/stop daemon |
+| `src/daemon/lifecycle.ts` | `ensureDaemon()` — daemon process management |
 | `src/daemon/ipc.ts` | `sendToDaemon()` — IPC client for CLI → daemon |
-| `src/commands/call/*.ts` | One file per CLI command (place, listen, say, dtmf, status, hangup) |
+| `src/audio/geminiLive.ts` | Gemini Live API WebSocket client |
+| `src/audio/transcode.ts` | mulaw↔PCM codec + sample rate resampling |
+| `src/audio/systemInstruction.ts` | Builds system instruction from persona/objective/greeting |
+| `src/runtime.ts` | Runtime state: read/write `~/.outreach/runtime.json` |
+| `src/appConfig.ts` | Loads `outreach.config.yaml` — all Gemini tuning parameters |
+| `src/config.ts` | Loads `.env` — secrets and infrastructure only |
+| `src/commands/init.ts` | `outreach init` — start ngrok + daemon, write runtime |
+| `src/commands/teardown.ts` | `outreach teardown` — stop everything, clean up |
+| `src/commands/runtimeStatus.ts` | `outreach status` — show runtime state |
+| `src/commands/call/*.ts` | One file per call command (place, listen, say, dtmf, status, hangup) |
 | `src/commands/log/*.ts` | Session log commands (append, read) |
 | `src/logs/sessionLog.ts` | JSONL file helpers for session logs and transcripts |
-| `src/config.ts` | Loads env vars from `.env` |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
+| `prompts/voice-agent.md` | Static system prompt for voice agent (IVR, screening, style) |
+| `outreach.config.yaml` | Application behavior config (model, voice, VAD, thinking, etc.) |
+| `SKILL.md` | Agent onboarding reference — how to use the CLI |
 
-## Environment variables
+## Configuration
 
-Defined in `.env` (see `.env.example`):
+**Two config sources, no overlap:**
 
-| Variable | Purpose |
-|---|---|
-| `TWILIO_ACCOUNT_SID` | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `OUTREACH_DEFAULT_FROM` | Default caller ID for outbound calls |
-| `OUTREACH_PERSONAL_CALLER_ID` | User's personal number |
-| `OUTREACH_WEBHOOK_URL` | Public URL for Twilio webhooks (ngrok in dev) |
+| Source | Contains | Example |
+|---|---|---|
+| `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `outreach.config.yaml` | Application behavior | Gemini model, voice, VAD, thinking level, persona, see `docs/plan/tuning-reference.md` for full parameter documentation. |
 
-## Running a call (dev)
+## Running a call
 
-1. Start ngrok: `ngrok http 3001`
-2. Set `OUTREACH_WEBHOOK_URL` in `.env` to the ngrok HTTPS URL
-3. `npm run build`
-4. `node dist/cli.js call place --to "+1555..." --welcome-greeting "Hi, this is..."`
-5. The daemon auto-starts. Use `call listen`, `call say`, `call hangup` to interact.
+```bash
+npm run build
+outreach init                          # start ngrok + daemon
+outreach call place \
+  --to "+1555..." \
+  --objective "Schedule appointment" \
+  --persona "You are Fred's assistant" \
+  --welcome-greeting "Hi, calling about..." \
+  --hangup-when "Appointment confirmed"
+outreach call listen --id <id> --wait  # monitor transcript
+outreach teardown                      # clean up
+```
+
+The voice agent handles the entire call autonomously. Use `call listen` to monitor progress and `call hangup` to end early if needed.
 
 ## Design principles
 
 - **Agent-native**: inputs are structured (flags + JSON), outputs are compact JSON. No human-oriented formatting.
-- **Sub-agent is the brain**: the CLI makes zero decisions about what to say. All reasoning lives in the calling agent.
+- **Voice-native model**: Gemini handles STT+reasoning+TTS in one hop. No sub-agent loop needed during calls.
+- **Orchestrator owns lifecycle**: `init`/`teardown`/`status` are the orchestrator's responsibility. Sub-agents only execute tasks (place calls, monitor transcripts).
 - **File-system state**: session logs are JSONL files, not databases. Agents read/write them directly.
-- **Pluggable internals**: the CLI interface stays the same regardless of backend (ConversationRelay, raw Media Streams, voice-native model).
+- **Fail fast**: missing config raises errors immediately — no silent defaults.
 
 ## Conventions
 
@@ -73,16 +95,17 @@ Defined in `.env` (see `.env.example`):
 - All CLI output via `outputJson()` / `outputError()` — never `console.log`
 - Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout
 - Daemon writes to stdout/stderr for logging (not visible to CLI users)
+- Secrets in `.env`, behavior in `outreach.config.yaml` — never mix
 
-## V2 planning
+## V1 legacy
 
-See `docs/plan/` for V2 architecture options:
-- `v2-architecture-options.md` — three paths: raw STT/TTS pipeline, voice-native model (OpenAI Realtime), or hybrid
-- `v2-vendor-research.md` — full comparison tables for telephony, STT, TTS, and voice-native providers
-- `latency-analysis.md` — measured V1 latency data from live testing
+V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain). Code still exists in `src/daemon/server.ts` under `/conversation-relay` WebSocket path for backward compatibility. V1 had ~2.4s latency per turn.
 
-Key V2 decision: leaning towards Gemini Live API (`gemini-3.1-flash-live-preview`) as voice-native backend — ~0.5-1.0s latency, ~$0.04-0.08/min, 5-7x cheaper than OpenAI Realtime. Requires mulaw↔PCM transcoding bridge. Raw Deepgram+Cartesia pipeline (~0.8-1.2s) remains an option for voice cloning use cases.
+## Reference docs
 
-## Design doc
-
-`docs/design.md` — comprehensive engineering design document covering: problem statement, real-world constraints (caller ID, call screening, IVR, latency), CLI interface spec, architecture, interaction patterns, technology choices, state management, and resolved design questions.
+| Path | Purpose |
+|---|---|
+| `docs/design.md` | Initial engineering design document |
+| `docs/done/tuning-reference.md` | Full parameter reference for Gemini config |
+| `docs/plan/memory-layer.md` | Memory/context layer design (planned) |
+| `docs/done/` | Completed planning docs (V2 options, vendor research, latency analysis) |
