@@ -8,7 +8,7 @@ import {
   checkDaemonHealth,
 } from "../runtime.js";
 import { outputJson, outputError } from "../output.js";
-import { SUCCESS, INFRA_ERROR, OPERATION_FAILED } from "../exitCodes.js";
+import { SUCCESS, OPERATION_FAILED } from "../exitCodes.js";
 
 const PID_FILE = "/tmp/outreach-daemon.pid";
 const SOCKET_PATH = "/tmp/outreach-daemon.sock";
@@ -32,8 +32,8 @@ export function registerTeardownCommand(program: Command): void {
     .action(async (opts: { force: boolean }) => {
       const state = await readRuntime();
       if (!state) {
-        outputError(INFRA_ERROR, "Not initialized");
-        process.exit(INFRA_ERROR);
+        outputJson({ status: "stopped" });
+        process.exit(SUCCESS);
         return;
       }
 
