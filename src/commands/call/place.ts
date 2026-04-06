@@ -9,14 +9,10 @@ interface PlaceOptions {
   to: string;
   from?: string;
   campaign?: string;
-  ttsProvider?: string;
-  sttProvider?: string;
-  voice?: string;
   welcomeGreeting?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
-  backend?: string;
 }
 
 export function registerPlaceCommand(parent: Command): void {
@@ -26,14 +22,10 @@ export function registerPlaceCommand(parent: Command): void {
     .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
     .option("--campaign <id>", "Campaign ID for session log")
-    .option("--tts-provider <provider>", "TTS provider (conversation-relay backend)", "ElevenLabs")
-    .option("--stt-provider <provider>", "STT provider (conversation-relay backend)", "Deepgram")
-    .option("--voice <voiceId>", "Voice ID for TTS (conversation-relay backend)")
-    .option("--welcome-greeting <text>", "Initial greeting text")
-    .option("--objective <text>", "Call objective for the AI agent")
-    .option("--persona <text>", "Persona/role for the AI agent")
+    .option("--welcome-greeting <text>", "Initial greeting text spoken when call connects")
+    .option("--objective <text>", "What this call should accomplish")
+    .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
-    .option("--backend <backend>", "Call backend: gemini-live or conversation-relay", "gemini-live")
     .action(async (opts: PlaceOptions) => {
       const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
       if (!from) {
@@ -55,14 +47,10 @@ export function registerPlaceCommand(parent: Command): void {
           to: opts.to,
           from,
           campaign: opts.campaign,
-          ttsProvider: opts.ttsProvider,
-          sttProvider: opts.sttProvider,
-          voice: opts.voice,
           welcomeGreeting: opts.welcomeGreeting,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
-          backend: opts.backend,
         });
 
         const res = result as { error?: string; message?: string };

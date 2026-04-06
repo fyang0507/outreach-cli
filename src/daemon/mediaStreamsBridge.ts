@@ -4,15 +4,15 @@ import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
 import { appendTranscriptEntry, sessionEvents, type CallSession } from "./sessions.js";
 import { writeTranscript } from "../logs/sessionLog.js";
+import type { GeminiConfig } from "../appConfig.js";
 
 export interface MediaStreamsBridgeOptions {
   twilioWs: WebSocket;
   callId: string;
   session: CallSession;
   apiKey: string;
-  model: string;
+  geminiConfig: GeminiConfig;
   systemInstruction: string;
-  voiceName: string;
 }
 
 export class MediaStreamsBridge {
@@ -29,9 +29,8 @@ export class MediaStreamsBridge {
 
     this.gemini = new GeminiLiveSession({
       apiKey: opts.apiKey,
-      model: opts.model,
+      geminiConfig: opts.geminiConfig,
       systemInstruction: opts.systemInstruction,
-      voiceName: opts.voiceName,
       onAudio: (base64Pcm24k: string) => {
         if (this.cleaned || !this.session.streamSid) return;
         const mulawPayload = geminiToTwilio(base64Pcm24k);

@@ -1,25 +1,24 @@
-import { GoogleGenAI, Modality, type LiveServerMessage, type FunctionCall } from "@google/genai";
+import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Tool, type ThinkingLevel, type ActivityHandling } from "@google/genai";
+import type { GeminiConfig } from "../appConfig.js";
 
 export interface GeminiLiveSessionOptions {
   apiKey: string;
-  model: string;
+  geminiConfig: GeminiConfig;
   systemInstruction: string;
-  voiceName: string;
-  tools?: object[];
   onAudio: (base64Pcm: string) => void;
   onTranscript: (speaker: "remote" | "local", text: string) => void;
   onToolCall: (name: string, args: Record<string, unknown>, id: string) => void;
   onEnd: () => void;
 }
 
-const DEFAULT_TOOLS = [{
+const DEFAULT_TOOLS: Tool[] = [{
   functionDeclarations: [{
     name: "send_dtmf",
     description: "Send DTMF keypad tones to navigate phone menus (IVR systems). Use when you hear options like 'press 1 for...'",
     parameters: {
-      type: "OBJECT" as const,
+      type: Type.OBJECT,
       properties: {
-        digits: { type: "STRING" as const, description: "Digits to send, e.g. '1' or '123#'" }
+        digits: { type: Type.STRING, description: "Digits to send, e.g. '1' or '123#'" }
       },
       required: ["digits"]
     }
@@ -27,9 +26,9 @@ const DEFAULT_TOOLS = [{
     name: "end_call",
     description: "End the phone call. Use when your objective is met or the conversation is naturally over.",
     parameters: {
-      type: "OBJECT" as const,
+      type: Type.OBJECT,
       properties: {
-        reason: { type: "STRING" as const, description: "Brief reason for ending the call" }
+        reason: { type: Type.STRING, description: "Brief reason for ending the call" }
       },
       required: ["reason"]
     }
@@ -47,24 +46,64 @@ export class GeminiLiveSession {
 
   async connect(): Promise<void> {
     const ai = new GoogleGenAI({ apiKey: this.opts.apiKey });
+    const gc = this.opts.geminiConfig;
 
-    const tools = this.opts.tools ?? DEFAULT_TOOLS;
+    // Build generation config — only include non-null values
+    const generationConfig: Record<string, unknown> = {};
+    if (gc.generation.temperature !== null) generationConfig.temperature = gc.generation.temperature;
+    if (gc.generation.top_p !== null) generationConfig.topP = gc.generation.top_p;
+    if (gc.generation.top_k !== null) generationConfig.topK = gc.generation.top_k;
+    if (gc.generation.max_output_tokens !== null) generationConfig.maxOutputTokens = gc.generation.max_output_tokens;
+
+    // Build VAD config — only include non-null values
+    const vadConfig: Record<string, unknown> = {};
+    if (gc.vad.start_of_speech_sensitivity !== null) vadConfig.startOfSpeechSensitivity = gc.vad.start_of_speech_sensitivity;
+    if (gc.vad.end_of_speech_sensitivity !== null) vadConfig.endOfSpeechSensitivity = gc.vad.end_of_speech_sensitivity;
+    if (gc.vad.prefix_padding_ms !== null) vadConfig.prefixPaddingMs = gc.vad.prefix_padding_ms;
+    if (gc.vad.silence_duration_ms !== null) vadConfig.silenceDurationMs = gc.vad.silence_duration_ms;
+
+    // Build transcription config
+    const inputTranscription: Record<string, unknown> = {};
+    if (gc.transcription.input_language_codes) inputTranscription.languageCodes = gc.transcription.input_language_codes;
+    const outputTranscription: Record<string, unknown> = {};
+    if (gc.transcription.output_language_codes) outputTranscription.languageCodes = gc.transcription.output_language_codes;
 
     this.session = await ai.live.connect({
-      model: this.opts.model,
+      model: gc.model,
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
-              voiceName: this.opts.voiceName,
+              voiceName: gc.speech.voice_name,
             },
           },
+          ...(gc.speech.language_code ? { languageCode: gc.speech.language_code } : {}),
         },
         systemInstruction: this.opts.systemInstruction,
-        tools,
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
+        tools: DEFAULT_TOOLS,
+        inputAudioTranscription: inputTranscription,
+        outputAudioTranscription: outputTranscription,
+        // Thinking config
+        ...(gc.thinking.thinking_level !== "minimal" || gc.thinking.include_thoughts ? {
+          thinkingConfig: {
+            thinkingLevel: gc.thinking.thinking_level.toUpperCase() as ThinkingLevel,
+            includeThoughts: gc.thinking.include_thoughts,
+          },
+        } : {}),
+        // Generation config overrides
+        ...generationConfig,
+        // VAD config
+        ...(Object.keys(vadConfig).length > 0 ? {
+          realtimeInputConfig: {
+            automaticActivityDetection: vadConfig,
+            activityHandling: gc.turn_taking.activity_handling as ActivityHandling,
+          },
+        } : {
+          realtimeInputConfig: {
+            activityHandling: gc.turn_taking.activity_handling as ActivityHandling,
+          },
+        }),
       },
       callbacks: {
         onopen: () => {
@@ -88,7 +127,6 @@ export class GeminiLiveSession {
   }
 
   private handleMessage(msg: LiveServerMessage): void {
-    // Handle audio data from model response
     if (msg.serverContent?.modelTurn?.parts) {
       for (const part of msg.serverContent.modelTurn.parts) {
         if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/")) {
@@ -97,17 +135,14 @@ export class GeminiLiveSession {
       }
     }
 
-    // Handle input transcription (what the remote party said)
     if (msg.serverContent?.inputTranscription?.text) {
       this.opts.onTranscript("remote", msg.serverContent.inputTranscription.text);
     }
 
-    // Handle output transcription (what Gemini said)
     if (msg.serverContent?.outputTranscription?.text) {
       this.opts.onTranscript("local", msg.serverContent.outputTranscription.text);
     }
 
-    // Handle tool calls
     if (msg.toolCall?.functionCalls) {
       for (const fc of msg.toolCall.functionCalls) {
         if (fc.name && fc.id) {

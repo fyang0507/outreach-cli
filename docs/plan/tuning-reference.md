@@ -2,6 +2,8 @@
 
 This doc covers all tunable parameters that affect voice call quality, latency, and naturalness. Use it as a reference for iterating on the call experience.
 
+**Central config file:** `outreach.config.json` (project root). All Gemini and voice agent parameters are exposed there — `null` means "use API default". Application-level config (system prompt template, conversation style) is also there. The config is loaded by `src/appConfig.ts`.
+
 ## 1. CLI flags (orchestrator-controlled, per-call)
 
 These are passed via `outreach call place` and become part of the system instruction or Gemini config.
@@ -81,9 +83,9 @@ Config location: `thinkingConfig`
 | `thinkingLevel` | enum | `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` |
 | `includeThoughts` | boolean | Return thought tokens (for debugging). |
 
-**Only works with thinking-capable models** (e.g., `gemini-2.5-flash`). Will error on `gemini-3.1-flash-live-preview` if not supported.
+**Supported on `gemini-3.1-flash-live-preview`** — default is `minimal` for lowest latency.
 
-**Tradeoff:** Higher thinking = better reasoning (useful for complex IVR navigation, multi-step objectives) but adds latency. For simple calls, `MINIMAL` or disabled. For complex calls (negotiation, multi-option comparison), `MEDIUM` or `HIGH`.
+**Tradeoff:** Higher thinking = better reasoning (useful for complex IVR navigation, multi-step objectives) but adds latency. For simple calls, `minimal` (default). For complex calls (negotiation, multi-option comparison), `medium` or `high`.
 
 **Not yet wired into CLI.** To add: `--thinking-level` flag.
 
@@ -106,29 +108,11 @@ Config location: `config` (top-level on LiveConnectConfig)
 
 ## 7. Proactive audio
 
-Config location: `proactivity.proactiveAudio`
-
-| Value | Effect |
-|---|---|
-| `true` | Model can speak without being prompted, and can choose to stay silent if user speech is irrelevant. |
-| `false` | (default) Model responds to every user turn. |
-
-**Use case:** Enable for calls where the agent should drive the conversation (e.g., cold outreach). Disable for calls where the agent should mostly listen and respond (e.g., gathering info).
-
-**Not yet wired into CLI.** To add: `--proactive` flag.
+**Not available on `gemini-3.1-flash-live-preview`.** This feature was removed in the 3.1 model. May return in future versions.
 
 ## 8. Affective dialog
 
-Config location: `enableAffectiveDialog`
-
-| Value | Effect |
-|---|---|
-| `true` | Model detects user emotions and adapts tone/responses. |
-| `false` | (default) No emotion awareness. |
-
-**Use case:** Enable for sensitive calls (complaints, follow-ups). May improve naturalness for casual calls.
-
-**Not yet wired into CLI.** To add: `--affective` flag.
+**Not available on `gemini-3.1-flash-live-preview`.** This feature was removed in the 3.1 model. May return in future versions.
 
 ## 9. Language
 

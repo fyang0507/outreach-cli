@@ -1,19 +1,19 @@
+import type { VoiceAgentConfig } from "../appConfig.js";
+
 export interface SystemInstructionParams {
   persona?: string;
   objective?: string;
   hangupWhen?: string;
   welcomeGreeting?: string;
+  voiceAgentConfig: VoiceAgentConfig;
 }
 
 export function buildSystemInstruction(params: SystemInstructionParams): string {
+  const t = params.voiceAgentConfig.system_prompt_template;
   const parts: string[] = [];
 
-  // Persona
-  if (params.persona) {
-    parts.push(`## Who you are\n${params.persona}`);
-  } else {
-    parts.push("## Who you are\nYou are a helpful phone assistant making a call on behalf of the user.");
-  }
+  // Persona — CLI override > config default
+  parts.push(`## Who you are\n${params.persona || t.persona}`);
 
   // Objective
   if (params.objective) {
@@ -27,28 +27,14 @@ export function buildSystemInstruction(params: SystemInstructionParams): string 
 
   // Hangup condition
   if (params.hangupWhen) {
-    parts.push(`## When to end the call\nEnd the call (using the end_call tool) when: ${params.hangupWhen}`);
+    parts.push(`## When to end the call specifically\n${params.hangupWhen}`);
   }
 
-  // Default instructions for IVR and call management
-  parts.push(`## Phone navigation (IVR)
-When you hear an automated phone menu (e.g. "press 1 for...", "press 2 for..."), use the send_dtmf tool to press the appropriate keypad buttons. Listen carefully to all options before choosing. If you need to enter a number sequence followed by pound/hash, include the # in the digits.`);
-
-  parts.push(`## Ending the call
-Use the end_call tool when:
-- Your objective has been accomplished
-- The other party hangs up or says goodbye
-- You are unable to make progress after multiple attempts
-- The conversation has naturally concluded
-${params.hangupWhen ? `- ${params.hangupWhen}` : ""}
-Always provide a brief reason when ending the call.`);
-
-  parts.push(`## Conversation style
-- Be natural and conversational — you are on a phone call
-- Keep responses concise — long monologues feel unnatural on the phone
-- Listen carefully and respond to what was actually said
-- If you don't understand something, ask for clarification
-- Be polite and professional`);
+  // Standard instructions from config
+  parts.push(`## Phone navigation (IVR)\n${t.ivr_instructions}`);
+  parts.push(`## Call screening\n${t.call_screening_instructions}`);
+  parts.push(`## Ending the call\n${t.ending_instructions}`);
+  parts.push(`## Conversation style\n${t.conversation_style}`);
 
   return parts.join("\n\n");
 }

@@ -16,11 +16,8 @@ export interface CallSession {
   lastListenIndex: number;
   lastSpeechTime: number;
   lastActivityTime: number;
-  // V2 fields
   streamSid?: string;
   systemInstruction?: string;
-  voiceName?: string;
-  backend?: "gemini-live" | "conversation-relay";
   bridge?: unknown; // MediaStreamsBridge reference
 }
 
