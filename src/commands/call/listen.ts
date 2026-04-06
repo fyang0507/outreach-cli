@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { ensureDaemon } from "../../daemon/lifecycle.js";
+import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
@@ -19,9 +19,9 @@ export function registerListenCommand(parent: Command): void {
     .option("--timeout <ms>", "Max time to wait in ms", "30000")
     .action(async (opts: ListenOptions) => {
       try {
-        await ensureDaemon();
+        await requireRuntime();
       } catch (err) {
-        outputError(INFRA_ERROR, `Failed to start daemon: ${(err as Error).message}`);
+        outputError(INFRA_ERROR, (err as Error).message);
         process.exit(INFRA_ERROR);
         return;
       }

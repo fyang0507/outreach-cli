@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { ensureDaemon } from "../../daemon/lifecycle.js";
+import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outreachConfig } from "../../config.js";
 import { outputJson, outputError } from "../../output.js";
@@ -9,10 +9,11 @@ interface PlaceOptions {
   to: string;
   from?: string;
   campaign?: string;
-  ttsProvider?: string;
-  sttProvider?: string;
-  voice?: string;
   welcomeGreeting?: string;
+  objective?: string;
+  persona?: string;
+  hangupWhen?: string;
+  maxDuration?: string;
 }
 
 export function registerPlaceCommand(parent: Command): void {
@@ -22,10 +23,11 @@ export function registerPlaceCommand(parent: Command): void {
     .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
     .option("--campaign <id>", "Campaign ID for session log")
-    .option("--tts-provider <provider>", "TTS provider", "ElevenLabs")
-    .option("--stt-provider <provider>", "STT provider", "Deepgram")
-    .option("--voice <voiceId>", "Voice ID for TTS")
-    .option("--welcome-greeting <text>", "Initial greeting text")
+    .option("--welcome-greeting <text>", "Initial greeting text spoken when call connects")
+    .option("--objective <text>", "What this call should accomplish")
+    .option("--persona <text>", "Who the AI agent is and how it should behave")
+    .option("--hangup-when <text>", "Condition for ending the call")
+    .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 300s)")
     .action(async (opts: PlaceOptions) => {
       const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
       if (!from) {
@@ -35,9 +37,9 @@ export function registerPlaceCommand(parent: Command): void {
       }
 
       try {
-        await ensureDaemon();
+        await requireRuntime();
       } catch (err) {
-        outputError(INFRA_ERROR, `Failed to start daemon: ${(err as Error).message}`);
+        outputError(INFRA_ERROR, (err as Error).message);
         process.exit(INFRA_ERROR);
         return;
       }
@@ -47,10 +49,11 @@ export function registerPlaceCommand(parent: Command): void {
           to: opts.to,
           from,
           campaign: opts.campaign,
-          ttsProvider: opts.ttsProvider,
-          sttProvider: opts.sttProvider,
-          voice: opts.voice,
           welcomeGreeting: opts.welcomeGreeting,
+          objective: opts.objective,
+          persona: opts.persona,
+          hangupWhen: opts.hangupWhen,
+          maxDuration: opts.maxDuration ? parseInt(opts.maxDuration, 10) : undefined,
         });
 
         const res = result as { error?: string; message?: string };

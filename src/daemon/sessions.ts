@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import type { TranscriptEntry } from "../logs/sessionLog.js";
+import type { GeminiLiveSession } from "../audio/geminiLive.js";
 
 export interface CallSession {
   id: string;
@@ -16,6 +17,12 @@ export interface CallSession {
   lastListenIndex: number;
   lastSpeechTime: number;
   lastActivityTime: number;
+  lastTranscriptTime: number;
+  maxDurationMs?: number;
+  streamSid?: string;
+  systemInstruction?: string;
+  bridge?: unknown; // MediaStreamsBridge reference
+  preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
 }
 
 const sessions = new Map<string, CallSession>();
@@ -31,6 +38,7 @@ export function appendTranscriptEntry(
   session.fullTranscript.push(entry);
   session.lastSpeechTime = Date.now();
   session.lastActivityTime = Date.now();
+  session.lastTranscriptTime = Date.now();
   sessionEvents.emit(`transcript:${session.id}`);
 }
 
@@ -55,6 +63,7 @@ export function createSession(params: {
     lastListenIndex: 0,
     lastSpeechTime: now,
     lastActivityTime: now,
+    lastTranscriptTime: now,
   };
   sessions.set(session.id, session);
   return session;
@@ -62,13 +71,6 @@ export function createSession(params: {
 
 export function getSession(id: string): CallSession | undefined {
   return sessions.get(id);
-}
-
-export function getSessionByCallSid(callSid: string): CallSession | undefined {
-  for (const session of sessions.values()) {
-    if (session.callSid === callSid) return session;
-  }
-  return undefined;
 }
 
 export function deleteSession(id: string): void {
