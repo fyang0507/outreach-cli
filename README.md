@@ -59,6 +59,8 @@ outreach call hangup --id <callId>         # end call early
 outreach teardown                          # stop tunnel + daemon
 ```
 
+Multiple calls can run concurrently — each `call place` creates an independent session. See `SKILL.md` for parallel outreach patterns.
+
 For agent integration details, see `SKILL.md`.
 
 ## Project structure
