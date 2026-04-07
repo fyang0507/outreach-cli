@@ -63,6 +63,38 @@ Multiple calls can run concurrently — each `call place` creates an independent
 
 For agent integration details, see `SKILL.md`.
 
+## Design philosophy
+
+The CLI wraps **infrastructure complexity** — Twilio telephony, Gemini Live voice sessions, ngrok tunneling, media stream bridging — behind simple commands. It deliberately does not wrap operations that agents can do natively with bash.
+
+**What the CLI handles:**
+- `outreach call/sms/email` — service integrations (Twilio, Gemini, ngrok)
+- `outreach init/teardown/status` — lifecycle management for the above
+
+**What the CLI leaves to the agent:**
+- Contact management (JSON files, manipulated via `jq`/`grep`)
+- Campaign tracking (JSONL files, appended via `echo`)
+- Data sync (git push/pull)
+- Outcome extraction from transcripts (LLM reasoning)
+
+This separation keeps the CLI focused and avoids building a worse `jq`.
+
+## Data layer
+
+The CLI produces raw data (session logs, transcripts). An external **data repo** stores structured outreach data — contacts, campaigns, and the raw artifacts — synced across devices via git.
+
+```
+<data-repo>/outreach/
+  contacts/        # one JSON file per contact (mutable, progressively enriched)
+  campaigns/       # one JSONL file per campaign (append-only event log)
+  sessions/        # session event logs
+  transcripts/     # call transcripts
+```
+
+The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI's only integration point is `--campaign` on `call place`, which auto-logs call attempts to the campaign JSONL.
+
+See `docs/plan/memory-layer.md` for the full data model design, including contact schema, campaign event types (attempt/outcome/decision), and channel-specific schemas for future SMS/email support.
+
 ## Project structure
 
 ```
@@ -75,7 +107,7 @@ src/
     init.ts                      # outreach init
     teardown.ts                  # outreach teardown
     runtimeStatus.ts             # outreach status
-    call/{place,listen,say,dtmf,status,hangup}.ts
+    call/{place,listen,status,hangup}.ts
     log/{append,read}.ts
   daemon/
     server.ts                    # HTTP + WS server, IPC handler
@@ -113,5 +145,4 @@ Daemon logs go to stdout/stderr of the process started by `outreach init`. Trans
 | `SKILL.md` | Agent onboarding — how to use the CLI |
 | `docs/design.md` | Engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
-| `docs/plan/memory-layer.md` | Memory/context layer design (planned) |
-| `docs/plan/integration-test-ivr.md` | IVR integration test plan |
+| `docs/plan/memory-layer.md` | Memory/data layer design — schemas and data repo structure |
