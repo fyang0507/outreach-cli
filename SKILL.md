@@ -1,6 +1,9 @@
-# Outreach CLI — Agent Skill Reference
+---
+name: outreach-cli
+description: Outreach CLI to make a phone call
+---
 
-Tool for making phone calls on behalf of a user. The voice agent (Gemini Live) handles the call autonomously — you provide the objective and persona, then monitor via transcript.
+Tool for making phone calls on behalf of a user (future extension to sms+email). The voice agent (Gemini Live) handles the call autonomously — you provide the objective and persona, then monitor via transcript.
 
 ## Prerequisites
 
