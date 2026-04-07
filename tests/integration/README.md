@@ -27,14 +27,17 @@ Live integration tests that exercise the voice agent's ability to navigate IVR m
 From the project root:
 
 ```bash
-# TC-1 only (IVR test against toll-free line):
+# IVR tests (TC-1, TC-4):
 ./tests/integration/ivr-test.sh
 
-# All tests (TC-4 requires you to answer your phone):
+# All IVR tests (TC-4 requires you to answer your phone):
 OUTREACH_TEST_BASELINE_NUMBER="+1YOUR_NUMBER" ./tests/integration/ivr-test.sh
+
+# Concurrent calls test:
+./tests/integration/concurrent-calls-test.sh
 ```
 
-The script is idempotent: it tears down any existing daemon before starting and cleans up on exit.
+Each script is idempotent: it tears down any existing daemon before starting and cleans up on exit.
 
 ## Test Cases
 
@@ -52,6 +55,15 @@ The script is idempotent: it tears down any existing daemon before starting and 
 - **Validates**: Agent speaks greeting, fires `end_call` with a reason, call terminates cleanly
 - **Pass criteria**: Call ends within the max duration
 - **Note**: Skipped if `OUTREACH_TEST_BASELINE_NUMBER` is not set. Uses a real number you answer to avoid robocalling businesses.
+
+### TC-C1 through TC-C4: Concurrent calls (concurrent-calls-test.sh)
+
+- **Calls**: Two IVR lines simultaneously (+1-800-444-4444 and +1-800-222-1111)
+- **Validates**:
+  - TC-C1: Two calls get independent IDs
+  - TC-C2: Both calls report independent status
+  - TC-C3: Hanging up one call does not affect the other
+  - TC-C4: Both calls produce separate transcript files
 
 ## Inspecting Results
 
