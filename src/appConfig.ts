@@ -3,6 +3,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
+export interface IdentityConfig {
+  user_name: string;
+}
+
 export interface CallConfig {
   max_duration_seconds: number;
 }
@@ -43,6 +47,7 @@ export interface GeminiConfig {
 }
 
 export interface AppConfig {
+  identity: IdentityConfig;
   call: CallConfig;
   voice_agent: VoiceAgentConfig;
   gemini: GeminiConfig;
@@ -83,6 +88,14 @@ export async function loadAppConfig(): Promise<AppConfig> {
   const call = config.call as Record<string, unknown>;
   if (call.max_duration_seconds == null || typeof call.max_duration_seconds !== "number") {
     call.max_duration_seconds = 300;
+  }
+
+  if (!config.identity || typeof config.identity !== "object") {
+    throw new Error("outreach.config.yaml: missing required section 'identity'");
+  }
+  const identity = config.identity as Record<string, unknown>;
+  if (!identity.user_name || typeof identity.user_name !== "string") {
+    throw new Error("outreach.config.yaml: identity.user_name is required");
   }
 
   if (!config.voice_agent || typeof config.voice_agent !== "object") {

@@ -48,11 +48,10 @@ outreach init                              # start tunnel + daemon
 outreach call place \
   --to "+15551234567" \
   --objective "Schedule a haircut for Thursday afternoon" \
-  --persona "You are Fred's personal assistant" \
-  --welcome-greeting "Hi, I'm calling to schedule an appointment" \
+  --persona "Be conversational and flexible on timing" \
   --hangup-when "Appointment is confirmed or no availability"
 
-outreach call listen --id <callId> --wait  # stream transcript
+outreach call listen --id <callId>         # get transcript
 outreach call status --id <callId>         # check call state
 outreach call hangup --id <callId>         # end call early
 

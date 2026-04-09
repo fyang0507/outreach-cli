@@ -197,7 +197,7 @@ else
     --objective "Say hello and hang up immediately" \
     --persona "You are making a brief test call. Say hello, then end the call right away." \
     --hangup-when "After saying hello" \
-    --welcome-greeting "Hello, this is a test call.")
+)
 fi
 
 if [ -z "$TC4_ID" ] && [ -n "$TC4_NUMBER" ]; then

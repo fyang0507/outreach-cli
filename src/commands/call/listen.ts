@@ -6,8 +6,6 @@ import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
 interface ListenOptions {
   id: string;
-  wait: boolean;
-  timeout: string;
 }
 
 export function registerListenCommand(parent: Command): void {
@@ -15,8 +13,6 @@ export function registerListenCommand(parent: Command): void {
     .command("listen")
     .description("Get transcript of what the other party has said")
     .requiredOption("--id <callId>", "Call ID")
-    .option("--wait", "Block until new speech is detected", false)
-    .option("--timeout <ms>", "Max time to wait in ms", "30000")
     .action(async (opts: ListenOptions) => {
       try {
         await requireRuntime();
@@ -27,13 +23,9 @@ export function registerListenCommand(parent: Command): void {
       }
 
       try {
-        const timeoutMs = parseInt(opts.timeout, 10);
-        const ipcTimeout = opts.wait ? timeoutMs + 5000 : undefined;
         const result = await sendToDaemon("call.listen", {
           id: opts.id,
-          wait: opts.wait,
-          timeout: timeoutMs,
-        }, ipcTimeout);
+        });
 
         const res = result as { error?: string; message?: string };
         if (res.error) {

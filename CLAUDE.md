@@ -20,7 +20,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 
 - **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,status,hangup}`, `outreach log {append,read}`
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
-- **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding.
+- **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding. Includes `TranscriptBatcher` that consolidates per-word Gemini transcript fragments into turn-level entries (flushes on speaker change, 800ms silence, or cleanup).
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
 - **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
@@ -32,15 +32,15 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 |---|---|
 | `src/cli.ts` | CLI entrypoint, wires all commands |
 | `src/daemon/server.ts` | Daemon: HTTP server, WebSocket handler, IPC handler, call logic |
-| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams ↔ Gemini Live audio bridge |
+| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams ↔ Gemini Live audio bridge + turn-level transcript batching |
 | `src/daemon/sessions.ts` | In-memory call session store with EventEmitter for transcript events |
 | `src/daemon/lifecycle.ts` | `ensureDaemon()` — daemon process management |
 | `src/daemon/ipc.ts` | `sendToDaemon()` — IPC client for CLI → daemon |
 | `src/audio/geminiLive.ts` | Gemini Live API WebSocket client |
 | `src/audio/transcode.ts` | mulaw↔PCM codec + sample rate resampling |
-| `src/audio/systemInstruction.ts` | Builds system instruction from persona/objective/greeting |
+| `src/audio/systemInstruction.ts` | Builds system instruction: static prompt (phone mechanics) + identity + persona + per-call params |
 | `src/runtime.ts` | Runtime state: read/write `~/.outreach/runtime.json` |
-| `src/appConfig.ts` | Loads `outreach.config.yaml` — all Gemini tuning parameters |
+| `src/appConfig.ts` | Loads `outreach.config.yaml` — identity, voice agent defaults, Gemini tuning parameters |
 | `src/config.ts` | Loads `.env` — secrets and infrastructure only |
 | `src/commands/init.ts` | `outreach init` — start ngrok + daemon, write runtime |
 | `src/commands/teardown.ts` | `outreach teardown` — stop everything, clean up |
@@ -50,8 +50,8 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/logs/sessionLog.ts` | JSONL file helpers for session logs and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
-| `prompts/voice-agent.md` | Static system prompt for voice agent (IVR, screening, style) |
-| `outreach.config.yaml` | Application behavior config (model, voice, VAD, thinking, etc.) |
+| `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
+| `outreach.config.yaml` | Application behavior config (identity, model, voice, VAD, thinking, etc.) |
 | `SKILL.md` | Agent onboarding reference — how to use the CLI |
 
 ## Configuration
@@ -61,7 +61,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | Source | Contains | Example |
 |---|---|---|
 | `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `outreach.config.yaml` | Application behavior | Gemini model, voice, VAD, thinking level, persona, see `docs/done/tuning-reference.md` for full parameter documentation. |
+| `outreach.config.yaml` | Application behavior | Identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
 
 ## Running a call
 
@@ -71,10 +71,9 @@ outreach init                          # start ngrok + daemon
 outreach call place \
   --to "+1555..." \
   --objective "Schedule appointment" \
-  --persona "You are Fred's assistant" \
-  --welcome-greeting "Hi, calling about..." \
+  --persona "Be conversational and flexible on timing" \
   --hangup-when "Appointment confirmed"
-outreach call listen --id <id> --wait  # monitor transcript
+outreach call listen --id <id>         # monitor transcript
 outreach teardown                      # clean up
 ```
 

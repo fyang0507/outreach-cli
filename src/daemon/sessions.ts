@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import type { TranscriptEntry } from "../logs/sessionLog.js";
 import type { GeminiLiveSession } from "../audio/geminiLive.js";
@@ -27,9 +26,6 @@ export interface CallSession {
 
 const sessions = new Map<string, CallSession>();
 
-/** Emits "transcript:<callId>" when new transcript entries are appended */
-export const sessionEvents = new EventEmitter();
-
 export function appendTranscriptEntry(
   session: CallSession,
   entry: TranscriptEntry,
@@ -39,7 +35,6 @@ export function appendTranscriptEntry(
   session.lastSpeechTime = Date.now();
   session.lastActivityTime = Date.now();
   session.lastTranscriptTime = Date.now();
-  sessionEvents.emit(`transcript:${session.id}`);
 }
 
 export function generateCallId(): string {
