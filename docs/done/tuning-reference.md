@@ -24,12 +24,10 @@ These override or supplement the config for a specific call.
 | `--objective <text>` | No | What this call should accomplish |
 | `--persona <text>` | No | Overrides `voice_agent.system_prompt_template.persona` from config |
 | `--hangup-when <text>` | No | Condition for the model to invoke `end_call` tool |
-| `--welcome-greeting <text>` | No | First thing Gemini says when call connects |
 | `--campaign <id>` | No | Campaign ID for session log grouping |
 
 **Tuning tips:**
 - `--persona`: shorter, more specific produces more natural behavior. "You are Fredy's assistant, calling to schedule a plumber" > "You are a helpful AI assistant..."
-- `--welcome-greeting`: keep it under 15 words. Long greetings sound robotic and delay the conversation. Critical for getting past call screening.
 - `--hangup-when`: be specific. "After getting the quote amount and availability" > "When done"
 - `--objective`: include context the model needs. "Get a quote for kitchen sink repair. Budget is under $300. Prefer weekend appointments."
 
@@ -47,9 +45,6 @@ The system instruction sent to Gemini is composed from **CLI flags (dynamic, per
 
 ## Your objective                          ← only if --objective provided
 {--objective flag}
-
-## Opening line                            ← only if --welcome-greeting provided
-When the call connects, start by saying: "{--welcome-greeting}"
 
 ## When to end the call specifically       ← only if --hangup-when provided
 {--hangup-when flag}

@@ -9,7 +9,6 @@ interface PlaceOptions {
   to: string;
   from?: string;
   campaign?: string;
-  welcomeGreeting?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
@@ -23,7 +22,6 @@ export function registerPlaceCommand(parent: Command): void {
     .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
     .option("--campaign <id>", "Campaign ID for session log")
-    .option("--welcome-greeting <text>", "Initial greeting text spoken when call connects")
     .option("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
@@ -49,7 +47,6 @@ export function registerPlaceCommand(parent: Command): void {
           to: opts.to,
           from,
           campaign: opts.campaign,
-          welcomeGreeting: opts.welcomeGreeting,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,

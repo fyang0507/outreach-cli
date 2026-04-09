@@ -2,9 +2,68 @@ import type { WebSocket } from "ws";
 import twilio from "twilio";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
-import { appendTranscriptEntry, sessionEvents, type CallSession } from "./sessions.js";
+import { appendTranscriptEntry, type CallSession } from "./sessions.js";
 import { writeTranscript } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
+
+const SILENCE_TIMEOUT_MS = 800;
+
+/**
+ * Batches per-word transcript fragments into turn-level entries.
+ * Flushes on speaker change, silence timeout, or explicit cleanup.
+ */
+class TranscriptBatcher {
+  private session: CallSession;
+  private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: number } | null = null;
+  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(session: CallSession) {
+    this.session = session;
+  }
+
+  append(speaker: "remote" | "local", text: string, ts: number): void {
+    // Speaker change — flush previous buffer first
+    if (this.pending && this.pending.speaker !== speaker) {
+      this.flush();
+    }
+
+    if (!this.pending) {
+      this.pending = { speaker, textParts: [], firstTs: ts };
+    }
+
+    this.pending.textParts.push(text);
+
+    // Reset silence timer
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => this.flush(), SILENCE_TIMEOUT_MS);
+  }
+
+  /** Flush pending buffer before appending a synthetic entry (DTMF, system message). */
+  appendSynthetic(entry: { speaker: "remote" | "local"; text: string; ts: number }): void {
+    this.flush();
+    appendTranscriptEntry(this.session, entry);
+  }
+
+  flush(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+    if (!this.pending) return;
+
+    const text = this.pending.textParts.join("");
+    appendTranscriptEntry(this.session, {
+      speaker: this.pending.speaker,
+      text,
+      ts: this.pending.firstTs,
+    });
+    this.pending = null;
+  }
+
+  cleanup(): void {
+    this.flush();
+  }
+}
 
 export interface MediaStreamsBridgeOptions {
   twilioWs: WebSocket;
@@ -22,11 +81,13 @@ export class MediaStreamsBridge {
   private callId: string;
   private session: CallSession;
   private cleaned = false;
+  private batcher: TranscriptBatcher;
 
   constructor(opts: MediaStreamsBridgeOptions) {
     this.twilioWs = opts.twilioWs;
     this.callId = opts.callId;
     this.session = opts.session;
+    this.batcher = new TranscriptBatcher(opts.session);
 
     if (opts.preConnectedGemini) {
       // Use pre-connected session and wire up callbacks
@@ -47,7 +108,7 @@ export class MediaStreamsBridge {
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
-          appendTranscriptEntry(this.session, { speaker, text, ts: Date.now() });
+          this.batcher.append(speaker, text, Date.now());
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -77,7 +138,7 @@ export class MediaStreamsBridge {
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
-          appendTranscriptEntry(this.session, { speaker, text, ts: Date.now() });
+          this.batcher.append(speaker, text, Date.now());
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -199,7 +260,7 @@ export class MediaStreamsBridge {
     client.calls(callSid).update({ twiml })
       .then(() => {
         console.log(`[media-bridge] Sent DTMF: ${digits}`);
-        appendTranscriptEntry(this.session, { speaker: "local", text: `[DTMF: ${digits}]`, ts: Date.now() });
+        this.batcher.appendSynthetic({ speaker: "local", text: `[DTMF: ${digits}]`, ts: Date.now() });
         this.gemini.sendToolResponse(id, "send_dtmf", { success: true, digits });
       })
       .catch((err: Error) => {
@@ -212,7 +273,7 @@ export class MediaStreamsBridge {
     const reason = (args.reason as string) || "Call ended by assistant";
     console.log(`[media-bridge] end_call tool invoked: ${reason}`);
 
-    appendTranscriptEntry(this.session, { speaker: "local", text: `[Call ended: ${reason}]`, ts: Date.now() });
+    this.batcher.appendSynthetic({ speaker: "local", text: `[Call ended: ${reason}]`, ts: Date.now() });
 
     // Respond to Gemini before closing
     this.gemini.sendToolResponse(id, "end_call", { success: true, reason });
@@ -244,6 +305,9 @@ export class MediaStreamsBridge {
 
     console.log(`[media-bridge] Cleaning up call ${this.callId}`);
 
+    // Flush any pending transcript fragments
+    this.batcher.cleanup();
+
     // Close Gemini session
     this.gemini.close();
 
@@ -264,7 +328,5 @@ export class MediaStreamsBridge {
       console.error(`[media-bridge] Failed to write transcript for ${this.callId}:`, err);
     });
 
-    // Emit event to unblock any waiting listen commands
-    sessionEvents.emit(`transcript:${this.callId}`);
   }
 }

@@ -7,7 +7,7 @@ import { writeFile, unlink } from "node:fs/promises";
 import express from "express";
 import { WebSocketServer } from "ws";
 import twilio from "twilio";
-import { generateCallId, createSession, getSession, listSessions, sessionEvents, appendTranscriptEntry } from "./sessions.js";
+import { generateCallId, createSession, getSession, listSessions, appendTranscriptEntry } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
 import { appendEvent, writeTranscript } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
@@ -242,7 +242,6 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const to = params.to as string;
   const from = params.from as string;
   const campaign = (params.campaign as string) || undefined;
-  const welcomeGreeting = (params.welcomeGreeting as string) || "";
   const objective = (params.objective as string) || undefined;
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
@@ -277,10 +276,10 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   session.maxDurationMs = maxDurationSec * 1000;
 
   const sysInstruction = await buildSystemInstruction({
+    identity: appConfig.identity,
     persona: persona || appConfig.voice_agent.default_persona,
     objective,
     hangupWhen,
-    welcomeGreeting,
   });
   session.systemInstruction = sysInstruction;
 
@@ -355,48 +354,10 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
 async function handleCallListen(params: Record<string, unknown>): Promise<object> {
   const id = params.id as string;
-  const wait = params.wait as boolean ?? false;
-  const timeout = (params.timeout as number) ?? 30000;
 
   const session = getSession(id);
   if (!session) {
     return { error: "session_not_found", message: `No session with id ${id}` };
-  }
-
-  if (wait) {
-    // Check if there are already new entries
-    const currentLen = session.transcriptBuffer.length;
-    if (currentLen <= session.lastListenIndex) {
-      // Wait for new transcript entries or timeout
-      // Use a debounce: after first event, wait 300ms for more chunks
-      // before returning, so we collect a full utterance
-      await new Promise<void>((resolve) => {
-        const eventName = `transcript:${id}`;
-        let mainTimer: ReturnType<typeof setTimeout>;
-        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const finish = () => {
-          clearTimeout(mainTimer);
-          if (debounceTimer) clearTimeout(debounceTimer);
-          sessionEvents.removeListener(eventName, onTranscript);
-          resolve();
-        };
-
-        const onTranscript = () => {
-          // Got a chunk — debounce: wait 300ms for more before resolving
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(finish, 300);
-        };
-
-        mainTimer = setTimeout(() => {
-          sessionEvents.removeListener(eventName, onTranscript);
-          if (debounceTimer) clearTimeout(debounceTimer);
-          resolve();
-        }, timeout);
-
-        sessionEvents.on(eventName, onTranscript);
-      });
-    }
   }
 
   const newEntries = session.transcriptBuffer.slice(session.lastListenIndex);
@@ -426,6 +387,10 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
     ended: "hungup",
   };
 
+  const hint = session.status === "ended"
+    ? `Call has ended. Use 'outreach call listen --id ${id}' to get the full transcript.`
+    : `Call is still active. Use 'outreach call listen --id ${id}' to get the transcript so far.`;
+
   return {
     id,
     status: session.status,
@@ -433,6 +398,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
     duration_sec: Math.floor((Date.now() - session.startTime) / 1000),
     from: session.from,
     to: session.to,
+    hint,
   };
 }
 

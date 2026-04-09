@@ -2,13 +2,17 @@
 # See docs/plan/tuning-reference.md for full parameter documentation.
 # Secrets (API keys, creds) live in .env, not here.
 
+identity:
+  # Required — who the assistant represents. Used in system instruction identity layer.
+  user_name: "Fred"
+
 call:
   # Hard max call duration in seconds. Overridable per call via --max-duration flag.
   max_duration_seconds: 300
 
 voice_agent:
   # Default persona used when --persona flag is not provided on call place.
-  default_persona: "You are a helpful phone assistant making a call on behalf of the user."
+  default_persona: "Stay goal-oriented. Be natural, polite, and concise. Don't over-explain or repeat yourself."
 
 gemini:
   # Model ID for Gemini Live API.
