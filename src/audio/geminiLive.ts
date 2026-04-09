@@ -162,14 +162,6 @@ export class GeminiLiveSession {
     });
   }
 
-  /** Send a text message to trigger model response (e.g., call-answered signal). */
-  sendClientContent(text: string): void {
-    if (!this.session || this.closed) return;
-    this.session.sendClientContent({
-      turns: [{ role: "user", parts: [{ text }] }],
-    });
-  }
-
   sendToolResponse(functionCallId: string, name: string, result: Record<string, unknown>): void {
     if (!this.session || this.closed) return;
     this.session.sendToolResponse({

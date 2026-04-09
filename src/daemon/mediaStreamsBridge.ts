@@ -195,10 +195,6 @@ export class MediaStreamsBridge {
           this.session.status = "in_progress";
           this.session.lastActivityTime = Date.now();
           console.log(`[media-bridge] Stream started: streamSid=${msg.start.streamSid}, callSid=${msg.start.callSid}`);
-
-          // Signal Gemini to start speaking — without this, the model waits
-          // for audio input and the callee hears dead air.
-          this.gemini.sendClientContent("The call has been answered. Begin speaking now.");
         }
         break;
       }
