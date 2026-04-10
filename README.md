@@ -18,11 +18,14 @@ npm link        # makes `outreach` available globally
 
 ### Configuration
 
-Copy the example env file and fill in your secrets:
+Two config files, both have example templates:
 
 ```bash
 cp .env.example .env
+cp outreach.config.example.yaml outreach.config.yaml
 ```
+
+**`.env`** — secrets and infrastructure:
 
 | Variable | Where to get it |
 |---|---|
@@ -31,7 +34,14 @@ cp .env.example .env
 | `OUTREACH_DEFAULT_FROM` | Your personal phone number (must be [verified in Twilio](https://console.twilio.com/us1/develop/phone-numbers/manage/verified)) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey) |
 
-Voice agent behavior (model, voice, VAD, thinking level) is configured in `outreach.config.yaml` — see `docs/done/tuning-reference.md` for all parameters.
+**`outreach.config.yaml`** — application behavior:
+
+| Field | Purpose |
+|---|---|
+| `data_repo_path` | Path to external data repo (sessions, transcripts, contacts, campaigns) |
+| `identity.user_name` | Who the voice agent represents |
+| `voice_agent.default_persona` | Default persona when `--persona` is omitted |
+| `gemini.*` | Model, voice, VAD, thinking level — see `docs/done/tuning-reference.md` |
 
 ### Verify
 
@@ -134,7 +144,7 @@ outreach init     # start services (requires ngrok installed)
 outreach teardown
 ```
 
-Daemon logs go to stdout/stderr of the process started by `outreach init`. Transcripts are saved to `~/.outreach/transcripts/`.
+Daemon logs go to stdout/stderr of the process started by `outreach init`. Transcripts are saved to the data repo (`<data_repo_path>/outreach/transcripts/`).
 
 ## Docs
 

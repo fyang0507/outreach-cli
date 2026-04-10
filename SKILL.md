@@ -10,9 +10,11 @@ Tool for making phone calls on behalf of a user (future extension to sms+email).
 Before placing calls, the runtime must be initialized:
 
 ```bash
-outreach init          # starts tunnel + daemon (required once per session)
+outreach init          # validates data repo, starts tunnel + daemon (required once per session)
 outreach status        # verify everything is running
 ```
+
+`init` returns `data_repo_path` in its JSON output — use this as `$DATA_REPO` for all file operations below. It also validates the data repo exists and is in sync with remote, failing early if not.
 
 When done with calls:
 
@@ -24,7 +26,7 @@ Note: `teardown` stops infrastructure only. You may still need to process transc
 
 ## Data repo
 
-Outreach data (contacts, campaigns, sessions, transcripts) lives in an external git repo, not managed by this CLI. The repo path is configured in `outreach.config.yaml` under `data_repo_path`.
+Outreach data (contacts, campaigns, sessions, transcripts) lives in an external git repo, not managed by this CLI. 
 
 ```
 <data-repo>/outreach/
@@ -57,19 +59,6 @@ One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in pl
 - **ID convention**: `c_` prefix + random hex (e.g., `c_a1b2c3`). Use this as the filename.
 - Contacts are built up progressively — phone number first, then name/notes after a call.
 - Before creating a new contact, grep by phone to avoid duplicates.
-
-```bash
-# Create a contact
-echo '{"id":"c_a1b2c3","phone":"+15551234567","name":null,"email":null,"tags":[],"notes":null,"created":"2026-04-06T10:00:00Z","updated":"2026-04-06T10:00:00Z"}' > "$DATA_REPO/outreach/contacts/c_a1b2c3.json"
-
-# Find a contact by phone
-grep -rl "+15551234567" "$DATA_REPO/outreach/contacts/"
-
-# Update a contact after learning new info
-jq '.name = "Dr. Smith Office" | .notes = "Front desk prefers morning calls" | .updated = "2026-04-06T14:30:00Z"' \
-  "$DATA_REPO/outreach/contacts/c_a1b2c3.json" > /tmp/c_a1b2c3.json && \
-  mv /tmp/c_a1b2c3.json "$DATA_REPO/outreach/contacts/c_a1b2c3.json"
-```
 
 ### Campaigns
 
@@ -105,26 +94,11 @@ Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
 {"ts":"2026-04-06T12:00:00Z","type":"decision","chosen":"c_d4e5f6","reason":"Best price and availability","resolution":"Booked Apr 22 2pm with Dr. Smith, $180"}
 ```
 
-```bash
-# Create a campaign
-echo '{"campaign_id":"dental-2026-04","created":"2026-04-06T10:00:00Z","objective":"Schedule dental cleaning","contacts":["c_a1b2c3"],"status":"active"}' > "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
-
-# Record an outcome (after reviewing transcript)
-echo '{"ts":"2026-04-06T11:05:00Z","contact_id":"c_a1b2c3","type":"outcome","outcome":"Available Apr 22 2pm","verdict":"viable"}' >> "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
-
-# Query all outcomes in a campaign
-jq 'select(.type=="outcome")' "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
-```
-
 Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome` and `decision` entries after reviewing transcripts.
 
 ### Sync
 
-Sync the data repo with git directly:
-
-```bash
-cd "$DATA_REPO" && git add -A && git commit -m "update" && git push
-```
+Sync the data repo with git directly.
 
 ## Voice agent behavior layers
 
@@ -181,7 +155,7 @@ This auto-appends an `attempt` entry to the campaign JSONL with the call ID, res
 
 ## Monitoring a call
 
-`listen` is the primary monitoring command. It returns the call's current status and any new transcript entries since your last listen. Transcripts are batched at the turn level — each entry is a complete utterance, not word-by-word fragments.
+`listen` is the primary monitoring command. It returns the call's current status and any new transcript entries since your last listen. Transcripts are batched at the turn level.
 
 ```bash
 outreach call listen --id <callId>
@@ -197,9 +171,8 @@ Returns:
 }
 ```
 
-Call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates.
-
-`call status` is available for lightweight metadata checks (duration, from/to) but `listen` is what you should use by default.
+When you want to monitor the call continuously, call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates.
+However, if you only want to read transcript after the call ends, `call status` is available for lightweight metadata checks (call status, duration, from/to).
 
 The voice agent is fire-and-forget: once `call place` is issued, there is no way to inject new instructions during the call. You are monitoring, not steering.
 
@@ -209,27 +182,11 @@ The voice agent is fire-and-forget: once `call place` is issued, there is no way
 outreach call hangup --id <callId>
 ```
 
-The voice agent will also end the call automatically when `--hangup-when` condition is met.
+This is to force an end of a call when necessary. The voice agent will also end the call automatically when `--hangup-when` condition is met.
 
 ## Concurrent calls
 
 The daemon supports multiple simultaneous calls. Each `call place` creates an independent session with its own call ID, transcript buffer, and lifecycle. You can place, monitor, and hang up calls independently.
-
-```bash
-# Place multiple calls
-outreach call place --to "+15551111111" --objective "..." --persona "..."
-# => { "id": "call_aaa", "status": "ringing" }
-
-outreach call place --to "+15552222222" --objective "..." --persona "..."
-# => { "id": "call_bbb", "status": "ringing" }
-
-# Monitor each — call listen in round-robin until all show status "ended"
-outreach call listen --id call_aaa
-outreach call listen --id call_bbb
-
-# Hangup individually if needed
-outreach call hangup --id call_bbb
-```
 
 ### Practical limits
 
@@ -242,15 +199,18 @@ outreach call hangup --id call_bbb
 ### Single call
 
 ```
-outreach init
+# --- sync data repo ---
+cd $DATA_REPO && git pull
 
 # --- campaign setup (direct file I/O) ---
 # create contacts, create campaign JSONL header
 
+# --- daemon service init ---
+outreach init
+
 # --- outreach ---
 outreach call place --to "..." --campaign "dental-2026-04" --objective "..." --persona "..." --hangup-when "..."
-outreach call listen --id <id>
-# (repeat listen if status != "ended")
+outreach call listen/status --id <id> # monitor call or check status
 
 # --- post-call (direct file I/O) ---
 # read transcript, extract outcome, append outcome to campaign JSONL
@@ -263,22 +223,6 @@ outreach teardown
 cd $DATA_REPO && git add -A && git commit -m "campaign update" && git push
 ```
 
-### Parallel outreach
-
-```
-outreach init
-
-# Place all calls
-outreach call place --to "+15551111111" --objective "..." --persona "..." --hangup-when "..."
-outreach call place --to "+15552222222" --objective "..." --persona "..." --hangup-when "..."
-
-# Monitor in round-robin until all show status "ended"
-outreach call listen --id call_aaa
-outreach call listen --id call_bbb
-
-outreach teardown
-```
-
 ## Output format
 
 All commands output JSON. Errors: `{ "error": "<code>", "message": "<details>" }`.
@@ -287,7 +231,7 @@ Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeo
 
 ## Post-call workflow
 
-After a call ends, the orchestrator is responsible for reviewing the transcript, extracting what was learned, and updating the campaign record. This is not automated — the voice agent only handles the live conversation.
+After a call ends, the orchestrator is responsible for reviewing the transcript, extracting what was learned, and updating the campaign record. The voice agent only handles the live conversation.
 
 ### 1. Review the transcript
 
@@ -296,7 +240,7 @@ After a call ends, the orchestrator is responsible for reviewing the transcript,
 outreach call listen --id <callId>
 
 # Or read the saved file directly
-cat ~/.outreach/transcripts/<callId>.jsonl
+cat $DATA_REPO/outreach/transcripts/<callId>.jsonl
 ```
 
 ### 2. Record the outcome in the campaign
@@ -316,14 +260,7 @@ Verdict values: `viable`, `eliminated`, `pending`, `unreachable`
 
 ### 3. Update the contact record
 
-If you learned new information about the contact (name, preferences, notes):
-
-```bash
-# Read, update, and write back
-jq '.name = "NY NJ Hoods" | .notes = "Prefers text for photos, (973) 440-8054" | .updated = "2026-04-06T11:10:00Z"' \
-  "$DATA_REPO/outreach/contacts/c_a1b2c3.json" > /tmp/c_a1b2c3.json && \
-  mv /tmp/c_a1b2c3.json "$DATA_REPO/outreach/contacts/c_a1b2c3.json"
-```
+If you learned new information about the contact (name, preferences, notes), update the contact JSON file in `$DATA_REPO/outreach/contacts/`.
 
 ### 4. Record human-relayed updates
 
@@ -344,11 +281,7 @@ echo '{"ts":"2026-04-07T15:00:00Z","type":"decision","chosen":"c_g7h8i9","reason
 
 ### 6. Sync the data repo
 
-After all post-call processing is complete:
-
-```bash
-cd "$DATA_REPO" && git add -A && git commit -m "campaign update" && git push
-```
+Sync the data repo after all post-call processing is complete.
 
 ## Voicemail and retry logic
 
@@ -361,4 +294,4 @@ For retry decisions:
 
 ## Transcripts
 
-Full call transcripts are saved to `~/.outreach/transcripts/<callId>.jsonl` after the call ends.
+Full call transcripts are saved to `$DATA_REPO/outreach/transcripts/<callId>.jsonl` after the call ends.

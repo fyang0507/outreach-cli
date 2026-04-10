@@ -24,7 +24,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
 - **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
-- **Session logs** (`src/logs/sessionLog.ts`): JSONL files in `~/.outreach/sessions/` and `~/.outreach/transcripts/`. Append-only, file-system-native.
+- **Session logs** (`src/logs/sessionLog.ts`): JSONL files in `<data_repo_path>/outreach/sessions/` and `<data_repo_path>/outreach/transcripts/` (path from `outreach.config.yaml`). Append-only, file-system-native.
 
 ## Key files
 
@@ -40,7 +40,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/audio/transcode.ts` | mulaw↔PCM codec + sample rate resampling |
 | `src/audio/systemInstruction.ts` | Builds system instruction: static prompt (phone mechanics) + identity + persona + per-call params |
 | `src/runtime.ts` | Runtime state: read/write `~/.outreach/runtime.json` |
-| `src/appConfig.ts` | Loads `outreach.config.yaml` — identity, voice agent defaults, Gemini tuning parameters |
+| `src/appConfig.ts` | Loads `outreach.config.yaml` — data repo path, identity, voice agent defaults, Gemini tuning parameters |
 | `src/config.ts` | Loads `.env` — secrets and infrastructure only |
 | `src/commands/init.ts` | `outreach init` — start ngrok + daemon, write runtime |
 | `src/commands/teardown.ts` | `outreach teardown` — stop everything, clean up |
@@ -51,7 +51,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
-| `outreach.config.yaml` | Application behavior config (identity, model, voice, VAD, thinking, etc.) |
+| `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
 | `SKILL.md` | Agent onboarding reference — how to use the CLI |
 
 ## Configuration
@@ -61,7 +61,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | Source | Contains | Example |
 |---|---|---|
 | `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `outreach.config.yaml` | Application behavior | Identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
+| `outreach.config.yaml` | Application behavior | Data repo path, identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
 
 ## Running a call
 
