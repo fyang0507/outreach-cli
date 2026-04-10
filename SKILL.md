@@ -26,14 +26,13 @@ Note: `teardown` stops infrastructure only. You may still need to process transc
 
 ## Data repo
 
-Outreach data (contacts, campaigns, sessions, transcripts) lives in an external git repo, not managed by this CLI. 
+Outreach data (contacts, campaigns, transcripts) lives in an external git repo, not managed by this CLI. `outreach init` creates these directories automatically.
 
 ```
 <data-repo>/outreach/
   contacts/        # one JSON file per contact (mutable)
   campaigns/       # one JSONL file per campaign (append-only)
-  sessions/        # session event logs (JSONL)
-  transcripts/     # call transcripts (JSONL)
+  transcripts/     # call transcripts (JSONL, auto-saved by CLI)
 ```
 
 You manage these files directly with standard tools (`jq`, `grep`, `cat`, `echo`). The CLI does not wrap file I/O.
@@ -120,19 +119,38 @@ The voice agent's behavior is assembled from three independent layers. Each owns
 
 If `--persona` is omitted, the default from `outreach.config.yaml` → `voice_agent.default_persona` is used.
 
+## Pre-call information gathering
+
+Before placing a call, ask the user for information the voice agent will need to complete the objective. The agent cannot ask the user mid-call, so anything it doesn't know will either be left blank or cause the call to fail.
+
+**Scheduling calls** (dentist, haircut, doctor, etc.):
+- User's availability — specific dates/times or a range ("this week, mornings only")
+- Any preferences (specific provider, location, service type)
+
+**Medical/insurance-related calls**:
+- Insurance provider and member ID
+- Whether open to out-of-network providers
+- Patient name and date of birth if required
+
+**Service inquiries** (quotes, repairs, etc.):
+- Relevant details about the item/property (make, model, address, dimensions)
+- Budget range if applicable
+
+Embed gathered information into `--objective` so the voice agent can use it during the call. Don't place the call until you have enough context for the agent to succeed.
+
 ## Placing a call
 
 ```bash
 outreach call place \
   --to "+15551234567" \
-  --objective "Schedule a haircut appointment for Thursday afternoon" \
+  --objective "Schedule a haircut appointment. Available Thursday or Friday afternoon after 2pm." \
   --persona "Be conversational and flexible on timing" \
   --hangup-when "The appointment is confirmed or they say no availability"
 ```
 
 **Required**: `--to`
 **Recommended**: `--objective`, `--persona`, `--hangup-when`
-**Optional**: `--max-duration <seconds>` — override the default 300s max call duration. Use higher values for complex service inquiries where 5 minutes may not be enough.
+**Optional**: `--campaign <id>` + `--contact <id>` — auto-log attempt to campaign JSONL at call end. `--max-duration <seconds>` — override the default 300s max call duration.
 
 Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
@@ -140,18 +158,19 @@ The voice agent handles the entire call — IVR navigation, conversation, and ha
 
 ### Campaign integration
 
-When placing a call as part of a campaign, pass `--campaign` to auto-log the attempt:
+When placing a call as part of a campaign, pass `--campaign` and `--contact` to auto-log the attempt:
 
 ```bash
 outreach call place \
   --to "+15551234567" \
   --campaign "dental-2026-04" \
+  --contact "c_a1b2c3" \
   --objective "Schedule dental cleaning" \
   --persona "Be polite and concise" \
   --hangup-when "Appointment confirmed or no availability"
 ```
 
-This auto-appends an `attempt` entry to the campaign JSONL with the call ID, result, and timestamp. You are still responsible for writing the `outcome` entry after reviewing the transcript.
+When the call ends, the CLI auto-appends an `attempt` entry to `$DATA_REPO/outreach/campaigns/<campaign>.jsonl` with the call ID, result (`connected` or `no_answer`), contact ID, and timestamp. You are still responsible for writing the `outcome` entry after reviewing the transcript.
 
 ## Monitoring a call
 

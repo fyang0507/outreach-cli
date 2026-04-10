@@ -22,6 +22,8 @@ export interface CallSession {
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
+  campaign?: string;  // Campaign ID for auto-logging attempts
+  contactId?: string; // Contact ID for campaign attempt entry
 }
 
 const sessions = new Map<string, CallSession>();

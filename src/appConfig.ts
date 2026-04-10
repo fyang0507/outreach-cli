@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 
 export interface IdentityConfig {
   user_name: string;
+  bio?: string;
 }
 
 export interface CallConfig {

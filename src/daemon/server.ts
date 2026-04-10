@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import twilio from "twilio";
 import { generateCallId, createSession, getSession, listSessions, appendTranscriptEntry } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { appendEvent, writeTranscript } from "../logs/sessionLog.js";
+import { appendCampaignEvent, writeTranscript } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
@@ -83,6 +83,28 @@ function logCallCost(session: CallSession): void {
   }));
 }
 
+/**
+ * Write transcript and campaign attempt entry when a call ends.
+ * Called from all call-end paths (forceHangup, handleCallHangup, bridge cleanup).
+ */
+async function finalizeCall(session: CallSession): Promise<void> {
+  await writeTranscript(session.id, session.fullTranscript);
+
+  // Auto-append attempt entry to campaign JSONL if campaign was specified
+  if (session.campaign) {
+    const hasRemoteSpeech = session.fullTranscript.some((e) => e.speaker === "remote");
+    const result = hasRemoteSpeech ? "connected" : "no_answer";
+    await appendCampaignEvent(session.campaign, {
+      ts: new Date().toISOString(),
+      contact_id: session.contactId ?? null,
+      type: "attempt",
+      channel: "call",
+      result,
+      call_id: session.id,
+    });
+  }
+}
+
 async function forceHangup(session: CallSession, reason: string): Promise<void> {
   if (session.status === "ended") return;
 
@@ -114,7 +136,7 @@ async function forceHangup(session: CallSession, reason: string): Promise<void> 
 
   session.status = "ended";
   logCallCost(session);
-  await writeTranscript(session.id, session.fullTranscript);
+  await finalizeCall(session);
 }
 
 function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
@@ -242,6 +264,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const to = params.to as string;
   const from = params.from as string;
   const campaign = (params.campaign as string) || undefined;
+  const contactId = (params.contact as string) || undefined;
   const objective = (params.objective as string) || undefined;
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
@@ -270,6 +293,8 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
+  session.campaign = campaign;
+  session.contactId = contactId;
 
   // G1: Set max duration from flag or config default
   const maxDurationSec = maxDuration ?? appConfig.call.max_duration_seconds;
@@ -331,16 +356,6 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     });
 
     session.callSid = twilioCall.sid;
-
-    const campaignId = campaign || id;
-    await appendEvent(campaignId, {
-      type: "call.started",
-      callId: id,
-      callSid: twilioCall.sid,
-      from,
-      to,
-      ts: Date.now(),
-    });
 
     resetIdleTimer();
     return { id, status: "ringing" };
@@ -434,7 +449,7 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
 
   session.status = "ended";
   logCallCost(session);
-  await writeTranscript(id, session.fullTranscript);
+  await finalizeCall(session);
 
   return { id, status: "ended", duration_sec: durationSec };
 }

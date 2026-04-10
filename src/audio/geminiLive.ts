@@ -185,6 +185,10 @@ export class GeminiLiveSession {
     this.opts.onEnd = cbs.onEnd;
   }
 
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

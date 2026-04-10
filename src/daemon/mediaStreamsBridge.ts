@@ -3,7 +3,7 @@ import twilio from "twilio";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
 import { appendTranscriptEntry, type CallSession } from "./sessions.js";
-import { writeTranscript } from "../logs/sessionLog.js";
+import { appendCampaignEvent, writeTranscript } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
 
 const SILENCE_TIMEOUT_MS = 800;
@@ -323,9 +323,24 @@ export class MediaStreamsBridge {
     this.session.ws = undefined;
     this.session.bridge = undefined;
 
-    // Write transcript
-    writeTranscript(this.callId, this.session.fullTranscript).catch((err) => {
-      console.error(`[media-bridge] Failed to write transcript for ${this.callId}:`, err);
+    // Write transcript + campaign attempt
+    const finalize = async () => {
+      await writeTranscript(this.callId, this.session.fullTranscript);
+      if (this.session.campaign) {
+        const hasRemoteSpeech = this.session.fullTranscript.some((e) => e.speaker === "remote");
+        const result = hasRemoteSpeech ? "connected" : "no_answer";
+        await appendCampaignEvent(this.session.campaign, {
+          ts: new Date().toISOString(),
+          contact_id: this.session.contactId ?? null,
+          type: "attempt",
+          channel: "call",
+          result,
+          call_id: this.callId,
+        });
+      }
+    };
+    finalize().catch((err) => {
+      console.error(`[media-bridge] Failed to finalize call ${this.callId}:`, err);
     });
 
   }

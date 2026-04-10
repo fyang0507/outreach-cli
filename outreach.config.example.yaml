@@ -4,13 +4,15 @@
 # Secrets (API keys, creds) live in .env, not here.
 
 # Required — path to the external data repo where outreach data is stored.
-# Sessions, transcripts, contacts, and campaigns all live here.
+# Transcripts, contacts, and campaigns all live here.
 # Validated on `outreach init` — must exist and be a git repo.
 data_repo_path: ~/path/to/your-data-repo
 
 identity:
   # Required — who the assistant represents. Used in system instruction identity layer.
   user_name: "Your Name"
+  # Optional — brief context about the user. Helps the voice agent answer questions naturally.
+  bio: null
 
 call:
   # Hard max call duration in seconds. Overridable per call via --max-duration flag.
