@@ -63,11 +63,13 @@ One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in pl
 
 One JSONL file per campaign in `outreach/campaigns/`. Strictly append-only — never edit existing lines.
 
+**Naming convention**: `YYYY-MM-DD-<slug>` — date is campaign creation date, slug is a short kebab-case description. Examples: `2026-04-15-dental-cleaning`, `2026-04-20-hood-cleaning-quote`. The date prefix makes it easy to see campaign lifespan and avoids logging to the wrong file.
+
 **Line 1 — campaign header:**
 ```json
 {
-  "campaign_id": "dental-2026-04",
-  "created": "2026-04-06T10:00:00Z",
+  "campaign_id": "2026-04-15-dental-cleaning",
+  "created": "2026-04-15T10:00:00Z",
   "objective": "Schedule dental cleaning, ideally before end of April",
   "contacts": ["c_a1b2c3", "c_d4e5f6"],
   "status": "active"
@@ -93,7 +95,17 @@ Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
 {"ts":"2026-04-06T12:00:00Z","type":"decision","chosen":"c_d4e5f6","reason":"Best price and availability","resolution":"Booked Apr 22 2pm with Dr. Smith, $180"}
 ```
 
-Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome` and `decision` entries after reviewing transcripts.
+A `decision` is **not necessarily the final entry**. The user may cancel, reschedule, or change their mind after a decision is recorded. Use `amendment` entries for post-decision changes:
+
+**`amendment`** — modifies a prior decision:
+```json
+{"ts":"2026-04-10T09:00:00Z","type":"amendment","action":"cancelled","reason":"Schedule conflict, need to rebook","note":"User asked to cancel Apr 22 appointment"}
+```
+`action` values: `cancelled`, `rescheduled`, `changed_provider`
+
+After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
+
+Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `decision`, and `amendment` entries after reviewing transcripts.
 
 ### Sync
 
@@ -163,7 +175,7 @@ When placing a call as part of a campaign, pass `--campaign` and `--contact` to 
 ```bash
 outreach call place \
   --to "+15551234567" \
-  --campaign "dental-2026-04" \
+  --campaign "2026-04-15-dental-cleaning" \
   --contact "c_a1b2c3" \
   --objective "Schedule dental cleaning" \
   --persona "Be polite and concise" \
@@ -213,6 +225,16 @@ The daemon supports multiple simultaneous calls. Each `call place` creates an in
 - **Gemini Live**: Each call opens one Gemini Live session. Google enforces per-API-key rate limits (requests per minute). For parallel calls, monitor for 429 errors.
 - **ngrok**: Free tier allows 1 tunnel (sufficient — all calls share one tunnel). Connection limits depend on your plan.
 
+## Campaign lookup before creation
+
+A campaign may span multiple agent sessions — retries, follow-ups, and post-decision changes all belong in the same campaign. Before creating a new campaign, always check for an existing one:
+
+1. **Search** `$DATA_REPO/outreach/campaigns/` for campaigns with a related slug or objective (e.g., `ls` + `head -1` to read headers).
+2. **If found**: present the match to the user — confirm it's the right campaign before appending to it.
+3. **If not found**: confirm with the user that a new campaign should be created, agree on the name (`YYYY-MM-DD-<slug>`), then create the header line.
+
+Never silently create a new campaign when an existing one might apply — the user should always confirm the campaign choice.
+
 ## Typical workflow
 
 ### Single call
@@ -221,14 +243,14 @@ The daemon supports multiple simultaneous calls. Each `call place` creates an in
 # --- sync data repo ---
 cd $DATA_REPO && git pull
 
-# --- campaign setup (direct file I/O) ---
-# create contacts, create campaign JSONL header
+# --- campaign lookup / setup (direct file I/O) ---
+# search for existing campaign; if none found, create contacts + campaign JSONL header
 
 # --- daemon service init ---
 outreach init
 
 # --- outreach ---
-outreach call place --to "..." --campaign "dental-2026-04" --objective "..." --persona "..." --hangup-when "..."
+outreach call place --to "..." --campaign "2026-04-15-dental-cleaning" --objective "..." --persona "..." --hangup-when "..."
 outreach call listen/status --id <id> # monitor call or check status
 
 # --- post-call (direct file I/O) ---
@@ -268,7 +290,7 @@ After reviewing the transcript, append an `outcome` entry to the campaign JSONL:
 
 ```bash
 # What was learned + orchestrator's judgment
-echo '{"ts":"2026-04-06T11:05:00Z","contact_id":"c_a1b2c3","type":"outcome","outcome":"Available Apr 22 2pm, $180 cleaning","verdict":"viable","note":"Good availability, needs photos texted first"}' >> "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
+echo '{"ts":"2026-04-06T11:05:00Z","contact_id":"c_a1b2c3","type":"outcome","outcome":"Available Apr 22 2pm, $180 cleaning","verdict":"viable","note":"Good availability, needs photos texted first"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
 ```
 
 Verdict values: `viable`, `eliminated`, `pending`, `unreachable`
@@ -287,16 +309,18 @@ When the user reports a callback or offline interaction, record it as an outcome
 
 ```bash
 # User says: "NY NJ Hoods called back, they quoted $350 for cleaning"
-echo '{"ts":"2026-04-07T14:00:00Z","contact_id":"c_g7h8i9","type":"outcome","outcome":"Quoted $350 for hood cleaning, available next Thursday","verdict":"viable","note":"Human-relayed callback"}' >> "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
+echo '{"ts":"2026-04-07T14:00:00Z","contact_id":"c_g7h8i9","type":"outcome","outcome":"Quoted $350 for hood cleaning, available next Thursday","verdict":"viable","note":"Human-relayed callback"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
 ```
 
-### 5. Close the campaign
+### 5. Record a decision
 
 When the objective is resolved, append a `decision` entry:
 
 ```bash
-echo '{"ts":"2026-04-07T15:00:00Z","type":"decision","chosen":"c_g7h8i9","reason":"Best price and availability","resolution":"Booked Thu Apr 15 10:30am, $350 cleaning"}' >> "$DATA_REPO/outreach/campaigns/dental-2026-04.jsonl"
+echo '{"ts":"2026-04-07T15:00:00Z","type":"decision","chosen":"c_g7h8i9","reason":"Best price and availability","resolution":"Booked Thu Apr 15 10:30am, $350 cleaning"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
 ```
+
+A decision does not close the campaign. If the user later cancels, reschedules, or switches providers, append an `amendment` entry and continue the campaign. See the campaign schema section for details.
 
 ### 6. Sync the data repo
 
