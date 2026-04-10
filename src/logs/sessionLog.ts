@@ -1,6 +1,6 @@
 import { mkdir, appendFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { loadAppConfig } from "../appConfig.js";
 
 export interface TranscriptEntry {
   speaker: "remote" | "local";
@@ -8,13 +8,24 @@ export interface TranscriptEntry {
   ts: number;
 }
 
-const BASE_DIR = join(homedir(), ".outreach");
-const SESSIONS_DIR = join(BASE_DIR, "sessions");
-const TRANSCRIPTS_DIR = join(BASE_DIR, "transcripts");
+let _sessionsDir: string | null = null;
+let _transcriptsDir: string | null = null;
+
+async function getDataDirs(): Promise<{ sessionsDir: string; transcriptsDir: string }> {
+  if (_sessionsDir && _transcriptsDir) {
+    return { sessionsDir: _sessionsDir, transcriptsDir: _transcriptsDir };
+  }
+  const config = await loadAppConfig();
+  const outreachDir = join(config.data_repo_path, "outreach");
+  _sessionsDir = join(outreachDir, "sessions");
+  _transcriptsDir = join(outreachDir, "transcripts");
+  return { sessionsDir: _sessionsDir, transcriptsDir: _transcriptsDir };
+}
 
 export async function ensureLogDirs(): Promise<void> {
-  await mkdir(SESSIONS_DIR, { recursive: true });
-  await mkdir(TRANSCRIPTS_DIR, { recursive: true });
+  const { sessionsDir, transcriptsDir } = await getDataDirs();
+  await mkdir(sessionsDir, { recursive: true });
+  await mkdir(transcriptsDir, { recursive: true });
 }
 
 export async function appendEvent(
@@ -22,12 +33,14 @@ export async function appendEvent(
   event: object,
 ): Promise<void> {
   await ensureLogDirs();
-  const filePath = join(SESSIONS_DIR, `${campaignId}.jsonl`);
+  const { sessionsDir } = await getDataDirs();
+  const filePath = join(sessionsDir, `${campaignId}.jsonl`);
   await appendFile(filePath, JSON.stringify(event) + "\n", "utf-8");
 }
 
 export async function readLog(campaignId: string): Promise<object[]> {
-  const filePath = join(SESSIONS_DIR, `${campaignId}.jsonl`);
+  const { sessionsDir } = await getDataDirs();
+  const filePath = join(sessionsDir, `${campaignId}.jsonl`);
   let content: string;
   try {
     content = await readFile(filePath, "utf-8");
@@ -46,7 +59,8 @@ export async function writeTranscript(
   entries: TranscriptEntry[],
 ): Promise<void> {
   await ensureLogDirs();
-  const filePath = join(TRANSCRIPTS_DIR, `${callId}.jsonl`);
+  const { transcriptsDir } = await getDataDirs();
+  const filePath = join(transcriptsDir, `${callId}.jsonl`);
   const data = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
   await writeFile(filePath, data, "utf-8");
 }

@@ -1,0 +1,80 @@
+# Outreach CLI — Application Config
+# Copy to outreach.config.yaml and fill in your values.
+# See docs/done/tuning-reference.md for full parameter documentation.
+# Secrets (API keys, creds) live in .env, not here.
+
+# Required — path to the external data repo where outreach data is stored.
+# Sessions, transcripts, contacts, and campaigns all live here.
+# Validated on `outreach init` — must exist and be a git repo.
+data_repo_path: ~/path/to/your-data-repo
+
+identity:
+  # Required — who the assistant represents. Used in system instruction identity layer.
+  user_name: "Your Name"
+
+call:
+  # Hard max call duration in seconds. Overridable per call via --max-duration flag.
+  max_duration_seconds: 300
+
+voice_agent:
+  # Default persona used when --persona flag is not provided on call place.
+  default_persona: "Stay goal-oriented. Be natural, polite, and concise. Don't over-explain or repeat yourself."
+
+gemini:
+  # Model ID for Gemini Live API.
+  model: "models/gemini-3.1-flash-live-preview"
+
+  speech:
+    # Prebuilt voice name. Options: Aoede, Puck, Charon, Kore, Fenrir, Leda, Orus, Zephyr
+    voice_name: "Aoede"
+    # BCP-47 language code for TTS output (e.g., "en-US", "es-ES").
+    # null = auto-detect, which handles multilingual calls correctly.
+    language_code: null
+
+  generation:
+    # Range (0.0, 2.0]. Lower = more deterministic, higher = more creative.
+    # null = API default (~1.0). For business calls, try 0.7.
+    temperature: null
+    # Nucleus sampling threshold. null = API default.
+    top_p: null
+    # Top-k sampling. null = API default.
+    top_k: null
+    # Max tokens per response. null = API default.
+    max_output_tokens: null
+
+  thinking:
+    # Reasoning depth: minimal, low, medium, high.
+    # Higher = smarter responses but more latency. "minimal" is best for most calls for minimal latency.
+    thinking_level: "minimal"
+    # Return thought tokens in the response. Only useful for debugging.
+    include_thoughts: false
+
+  vad:
+    # Voice Activity Detection controls turn-taking speed.
+    # These are the most impactful parameters for natural conversation feel.
+
+    # Speech onset detection. "START_SENSITIVITY_HIGH" = faster detection, more false triggers.
+    # null = API default (LOW).
+    start_of_speech_sensitivity: null
+    # Speech end detection. "END_SENSITIVITY_HIGH" = model responds sooner after silence,
+    # but may cut off mid-sentence pauses. null = API default (LOW).
+    end_of_speech_sensitivity: null
+    # Min ms of speech before start-of-speech fires. Lower = more responsive.
+    # null = API default.
+    prefix_padding_ms: null
+    # Min ms of silence before end-of-speech fires. KEY LATENCY KNOB.
+    # 300-500ms = fast response, may interrupt pauses.
+    # 800-1200ms = tolerates "um..." but feels slower.
+    # null = API default.
+    silence_duration_ms: null
+
+  turn_taking:
+    # "START_OF_ACTIVITY_INTERRUPTS" = user speech interrupts model (natural for conversation).
+    # "NO_INTERRUPTION" = model plays to completion (for announcements only).
+    activity_handling: "START_OF_ACTIVITY_INTERRUPTS"
+
+  transcription:
+    # BCP-47 language code hints for transcription.
+    # null = auto-detect (correct for multilingual calls).
+    input_language_codes: null
+    output_language_codes: null

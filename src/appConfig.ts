@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 
 export interface IdentityConfig {
@@ -47,6 +48,7 @@ export interface GeminiConfig {
 }
 
 export interface AppConfig {
+  data_repo_path: string;
   identity: IdentityConfig;
   call: CallConfig;
   voice_agent: VoiceAgentConfig;
@@ -80,6 +82,15 @@ export async function loadAppConfig(): Promise<AppConfig> {
   }
 
   const config = parsed as Record<string, unknown>;
+
+  // Validate data_repo_path (required)
+  if (!config.data_repo_path || typeof config.data_repo_path !== "string") {
+    throw new Error("outreach.config.yaml: data_repo_path is required");
+  }
+  // Expand ~ to home directory
+  if ((config.data_repo_path as string).startsWith("~/")) {
+    config.data_repo_path = join(homedir(), (config.data_repo_path as string).slice(2));
+  }
 
   // Default call config if not present
   if (!config.call || typeof config.call !== "object") {
