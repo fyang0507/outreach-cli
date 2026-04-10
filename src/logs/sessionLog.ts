@@ -2,11 +2,77 @@ import { mkdir, appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
 
-export interface TranscriptEntry {
+// --- Timestamp helper ---
+
+export function isoNow(): string {
+  return new Date().toISOString();
+}
+
+// --- Transcript event types ---
+
+interface BaseEvent {
+  type: string;
+  ts: string; // ISO 8601
+}
+
+export interface CallPlacedEvent extends BaseEvent {
+  type: "call_placed";
+  from: string;
+  to: string;
+}
+
+export interface CallRingingEvent extends BaseEvent {
+  type: "call_ringing";
+  call_sid: string;
+}
+
+export interface CallAnsweredEvent extends BaseEvent {
+  type: "call_answered";
+  ring_duration_ms: number;
+}
+
+export interface AmdResultEvent extends BaseEvent {
+  type: "amd_result";
+  answered_by: string;
+}
+
+export interface SpeechEvent extends BaseEvent {
+  type: "speech";
   speaker: "remote" | "local";
   text: string;
-  ts: number;
 }
+
+export interface DtmfEvent extends BaseEvent {
+  type: "dtmf";
+  digits: string;
+}
+
+export interface CallEndedEvent extends BaseEvent {
+  type: "call_ended";
+  reason: string;
+  duration_ms: number;
+}
+
+export interface CallSummaryEvent extends BaseEvent {
+  type: "call_summary";
+  duration_ms: number;
+  ring_duration_ms?: number;
+  answered_by?: string;
+  first_remote_speech_delay_ms?: number;
+  first_response_delay_ms?: number;
+}
+
+export type TranscriptEvent =
+  | CallPlacedEvent
+  | CallRingingEvent
+  | CallAnsweredEvent
+  | AmdResultEvent
+  | SpeechEvent
+  | DtmfEvent
+  | CallEndedEvent
+  | CallSummaryEvent;
+
+// --- Data directories ---
 
 let _dirs: { contactsDir: string; campaignsDir: string; transcriptsDir: string } | null = null;
 
@@ -41,11 +107,11 @@ export async function appendCampaignEvent(
 
 export async function writeTranscript(
   callId: string,
-  entries: TranscriptEntry[],
+  events: TranscriptEvent[],
 ): Promise<void> {
   const { transcriptsDir } = await getDataDirs();
   await mkdir(transcriptsDir, { recursive: true });
   const filePath = join(transcriptsDir, `${callId}.jsonl`);
-  const data = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+  const data = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
   await writeFile(filePath, data, "utf-8");
 }

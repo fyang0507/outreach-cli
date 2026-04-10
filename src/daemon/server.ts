@@ -7,9 +7,10 @@ import { writeFile, unlink } from "node:fs/promises";
 import express from "express";
 import { WebSocketServer } from "ws";
 import twilio from "twilio";
-import { generateCallId, createSession, getSession, listSessions, appendTranscriptEntry } from "./sessions.js";
+import { generateCallId, createSession, getSession, getSessionByCallSid, listSessions, appendEvent } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { appendCampaignEvent, writeTranscript } from "../logs/sessionLog.js";
+import { appendCampaignEvent, writeTranscript, isoNow } from "../logs/sessionLog.js";
+import type { TranscriptEvent } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
@@ -34,6 +35,62 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/health", (_req, res) => {
   const activeSessions = listSessions().filter((s) => s.status !== "ended");
   res.json({ status: "ok", calls: activeSessions.length });
+});
+
+// --- Twilio status callback ---
+
+app.post("/call-status/:callId", (req, res) => {
+  const { callId } = req.params;
+  const callStatus = req.body.CallStatus as string | undefined;
+  const session = getSession(callId);
+
+  if (!session) {
+    console.log(`[call-status] No session for callId=${callId}, status=${callStatus}`);
+    res.sendStatus(204);
+    return;
+  }
+
+  console.log(`[call-status] Call ${callId}: ${callStatus}`);
+
+  if (callStatus === "ringing") {
+    session.ringingAt = isoNow();
+    appendEvent(session, { type: "call_ringing", ts: session.ringingAt, call_sid: session.callSid ?? "" });
+  } else if (callStatus === "in-progress") {
+    session.answeredAt = isoNow();
+    const ringDurationMs = session.ringingAt
+      ? new Date(session.answeredAt).getTime() - new Date(session.ringingAt).getTime()
+      : undefined;
+    appendEvent(session, {
+      type: "call_answered",
+      ts: session.answeredAt,
+      ring_duration_ms: ringDurationMs ?? 0,
+    });
+  }
+  // 'completed' status is handled by cleanup/finalizeCall paths
+
+  res.sendStatus(204);
+});
+
+// --- Twilio AMD callback ---
+
+app.post("/call-amd/:callId", (req, res) => {
+  const { callId } = req.params;
+  const answeredBy = req.body.AnsweredBy as string | undefined;
+  const session = getSession(callId);
+
+  if (!session) {
+    console.log(`[call-amd] No session for callId=${callId}`);
+    res.sendStatus(204);
+    return;
+  }
+
+  if (answeredBy) {
+    console.log(`[call-amd] Call ${callId}: answered_by=${answeredBy}`);
+    session.answeredBy = answeredBy;
+    appendEvent(session, { type: "amd_result", ts: isoNow(), answered_by: answeredBy });
+  }
+
+  res.sendStatus(204);
 });
 
 function escapeXml(s: string): string {
@@ -88,14 +145,37 @@ function logCallCost(session: CallSession): void {
  * Called from all call-end paths (forceHangup, handleCallHangup, bridge cleanup).
  */
 async function finalizeCall(session: CallSession): Promise<void> {
+  // Compute and append call_summary as final event
+  const durationMs = Date.now() - session.startTime;
+  const ringDurationMs = session.ringingAt && session.answeredAt
+    ? new Date(session.answeredAt).getTime() - new Date(session.ringingAt).getTime()
+    : undefined;
+  const firstRemoteSpeechDelayMs = session.answeredAt && session.firstRemoteSpeechAt
+    ? new Date(session.firstRemoteSpeechAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const firstResponseDelayMs = session.firstRemoteSpeechAt && session.firstLocalResponseAt
+    ? new Date(session.firstLocalResponseAt).getTime() - new Date(session.firstRemoteSpeechAt).getTime()
+    : undefined;
+
+  const summary: TranscriptEvent = {
+    type: "call_summary",
+    ts: isoNow(),
+    duration_ms: durationMs,
+    ...(ringDurationMs !== undefined && { ring_duration_ms: ringDurationMs }),
+    ...(session.answeredBy && { answered_by: session.answeredBy }),
+    ...(firstRemoteSpeechDelayMs !== undefined && { first_remote_speech_delay_ms: firstRemoteSpeechDelayMs }),
+    ...(firstResponseDelayMs !== undefined && { first_response_delay_ms: firstResponseDelayMs }),
+  };
+  appendEvent(session, summary);
+
   await writeTranscript(session.id, session.fullTranscript);
 
   // Auto-append attempt entry to campaign JSONL if campaign was specified
   if (session.campaign) {
-    const hasRemoteSpeech = session.fullTranscript.some((e) => e.speaker === "remote");
+    const hasRemoteSpeech = session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
     const result = hasRemoteSpeech ? "connected" : "no_answer";
     await appendCampaignEvent(session.campaign, {
-      ts: new Date().toISOString(),
+      ts: isoNow(),
       contact_id: session.contactId ?? null,
       type: "attempt",
       channel: "call",
@@ -110,11 +190,12 @@ async function forceHangup(session: CallSession, reason: string): Promise<void> 
 
   console.log(`[daemon] ${reason}`);
 
-  // Append transcript entry for the forced hangup
-  appendTranscriptEntry(session, {
-    speaker: "local",
-    text: `[Call ended: ${reason}]`,
-    ts: Date.now(),
+  // Append call_ended event for the forced hangup
+  appendEvent(session, {
+    type: "call_ended",
+    ts: isoNow(),
+    reason,
+    duration_ms: Date.now() - session.startTime,
   });
 
   // Hang up via Twilio REST API
@@ -353,9 +434,17 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       to,
       from,
       twiml,
+      statusCallback: `${webhookBaseUrl}/call-status/${id}`,
+      statusCallbackEvent: ["ringing", "answered", "completed"],
+      machineDetection: "DetectMessageEnd",
+      asyncAmd: "true",
+      asyncAmdStatusCallback: `${webhookBaseUrl}/call-amd/${id}`,
+      asyncAmdStatusCallbackMethod: "POST",
     });
 
     session.callSid = twilioCall.sid;
+    session.callPlacedAt = isoNow();
+    appendEvent(session, { type: "call_placed", ts: session.callPlacedAt, from, to });
 
     resetIdleTimer();
     return { id, status: "ringing" };
@@ -428,7 +517,15 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
     return { error: "call_not_active", message: "Call has already ended" };
   }
 
-  const durationSec = Math.floor((Date.now() - session.startTime) / 1000);
+  const durationMs = Date.now() - session.startTime;
+
+  // Append call_ended event
+  appendEvent(session, {
+    type: "call_ended",
+    ts: isoNow(),
+    reason: "hangup command",
+    duration_ms: durationMs,
+  });
 
   // Hang up via Twilio REST API
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -451,7 +548,7 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
   logCallCost(session);
   await finalizeCall(session);
 
-  return { id, status: "ended", duration_sec: durationSec };
+  return { id, status: "ended", duration_sec: Math.floor(durationMs / 1000) };
 }
 
 const ipcServer = createNetServer((socket) => {
