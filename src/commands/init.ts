@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
+import { ensureDataDirs } from "../logs/sessionLog.js";
 import { outreachConfig } from "../config.js";
 import { outputJson, outputError } from "../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../exitCodes.js";
@@ -189,6 +190,9 @@ async function validateDataRepo(): Promise<string> {
     if ((err as Error).message.includes("behind remote")) throw err;
     // No remote, no upstream, or network issue — skip sync check
   }
+
+  // Ensure data repo directory structure exists
+  await ensureDataDirs();
 
   return repoPath;
 }

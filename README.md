@@ -90,13 +90,12 @@ This separation keeps the CLI focused and avoids building a worse `jq`.
 
 ## Data layer
 
-The CLI produces raw data (session logs, transcripts). An external **data repo** stores structured outreach data — contacts, campaigns, and the raw artifacts — synced across devices via git.
+The CLI produces raw data (transcripts, campaign attempt entries). An external **data repo** stores structured outreach data — contacts, campaigns, and transcripts — synced across devices via git.
 
 ```
 <data-repo>/outreach/
   contacts/        # one JSON file per contact (mutable, progressively enriched)
   campaigns/       # one JSONL file per campaign (append-only event log)
-  sessions/        # session event logs
   transcripts/     # call transcripts
 ```
 

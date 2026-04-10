@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { registerAppendCommand } from "./commands/log/append.js";
-import { registerReadCommand } from "./commands/log/read.js";
 import { registerPlaceCommand } from "./commands/call/place.js";
 import { registerListenCommand } from "./commands/call/listen.js";
 import { registerStatusCommand as registerCallStatusCommand } from "./commands/call/status.js";
@@ -29,10 +27,5 @@ registerPlaceCommand(call);
 registerListenCommand(call);
 registerCallStatusCommand(call);
 registerHangupCommand(call);
-
-// --- log subcommand group ---
-const log = program.command("log").description("Session log commands");
-registerAppendCommand(log);
-registerReadCommand(log);
 
 program.parse();

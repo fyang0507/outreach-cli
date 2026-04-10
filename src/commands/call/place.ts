@@ -9,6 +9,7 @@ interface PlaceOptions {
   to: string;
   from?: string;
   campaign?: string;
+  contact?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
@@ -21,7 +22,8 @@ export function registerPlaceCommand(parent: Command): void {
     .description("Place an outbound call")
     .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
-    .option("--campaign <id>", "Campaign ID for session log")
+    .option("--campaign <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
+    .option("--contact <id>", "Contact ID — included in campaign attempt entry")
     .option("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
@@ -47,6 +49,7 @@ export function registerPlaceCommand(parent: Command): void {
           to: opts.to,
           from,
           campaign: opts.campaign,
+          contact: opts.contact,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,

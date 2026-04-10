@@ -30,9 +30,17 @@ export async function buildSystemInstruction(params: SystemInstructionParams): P
 
   // Layer 2: Identity from config
   const userName = params.identity.user_name;
-  parts.push(
-    `## Identity\nYou are an AI phone assistant calling on behalf of ${userName}. Always identify yourself as '${userName}'s assistant' when asked. Never pretend to be human.`
-  );
+  let identityBlock = `## Identity\nYou are an AI phone assistant calling on behalf of ${userName}. Always identify yourself as '${userName}'s assistant' when asked. Never pretend to be human.`;
+  if (params.identity.bio) {
+    identityBlock += `\nAbout ${userName}: ${params.identity.bio}`;
+  }
+  parts.push(identityBlock);
+
+  // Layer 2b: Current date/time context
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const timeStr = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  parts.push(`## Context\nToday is ${dateStr}. Current time is ${timeStr}.`);
 
   // Layer 3: Persona (behavioral guidance)
   parts.push(`## Behavioral guidance\n${params.persona}`);

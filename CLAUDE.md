@@ -18,13 +18,13 @@ node dist/cli.js --help
 Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 ```
 
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,status,hangup}`, `outreach log {append,read}`
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {init,teardown,status}`. Subcommands: `outreach call {place,listen,status,hangup}`
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding. Includes `TranscriptBatcher` that consolidates per-word Gemini transcript fragments into turn-level entries (flushes on speaker change, 800ms silence, or cleanup).
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
 - **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
-- **Session logs** (`src/logs/sessionLog.ts`): JSONL files in `<data_repo_path>/outreach/sessions/` and `<data_repo_path>/outreach/transcripts/` (path from `outreach.config.yaml`). Append-only, file-system-native.
+- **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`) and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only, file-system-native.
 
 ## Key files
 
@@ -46,8 +46,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/commands/teardown.ts` | `outreach teardown` — stop everything, clean up |
 | `src/commands/runtimeStatus.ts` | `outreach status` — show runtime state |
 | `src/commands/call/*.ts` | One file per call command (place, listen, status, hangup) |
-| `src/commands/log/*.ts` | Session log commands (append, read) |
-| `src/logs/sessionLog.ts` | JSONL file helpers for session logs and transcripts |
+| `src/logs/sessionLog.ts` | JSONL file helpers for campaign logs and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
@@ -85,7 +84,7 @@ The voice agent handles the entire call autonomously. Use `call listen` to monit
 - **Voice-native model**: Gemini handles STT+reasoning+TTS in one hop. No sub-agent loop needed during calls.
 - **Orchestrator owns lifecycle**: `init`/`teardown`/`status` are the orchestrator's responsibility. Sub-agents only execute tasks (place calls, monitor transcripts).
 - **Concurrent by default**: multiple `call place` invocations run in parallel — each gets an independent session, Gemini connection, and transcript. The daemon, not the CLI, manages multiplexing.
-- **File-system state**: session logs are JSONL files, not databases. Agents read/write them directly.
+- **File-system state**: campaign logs and transcripts are JSONL files, not databases. Agents read/write them directly.
 - **Fail fast**: missing config raises errors immediately — no silent defaults.
 
 ## Conventions
