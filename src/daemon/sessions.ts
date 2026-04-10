@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
-import type { TranscriptEntry } from "../logs/sessionLog.js";
+import type { TranscriptEvent, SpeechEvent } from "../logs/sessionLog.js";
 import type { GeminiLiveSession } from "../audio/geminiLive.js";
 
 export interface CallSession {
@@ -10,8 +10,8 @@ export interface CallSession {
   from: string;
   to: string;
   startTime: number;
-  transcriptBuffer: TranscriptEntry[];
-  fullTranscript: TranscriptEntry[];
+  transcriptBuffer: TranscriptEvent[];
+  fullTranscript: TranscriptEvent[];
   ws?: WebSocket;
   lastListenIndex: number;
   lastSpeechTime: number;
@@ -24,19 +24,42 @@ export interface CallSession {
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
   campaign?: string;  // Campaign ID for auto-logging attempts
   contactId?: string; // Contact ID for campaign attempt entry
+
+  // Milestone timestamps (ISO 8601) for call lifecycle metrics
+  callPlacedAt?: string;
+  ringingAt?: string;
+  answeredAt?: string;
+  firstRemoteSpeechAt?: string;
+  firstLocalResponseAt?: string;
+  answeredBy?: string; // Twilio AMD result
 }
 
 const sessions = new Map<string, CallSession>();
 
-export function appendTranscriptEntry(
+export function appendEvent(
   session: CallSession,
-  entry: TranscriptEntry,
+  event: TranscriptEvent,
 ): void {
-  session.transcriptBuffer.push(entry);
-  session.fullTranscript.push(entry);
-  session.lastSpeechTime = Date.now();
+  session.transcriptBuffer.push(event);
+  session.fullTranscript.push(event);
+
+  // Update speech/activity tracking only for speech events
+  if (event.type === "speech") {
+    const speech = event as SpeechEvent;
+    session.lastSpeechTime = Date.now();
+    session.lastTranscriptTime = Date.now();
+
+    // Track milestone: first remote speech after answer
+    if (speech.speaker === "remote" && !session.firstRemoteSpeechAt) {
+      session.firstRemoteSpeechAt = event.ts;
+    }
+    // Track milestone: first local response after remote speech
+    if (speech.speaker === "local" && session.firstRemoteSpeechAt && !session.firstLocalResponseAt) {
+      session.firstLocalResponseAt = event.ts;
+    }
+  }
+
   session.lastActivityTime = Date.now();
-  session.lastTranscriptTime = Date.now();
 }
 
 export function generateCallId(): string {
@@ -68,6 +91,13 @@ export function createSession(params: {
 
 export function getSession(id: string): CallSession | undefined {
   return sessions.get(id);
+}
+
+export function getSessionByCallSid(callSid: string): CallSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.callSid === callSid) return session;
+  }
+  return undefined;
 }
 
 export function deleteSession(id: string): void {

@@ -2,8 +2,9 @@ import type { WebSocket } from "ws";
 import twilio from "twilio";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
-import { appendTranscriptEntry, type CallSession } from "./sessions.js";
-import { appendCampaignEvent, writeTranscript } from "../logs/sessionLog.js";
+import { appendEvent, type CallSession } from "./sessions.js";
+import { appendCampaignEvent, writeTranscript, isoNow } from "../logs/sessionLog.js";
+import type { TranscriptEvent } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
 
 const SILENCE_TIMEOUT_MS = 800;
@@ -14,14 +15,14 @@ const SILENCE_TIMEOUT_MS = 800;
  */
 class TranscriptBatcher {
   private session: CallSession;
-  private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: number } | null = null;
+  private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: string } | null = null;
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(session: CallSession) {
     this.session = session;
   }
 
-  append(speaker: "remote" | "local", text: string, ts: number): void {
+  append(speaker: "remote" | "local", text: string, ts: string): void {
     // Speaker change — flush previous buffer first
     if (this.pending && this.pending.speaker !== speaker) {
       this.flush();
@@ -38,10 +39,10 @@ class TranscriptBatcher {
     this.silenceTimer = setTimeout(() => this.flush(), SILENCE_TIMEOUT_MS);
   }
 
-  /** Flush pending buffer before appending a synthetic entry (DTMF, system message). */
-  appendSynthetic(entry: { speaker: "remote" | "local"; text: string; ts: number }): void {
+  /** Flush pending buffer before appending a structured event (DTMF, call_ended, etc.). */
+  appendDirect(event: TranscriptEvent): void {
     this.flush();
-    appendTranscriptEntry(this.session, entry);
+    appendEvent(this.session, event);
   }
 
   flush(): void {
@@ -52,7 +53,8 @@ class TranscriptBatcher {
     if (!this.pending) return;
 
     const text = this.pending.textParts.join("");
-    appendTranscriptEntry(this.session, {
+    appendEvent(this.session, {
+      type: "speech",
       speaker: this.pending.speaker,
       text,
       ts: this.pending.firstTs,
@@ -108,7 +110,7 @@ export class MediaStreamsBridge {
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
-          this.batcher.append(speaker, text, Date.now());
+          this.batcher.append(speaker, text, isoNow());
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -138,7 +140,7 @@ export class MediaStreamsBridge {
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
-          this.batcher.append(speaker, text, Date.now());
+          this.batcher.append(speaker, text, isoNow());
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -260,7 +262,7 @@ export class MediaStreamsBridge {
     client.calls(callSid).update({ twiml })
       .then(() => {
         console.log(`[media-bridge] Sent DTMF: ${digits}`);
-        this.batcher.appendSynthetic({ speaker: "local", text: `[DTMF: ${digits}]`, ts: Date.now() });
+        this.batcher.appendDirect({ type: "dtmf", ts: isoNow(), digits });
         this.gemini.sendToolResponse(id, "send_dtmf", { success: true, digits });
       })
       .catch((err: Error) => {
@@ -273,7 +275,12 @@ export class MediaStreamsBridge {
     const reason = (args.reason as string) || "Call ended by assistant";
     console.log(`[media-bridge] end_call tool invoked: ${reason}`);
 
-    this.batcher.appendSynthetic({ speaker: "local", text: `[Call ended: ${reason}]`, ts: Date.now() });
+    this.batcher.appendDirect({
+      type: "call_ended",
+      ts: isoNow(),
+      reason: `end_call tool: ${reason}`,
+      duration_ms: Date.now() - this.session.startTime,
+    });
 
     // Respond to Gemini before closing
     this.gemini.sendToolResponse(id, "end_call", { success: true, reason });
@@ -327,10 +334,10 @@ export class MediaStreamsBridge {
     const finalize = async () => {
       await writeTranscript(this.callId, this.session.fullTranscript);
       if (this.session.campaign) {
-        const hasRemoteSpeech = this.session.fullTranscript.some((e) => e.speaker === "remote");
+        const hasRemoteSpeech = this.session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
         const result = hasRemoteSpeech ? "connected" : "no_answer";
         await appendCampaignEvent(this.session.campaign, {
-          ts: new Date().toISOString(),
+          ts: isoNow(),
           contact_id: this.session.contactId ?? null,
           type: "attempt",
           channel: "call",
