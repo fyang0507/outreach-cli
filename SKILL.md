@@ -76,7 +76,7 @@ One JSONL file per campaign in `outreach/campaigns/`. Strictly append-only — n
 }
 ```
 
-**Lines 2+ — append-only event log** with three entry types:
+**Lines 2+ — append-only event log** with five entry types:
 
 **`attempt`** — procedural record of an outreach effort:
 ```json
@@ -88,7 +88,19 @@ Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
 ```json
 {"ts":"2026-04-06T11:05:00Z","contact_id":"c_d4e5f6","type":"outcome","outcome":"Available Apr 22 2pm, $180 cleaning","verdict":"viable","note":"Good availability and pricing"}
 ```
-`verdict` values: `viable`, `eliminated`, `pending`, `unreachable`
+`verdict` values:
+- `viable` — contact can fulfill the objective
+- `eliminated` — contact cannot (no availability, wrong service, declined)
+- `pending` — more info needed (follow-up required, callback expected)
+- `unreachable` — no conversation happened (voicemail, no answer after retries)
+
+**`human_input`** — information from outside the agent's observation horizon:
+```json
+{"ts":"2026-04-07T14:00:00Z","type":"human_input","contact_id":"c_g7h8i9","channel":"callback","content":"Vendor called back, quoted $350 for hood cleaning, available next Thursday","context":"Vendor seemed flexible on scheduling"}
+```
+`channel` values: `callback`, `email`, `text`, `in_person`, `research`, `other`
+
+The human provides raw information; the agent processes it. `contact_id` is optional (some inputs are campaign-level, e.g. "my schedule changed"). `context` is optional — human's interpretation or color beyond the facts. There is no `verdict` — the agent should ingest the `human_input` and produce a follow-up `outcome` with its own judgment if the input materially changes a contact's standing.
 
 **`decision`** — campaign-level resolution:
 ```json
@@ -105,7 +117,7 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
-Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `decision`, and `amendment` entries after reviewing transcripts.
+Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts.
 
 ### Sync
 
@@ -168,22 +180,6 @@ Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
 The voice agent handles the entire call — IVR navigation, conversation, and hangup — based on the objective and persona you provide. You do not need to send messages during the call.
 
-### Campaign integration
-
-When placing a call as part of a campaign, pass `--campaign` and `--contact` to auto-log the attempt:
-
-```bash
-outreach call place \
-  --to "+15551234567" \
-  --campaign "2026-04-15-dental-cleaning" \
-  --contact "c_a1b2c3" \
-  --objective "Schedule dental cleaning" \
-  --persona "Be polite and concise" \
-  --hangup-when "Appointment confirmed or no availability"
-```
-
-When the call ends, the CLI auto-appends an `attempt` entry to `$DATA_REPO/outreach/campaigns/<campaign>.jsonl` with the call ID, result (`connected` or `no_answer`), contact ID, and timestamp. You are still responsible for writing the `outcome` entry after reviewing the transcript.
-
 ## Monitoring a call
 
 `listen` is the primary monitoring command. It returns the call's current status and any new transcript entries since your last listen. Transcripts are batched at the turn level.
@@ -205,25 +201,11 @@ Returns:
 When you want to monitor the call continuously, call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates.
 However, if you only want to read transcript after the call ends, `call status` is available for lightweight metadata checks (call status, duration, from/to).
 
-The voice agent is fire-and-forget: once `call place` is issued, there is no way to inject new instructions during the call. You are monitoring, not steering.
-
-## Ending a call early
-
-```bash
-outreach call hangup --id <callId>
-```
-
-This is to force an end of a call when necessary. The voice agent will also end the call automatically when `--hangup-when` condition is met.
+The voice agent is fire-and-forget: once `call place` is issued, there is no way to inject new instructions during the call. You are monitoring, not steering. To force-end a call early: `outreach call hangup --id <callId>`.
 
 ## Concurrent calls
 
 The daemon supports multiple simultaneous calls. Each `call place` creates an independent session with its own call ID, transcript buffer, and lifecycle. You can place, monitor, and hang up calls independently.
-
-### Practical limits
-
-- **Twilio**: Trial accounts allow 1 concurrent call. Paid accounts support multiple concurrent outbound calls per number, but carrier limits vary — spreading calls across multiple `--from` numbers is safer for high concurrency.
-- **Gemini Live**: Each call opens one Gemini Live session. Google enforces per-API-key rate limits (requests per minute). For parallel calls, monitor for 429 errors.
-- **ngrok**: Free tier allows 1 tunnel (sufficient — all calls share one tunnel). Connection limits depend on your plan.
 
 ## Campaign lookup before creation
 
@@ -266,75 +248,39 @@ cd $DATA_REPO && git add -A && git commit -m "campaign update" && git push
 
 ## Output format
 
-All commands output JSON. Errors: `{ "error": "<code>", "message": "<details>" }`.
-
-Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout.
+All commands output JSON. Errors: `{ "error": "<code>", "message": "<details>" }`. Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout.
 
 ## Post-call workflow
 
-After a call ends, the orchestrator is responsible for reviewing the transcript, extracting what was learned, and updating the campaign record. The voice agent only handles the live conversation.
+After a call ends, the voice agent is done — the orchestrator is responsible for reviewing the transcript, updating the campaign, and updating contact records. Steps 1-3 happen after every call. Steps 4-6 happen as the campaign progresses.
 
 ### 1. Review the transcript
 
-```bash
-# Get final transcript via CLI
-outreach call listen --id <callId>
+Read the transcript via `outreach call listen --id <callId>` or directly from `$DATA_REPO/outreach/transcripts/<callId>.jsonl`. Note: the CLI reports `status: "ended"` for both live conversations and voicemail — distinguish them by reviewing the transcript content.
 
-# Or read the saved file directly
-cat $DATA_REPO/outreach/transcripts/<callId>.jsonl
-```
+### 2. Record the outcome
 
-### 2. Record the outcome in the campaign
+Based on what happened in the call, append an `outcome` entry to the campaign JSONL with your verdict:
 
-After reviewing the transcript, append an `outcome` entry to the campaign JSONL:
+- **Connected, got useful info** (availability, pricing, etc.) → `outcome` with verdict `viable` or `eliminated`
+- **Connected, incomplete info** (callback promised, need to follow up) → `outcome` with verdict `pending`
+- **Voicemail left** → `outcome` with verdict `pending`, consider retrying during business hours
+- **No answer, no voicemail** → `outcome` with verdict `unreachable`, retry later
 
-```bash
-# What was learned + orchestrator's judgment
-echo '{"ts":"2026-04-06T11:05:00Z","contact_id":"c_a1b2c3","type":"outcome","outcome":"Available Apr 22 2pm, $180 cleaning","verdict":"viable","note":"Good availability, needs photos texted first"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
-```
-
-Verdict values: `viable`, `eliminated`, `pending`, `unreachable`
-- **viable**: contact can fulfill the objective
-- **eliminated**: contact cannot (no availability, wrong service, declined)
-- **pending**: more info needed (follow-up required, callback expected)
-- **unreachable**: no conversation happened (voicemail, no answer after retries)
+If `--campaign` was passed to `call place`, the `attempt` entry is already auto-logged. You are writing the `outcome` — what was *learned*, not what was *tried*.
 
 ### 3. Update the contact record
 
-If you learned new information about the contact (name, preferences, notes), update the contact JSON file in `$DATA_REPO/outreach/contacts/`.
+If the call revealed new information about the contact (name of person spoken to, preferences, best times to call), update the contact JSON in `$DATA_REPO/outreach/contacts/`.
 
 ### 4. Record human-relayed updates
 
-When the user reports a callback or offline interaction, record it as an outcome:
-
-```bash
-# User says: "NY NJ Hoods called back, they quoted $350 for cleaning"
-echo '{"ts":"2026-04-07T14:00:00Z","contact_id":"c_g7h8i9","type":"outcome","outcome":"Quoted $350 for hood cleaning, available next Thursday","verdict":"viable","note":"Human-relayed callback"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
-```
+Between sessions, the user may receive callbacks, emails, or have in-person conversations. When the user reports off-horizon information, record it as a `human_input` entry with the appropriate `channel` (`callback`, `email`, `text`, `in_person`, `research`, `other`). Then process it: if the input materially changes a contact's standing, append a follow-up `outcome` with your own verdict. This two-step pattern keeps provenance clear — a future session sees both the raw signal and the agent's judgment.
 
 ### 5. Record a decision
 
-When the objective is resolved, append a `decision` entry:
-
-```bash
-echo '{"ts":"2026-04-07T15:00:00Z","type":"decision","chosen":"c_g7h8i9","reason":"Best price and availability","resolution":"Booked Thu Apr 15 10:30am, $350 cleaning"}' >> "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl"
-```
-
-A decision does not close the campaign. If the user later cancels, reschedules, or switches providers, append an `amendment` entry and continue the campaign. See the campaign schema section for details.
+When the campaign objective is resolved, append a `decision` entry with `chosen` (contact ID), `reason`, and `resolution`. A decision does not close the campaign — if the user later cancels or changes plans, append an `amendment` entry (with `action`: `cancelled`, `rescheduled`, or `changed_provider`) and continue.
 
 ### 6. Sync the data repo
 
-Sync the data repo after all post-call processing is complete.
-
-## Voicemail and retry logic
-
-The voice agent will leave a voicemail if it reaches an answering machine. The CLI reports `status: "ended"` for both live conversations and voicemail — distinguish them by reviewing the transcript content.
-
-For retry decisions:
-- If the transcript shows a voicemail greeting + message left → record as `attempt` with `result: "voicemail"`, consider retrying during business hours
-- If no answer → record as `attempt` with `result: "no_answer"`, retry later
-- If connected and conversation happened → record outcome based on content
-
-## Transcripts
-
-Full call transcripts are saved to `$DATA_REPO/outreach/transcripts/<callId>.jsonl` after the call ends.
+After all updates are written, sync the data repo with git.
