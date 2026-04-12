@@ -15,6 +15,8 @@
     "commander": "^14.0.3",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
+    "googleapis": "^171.4.0",
+    "nodemailer": "^8.0.5",
     "twilio": "^5.13.1",
     "ws": "^8.20.0",
     "yaml": "^2.8.3"
@@ -23,6 +25,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.2",
+    "@types/nodemailer": "^8.0.0",
     "@types/ws": "^8.18.1",
     "typescript": "^6.0.2"
   }

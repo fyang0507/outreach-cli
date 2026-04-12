@@ -10,6 +10,8 @@ import { registerHealthCommand } from "./commands/health.js";
 import { registerContextCommand } from "./commands/context.js";
 import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
+import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
+import { registerHistoryCommand as registerEmailHistoryCommand } from "./commands/email/history.js";
 
 const program = new Command();
 
@@ -26,6 +28,11 @@ registerContextCommand(program);
 const sms = program.command("sms").description("SMS / iMessage commands");
 registerSendCommand(sms);
 registerHistoryCommand(sms);
+
+// --- email subcommand group ---
+const email = program.command("email").description("Email / Gmail commands");
+registerEmailSendCommand(email);
+registerEmailHistoryCommand(email);
 
 // --- call subcommand group ---
 const call = program.command("call").description("Voice call commands");

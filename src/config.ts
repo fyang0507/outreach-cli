@@ -12,6 +12,8 @@ export interface OutreachConfig {
   OUTREACH_DEFAULT_FROM: string;
   OUTREACH_WEBHOOK_URL: string;
   GOOGLE_GENERATIVE_AI_API_KEY: string;
+  GMAIL_CLIENT_ID: string;
+  GMAIL_CLIENT_SECRET: string;
 }
 
 export const outreachConfig: OutreachConfig = {
@@ -20,4 +22,6 @@ export const outreachConfig: OutreachConfig = {
   OUTREACH_DEFAULT_FROM: process.env.OUTREACH_DEFAULT_FROM ?? "",
   OUTREACH_WEBHOOK_URL: process.env.OUTREACH_WEBHOOK_URL ?? "",
   GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? "",
+  GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID ?? "",
+  GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET ?? "",
 };

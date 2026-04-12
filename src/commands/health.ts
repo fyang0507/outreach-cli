@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
 import { ensureDataDirs } from "../logs/sessionLog.js";
 import { readRuntime, checkDaemonHealth, isProcessRunning } from "../runtime.js";
+import { checkGmailAuth } from "../providers/gmail.js";
 import { outputJson } from "../output.js";
 import { SUCCESS } from "../exitCodes.js";
 
@@ -165,17 +166,18 @@ export function registerHealthCommand(program: Command): void {
     .command("health")
     .description("Check readiness of all channels")
     .action(async () => {
-      const [dataRepo, call, sms] = await Promise.all([
+      const [dataRepo, call, sms, email] = await Promise.all([
         checkDataRepo(),
         checkCall(),
         checkSms(),
+        checkGmailAuth(),
       ]);
 
       outputJson({
         data_repo: dataRepo,
         call,
         sms,
-        email: { ok: false, error: "not configured", hint: "Email channel is not yet implemented" },
+        email,
       });
       process.exit(SUCCESS);
     });
