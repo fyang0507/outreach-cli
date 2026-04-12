@@ -117,7 +117,7 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
-Note: when `--campaign` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts.
+Note: when `--campaign-id` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts.
 
 ### Sync
 
@@ -174,7 +174,7 @@ outreach call place \
 
 **Required**: `--to`
 **Recommended**: `--objective`, `--persona`, `--hangup-when`
-**Optional**: `--campaign <id>` + `--contact <id>` — auto-log attempt to campaign JSONL at call end. `--max-duration <seconds>` — override the default 300s max call duration.
+**Optional**: `--campaign-id <id>` + `--contact-id <id>` — auto-log attempt to campaign JSONL at call end. `--max-duration <seconds>` — override the default 300s max call duration.
 
 Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
@@ -232,7 +232,7 @@ cd $DATA_REPO && git pull
 outreach init
 
 # --- outreach ---
-outreach call place --to "..." --campaign "2026-04-15-dental-cleaning" --objective "..." --persona "..." --hangup-when "..."
+outreach call place --to "..." --campaign-id "2026-04-15-dental-cleaning" --objective "..." --persona "..." --hangup-when "..."
 outreach call listen/status --id <id> # monitor call or check status
 
 # --- post-call (direct file I/O) ---

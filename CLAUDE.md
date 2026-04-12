@@ -107,11 +107,7 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/design.md` | Initial engineering design document |
 | `docs/done/tuning-reference.md` | Full parameter reference for Gemini config |
 | `docs/done/v2-architecture-options.md` | V2 architecture options analysis |
-| `docs/done/v2-vendor-research.md` | Voice API vendor comparison |
-| `docs/done/latency-analysis.md` | Latency measurement and optimization |
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
-| `docs/done/v1-legacy-cleanup.md` | V1 code removal checklist |
-| `docs/done/voice-clone.md` | Voice cloning research |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `docs/plan/memory-layer.md` | Memory/context layer design (planned) |
+| `docs/plan/memory-layer.md` | Memory/context layer design (principle stays, specific in `SKILL.md`) |

@@ -171,10 +171,10 @@ async function finalizeCall(session: CallSession): Promise<void> {
   await writeTranscript(session.id, session.fullTranscript);
 
   // Auto-append attempt entry to campaign JSONL if campaign was specified
-  if (session.campaign) {
+  if (session.campaignId) {
     const hasRemoteSpeech = session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
     const result = hasRemoteSpeech ? "connected" : "no_answer";
-    await appendCampaignEvent(session.campaign, {
+    await appendCampaignEvent(session.campaignId, {
       ts: isoNow(),
       contact_id: session.contactId ?? null,
       type: "attempt",
@@ -344,8 +344,8 @@ async function handleIpcMessage(msg: {
 async function handleCallPlace(params: Record<string, unknown>): Promise<object> {
   const to = params.to as string;
   const from = params.from as string;
-  const campaign = (params.campaign as string) || undefined;
-  const contactId = (params.contact as string) || undefined;
+  const campaignId = (params.campaignId as string) || undefined;
+  const contactId = (params.contactId as string) || undefined;
   const objective = (params.objective as string) || undefined;
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
@@ -374,7 +374,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
-  session.campaign = campaign;
+  session.campaignId = campaignId;
   session.contactId = contactId;
 
   // G1: Set max duration from flag or config default

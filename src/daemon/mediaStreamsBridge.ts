@@ -333,10 +333,10 @@ export class MediaStreamsBridge {
     // Write transcript + campaign attempt
     const finalize = async () => {
       await writeTranscript(this.callId, this.session.fullTranscript);
-      if (this.session.campaign) {
+      if (this.session.campaignId) {
         const hasRemoteSpeech = this.session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
         const result = hasRemoteSpeech ? "connected" : "no_answer";
-        await appendCampaignEvent(this.session.campaign, {
+        await appendCampaignEvent(this.session.campaignId, {
           ts: isoNow(),
           contact_id: this.session.contactId ?? null,
           type: "attempt",
