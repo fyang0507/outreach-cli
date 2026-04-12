@@ -1,9 +1,9 @@
 ---
 name: outreach-cli
-description: Outreach CLI to make a phone call
+description: Outreach CLI for calls and SMS
 ---
 
-Tool for making phone calls on behalf of a user (future extension to sms+email). The voice agent (Gemini Live) handles the call autonomously — you provide the objective and persona, then monitor via transcript.
+Tool for making phone calls and sending SMS (iMessage) on behalf of a user. The voice agent (Gemini Live) handles calls autonomously — you provide the objective and persona, then monitor via transcript. SMS is stateless fire-and-forget. The `context` command assembles cross-channel briefings from campaign data + recent messages.
 
 ## Prerequisites
 
@@ -122,7 +122,7 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
-Note: when `--campaign-id` is passed to `call place`, the CLI auto-appends the `attempt` entry. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts.
+Note: when `--campaign-id` is passed to `call place`, the CLI auto-appends the `attempt` entry. Similarly, `sms send` auto-appends an `attempt` with `channel: "sms"`. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts or message threads.
 
 ### Sync
 
@@ -222,9 +222,69 @@ A campaign may span multiple agent sessions — retries, follow-ups, and post-de
 
 Never silently create a new campaign when an existing one might apply — the user should always confirm the campaign choice.
 
+## Sending an SMS
+
+```bash
+outreach sms send \
+  --to "+15551234567" \
+  --body "Hi, following up on our conversation about scheduling." \
+  --campaign-id "2026-04-15-dental-cleaning" \
+  --contact-id "c_a1b2c3"
+```
+
+All four flags are **required** — every SMS is campaign-tracked. The CLI sends via iMessage (AppleScript), then auto-appends an `attempt` entry with `channel: "sms"` to the campaign JSONL.
+
+Returns: `{ "to": "+15551234567", "status": "sent" }`
+
+## Reading SMS history
+
+```bash
+outreach sms history --phone "+15551234567" --limit 20
+```
+
+Returns the most recent messages from the iMessage thread for that phone number, including attachments (as MIME types) and tapback reactions. Empty thread returns `{ phone, messages: [] }`.
+
+## Assembling context
+
+`outreach context` builds a JIT briefing from campaign data + recent channel messages. Use it before placing a call or sending an SMS to understand the full picture.
+
+```bash
+# Full campaign overview — all contacts, all events
+outreach context --campaign-id "2026-04-15-dental-cleaning"
+
+# Focused on one contact — filtered events + recent messages
+outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3"
+
+# Wider message window (default is 7 days)
+outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3" --since 30
+```
+
+Returns: `{ campaign: <header>, events: [...], recent_messages: { <contact_id>: { sms: [...] } } }`
+
+The command reads the campaign JSONL, optionally filters events by `--contact-id`, then for each included contact with SMS activity, fetches recent iMessage history. `--since` controls the message history window (default 7 days) — it does not filter campaign events.
+
 ## Typical workflow
 
-### Single call
+Every outreach task starts the same way: search for an existing campaign before deciding what to do. An agent prompted with "schedule a dentist visit for X" does not know whether a campaign already exists — it must check first.
+
+### Step 1: Find or create a campaign
+
+```
+outreach health → search $DATA_REPO/outreach/campaigns/ for matching slug/objective
+```
+
+- **Found** → load it with `outreach context --campaign-id ...`, review events, resume where it left off.
+- **Not found** → confirm with user that a new campaign should be created, create contacts + campaign header.
+
+### Step 2: Execute outreach
+
+With a campaign in hand, decide the next action based on context — place a call, send an SMS, or wait for a callback.
+
+```
+outreach context --campaign-id ... [--contact-id ...] → decide channel → outreach call place / outreach sms send → post-action workflow
+```
+
+### Single call (detailed walkthrough)
 
 ```
 # --- sync data repo ---
@@ -292,3 +352,18 @@ When the campaign objective is resolved, append a `decision` entry with `chosen`
 ### 6. Sync the data repo
 
 After all updates are written, sync the data repo with git.
+
+## Post-SMS / post-email workflow
+
+Unlike phone calls, SMS and email are asynchronous — the send and the reply happen in different agent sessions.
+
+**Send session**: `sms send` fires the message and auto-logs the `attempt`. The session ends. There is no "wait for reply" step.
+
+**Reply session**: A later invocation (triggered by the user noticing a reply) starts a new session. The typical flow:
+
+1. **Read the reply** — `outreach sms history --phone <number>` or `outreach context --campaign-id ... --contact-id ...`
+2. **Record the outcome** — if an outcome is reached, append an `outcome` entry.
+3. **Update the contact record** — if the reply revealed new info.
+4. **Decide next action** — follow-up SMS, escalate to a call, or record a `decision` if the objective is resolved.
+
+This is different from the post-call workflow where attempt → transcript review → outcome all happen in one session.

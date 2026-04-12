@@ -11,6 +11,7 @@
   "dependencies": {
     "@google/genai": "^1.48.0",
     "alawmulaw": "^6.0.0",
+    "better-sqlite3": "^12.8.0",
     "commander": "^14.0.3",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
@@ -19,6 +20,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.2",
     "@types/ws": "^8.18.1",

@@ -1,4 +1,4 @@
-import { mkdir, appendFile, writeFile } from "node:fs/promises";
+import { mkdir, appendFile, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
 
@@ -114,4 +114,35 @@ export async function writeTranscript(
   const filePath = join(transcriptsDir, `${callId}.jsonl`);
   const data = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
   await writeFile(filePath, data, "utf-8");
+}
+
+// --- Read helpers ---
+
+function parseLine(line: string): Record<string, unknown> {
+  try {
+    return JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return { raw: line };
+  }
+}
+
+export async function readCampaignEvents(
+  campaignId: string,
+): Promise<{ header: Record<string, unknown>; events: Record<string, unknown>[] }> {
+  const { campaignsDir } = await getDataDirs();
+  const filePath = join(campaignsDir, `${campaignId}.jsonl`);
+  const content = await readFile(filePath, "utf-8");
+  const lines = content.split("\n").filter((l) => l.length > 0);
+  const header = lines.length > 0 ? parseLine(lines[0]!) : {};
+  const events = lines.slice(1).map(parseLine);
+  return { header, events };
+}
+
+export async function readContact(
+  contactId: string,
+): Promise<Record<string, unknown>> {
+  const { contactsDir } = await getDataDirs();
+  const filePath = join(contactsDir, `${contactId}.json`);
+  const content = await readFile(filePath, "utf-8");
+  return JSON.parse(content) as Record<string, unknown>;
 }

@@ -7,6 +7,9 @@ import { registerHangupCommand } from "./commands/call/hangup.js";
 import { registerInitCommand } from "./commands/call/init.js";
 import { registerTeardownCommand } from "./commands/call/teardown.js";
 import { registerHealthCommand } from "./commands/health.js";
+import { registerContextCommand } from "./commands/context.js";
+import { registerSendCommand } from "./commands/sms/send.js";
+import { registerHistoryCommand } from "./commands/sms/history.js";
 
 const program = new Command();
 
@@ -17,6 +20,12 @@ program
 
 // --- top-level commands ---
 registerHealthCommand(program);
+registerContextCommand(program);
+
+// --- sms subcommand group ---
+const sms = program.command("sms").description("SMS / iMessage commands");
+registerSendCommand(sms);
+registerHistoryCommand(sms);
 
 // --- call subcommand group ---
 const call = program.command("call").description("Voice call commands");
