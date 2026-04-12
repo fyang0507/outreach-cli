@@ -6,9 +6,9 @@ import {
   isOurProcess,
   killAndWait,
   checkDaemonHealth,
-} from "../runtime.js";
-import { outputJson, outputError } from "../output.js";
-import { SUCCESS, OPERATION_FAILED } from "../exitCodes.js";
+} from "../../runtime.js";
+import { outputJson, outputError } from "../../output.js";
+import { SUCCESS, OPERATION_FAILED } from "../../exitCodes.js";
 
 const PID_FILE = "/tmp/outreach-daemon.pid";
 const SOCKET_PATH = "/tmp/outreach-daemon.sock";
@@ -24,8 +24,8 @@ async function cleanupFiles(): Promise<void> {
   await deleteRuntime();
 }
 
-export function registerTeardownCommand(program: Command): void {
-  program
+export function registerTeardownCommand(parent: Command): void {
+  parent
     .command("teardown")
     .description("Stop daemon, tunnel, and clean up")
     .option("--force", "Force teardown even with active calls", false)

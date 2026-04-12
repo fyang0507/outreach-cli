@@ -1,13 +1,10 @@
 import { Command } from "commander";
-import { execSync, fork, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { fork, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { loadAppConfig } from "../appConfig.js";
-import { ensureDataDirs } from "../logs/sessionLog.js";
-import { outreachConfig } from "../config.js";
-import { outputJson, outputError } from "../output.js";
-import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../exitCodes.js";
+import { outreachConfig } from "../../config.js";
+import { outputJson, outputError } from "../../output.js";
+import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 import {
   readRuntime,
   writeRuntime,
@@ -19,8 +16,8 @@ import {
   killAndWait,
   acquireInitLock,
   releaseInitLock,
-} from "../runtime.js";
-import type { RuntimeState } from "../runtime.js";
+} from "../../runtime.js";
+import type { RuntimeState } from "../../runtime.js";
 
 const DEFAULT_PORT = 3001;
 const NGROK_API_PORT = 4040;
@@ -154,53 +151,10 @@ async function cleanupStaleRuntime(existing: RuntimeState): Promise<void> {
   await deleteRuntime();
 }
 
-// ---- Data repo validation ----
-
-async function validateDataRepo(): Promise<string> {
-  const config = await loadAppConfig();
-  const repoPath = config.data_repo_path;
-
-  if (!existsSync(repoPath)) {
-    throw new Error(
-      `Data repo not found at ${repoPath}. Create it or update data_repo_path in outreach.config.yaml`,
-    );
-  }
-
-  try {
-    execSync("git rev-parse --git-dir", { cwd: repoPath, stdio: "pipe", timeout: 3000 });
-  } catch {
-    throw new Error(`${repoPath} is not a git repository`);
-  }
-
-  // Fetch and check if behind remote
-  try {
-    execSync("git fetch origin --quiet", { cwd: repoPath, stdio: "pipe", timeout: 10_000 });
-    const behind = execSync("git rev-list HEAD..@{u} --count", {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: 3000,
-    }).trim();
-    if (behind !== "0") {
-      throw new Error(
-        `Data repo at ${repoPath} is ${behind} commit(s) behind remote. Run: cd ${repoPath} && git pull`,
-      );
-    }
-  } catch (err) {
-    if ((err as Error).message.includes("behind remote")) throw err;
-    // No remote, no upstream, or network issue — skip sync check
-  }
-
-  // Ensure data repo directory structure exists
-  await ensureDataDirs();
-
-  return repoPath;
-}
-
-export function registerInitCommand(program: Command): void {
-  program
+export function registerInitCommand(parent: Command): void {
+  parent
     .command("init")
-    .description("Initialize outreach: start tunnel and daemon")
+    .description("Start tunnel and daemon for voice calls")
     .option("--tunnel <type>", "Tunnel type: ngrok or manual", "ngrok")
     .option("--webhook-url <url>", "Webhook URL (required for --tunnel manual)")
     .action(async (opts: { tunnel: string; webhookUrl?: string }) => {
@@ -221,16 +175,6 @@ export function registerInitCommand(program: Command): void {
 }
 
 async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<void> {
-  // 0. Validate data repo before starting any infrastructure
-  let dataRepoPath: string;
-  try {
-    dataRepoPath = await validateDataRepo();
-  } catch (err) {
-    outputError(INPUT_ERROR, (err as Error).message);
-    process.exit(INPUT_ERROR);
-    return;
-  }
-
   // 1. E2: Check if already initialized — use health check, not just PID
   const existing = await readRuntime();
   if (existing) {
@@ -240,7 +184,6 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
         status: "ready",
         webhook_url: webhookUrl,
         daemon_pid: existing.daemon_pid,
-        data_repo_path: dataRepoPath,
         message: "Already initialized",
       });
       process.exit(SUCCESS);
@@ -323,7 +266,7 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
   let daemonPid: number | undefined;
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
-    const serverPath = join(thisDir, "..", "daemon", "server.js");
+    const serverPath = join(thisDir, "..", "..", "daemon", "server.js");
 
     const child = fork(serverPath, [], {
       detached: true,
@@ -375,7 +318,6 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
     status: "ready",
     webhook_url: webhookUrl,
     daemon_pid: daemonPid,
-    data_repo_path: dataRepoPath,
   });
   process.exit(SUCCESS);
 }
