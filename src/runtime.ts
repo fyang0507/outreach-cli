@@ -139,11 +139,11 @@ export async function deleteRuntime(): Promise<void> {
 export async function requireRuntime(): Promise<RuntimeState> {
   const state = await readRuntime();
   if (!state) {
-    throw new Error("Run 'outreach init' first");
+    throw new Error("Run 'outreach call init' first");
   }
   const { healthy } = await checkDaemonHealth(state.daemon_port);
   if (!healthy) {
-    throw new Error("Daemon is not healthy. Run 'outreach init' to reinitialize.");
+    throw new Error("Daemon is not healthy. Run 'outreach call init' to reinitialize.");
   }
   return state;
 }

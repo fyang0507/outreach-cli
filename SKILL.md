@@ -7,22 +7,27 @@ Tool for making phone calls on behalf of a user (future extension to sms+email).
 
 ## Prerequisites
 
-Before placing calls, the runtime must be initialized:
+Before any outreach, check system health and initialize the data repo:
 
 ```bash
-outreach init          # validates data repo, starts tunnel + daemon (required once per session)
-outreach status        # verify everything is running
+outreach health        # validates data repo, shows readiness of all channels (call, sms, email)
 ```
 
-`init` returns `data_repo_path` in its JSON output — use this as `$DATA_REPO` for all file operations below. It also validates the data repo exists and is in sync with remote, failing early if not.
+`health` returns `data_repo.path` in its JSON output — use this as `$DATA_REPO` for all file operations below. It validates the data repo exists and is in sync with remote, and ensures the directory structure is created.
+
+Before placing calls, the call channel must be initialized:
+
+```bash
+outreach call init     # starts tunnel + daemon (required once per session)
+```
 
 When done with calls:
 
 ```bash
-outreach teardown      # stop daemon + tunnel, clean up
+outreach call teardown # stop daemon + tunnel, clean up
 ```
 
-Note: `teardown` stops infrastructure only. You may still need to process transcripts and update campaign outcomes afterward — do that before syncing the data repo.
+Note: `call teardown` stops call infrastructure only. You may still need to process transcripts and update campaign outcomes afterward — do that before syncing the data repo.
 
 ## Data repo
 
@@ -225,11 +230,14 @@ Never silently create a new campaign when an existing one might apply — the us
 # --- sync data repo ---
 cd $DATA_REPO && git pull
 
+# --- health check + data repo setup ---
+outreach health
+
 # --- campaign lookup / setup (direct file I/O) ---
 # search for existing campaign; if none found, create contacts + campaign JSONL header
 
-# --- daemon service init ---
-outreach init
+# --- call channel init ---
+outreach call init
 
 # --- outreach ---
 outreach call place --to "..." --campaign-id "2026-04-15-dental-cleaning" --objective "..." --persona "..." --hangup-when "..."
@@ -240,7 +248,7 @@ outreach call listen/status --id <id> # monitor call or check status
 # repeat for remaining contacts
 
 # --- cleanup ---
-outreach teardown
+outreach call teardown
 
 # --- sync data repo ---
 cd $DATA_REPO && git add -A && git commit -m "campaign update" && git push
