@@ -33,74 +33,101 @@ function coreDataToIso(raw: number): string {
 // --- attributedBody fallback parser ---
 
 function extractTextFromAttributedBody(blob: Buffer): string | null {
-  // NSKeyedArchiver stores the string in a bplist. The UTF-8 text is preceded
-  // by a streamTypedData marker. We look for the pattern: the text appears
-  // after "NSString" or as the largest contiguous UTF-8 run in the blob.
-  // Simplified: scan for the NSString content which is stored as a length-
-  // prefixed UTF-8 string after specific markers.
   try {
-    const str = blob.toString("binary");
-    // Common pattern: text follows "+NSString" class marker in the archive.
-    // The actual text is stored with a byte-length prefix. We search for it
-    // by looking for a reasonable UTF-8 substring between control sequences.
-    // Strategy: find runs of printable characters that look like message text.
-    const marker = "NSString";
-    const idx = str.indexOf(marker);
-    if (idx === -1) return null;
+    // Apple-internal attribute keys that appear as strings in the blob but
+    // are not user-visible text.
+    const isInternalAttr = (s: string) =>
+      s.startsWith("__kIM") ||
+      /^NS[A-Z][a-z]/.test(s) ||
+      /^at_\d+_[A-F0-9-]/.test(s);
 
-    // After the marker, skip ahead and look for the text content.
-    // The text is typically encoded after some bplist structure bytes.
-    // We'll extract the longest contiguous printable UTF-8 run after the marker.
-    const after = blob.subarray(idx + marker.length);
-    let bestStart = -1;
-    let bestLen = 0;
+    // --- Strategy 1: typedstream length-prefixed extraction ---
+    // In the typedstream/NSKeyedArchiver format, the string content of an
+    // NSAttributedString is stored as: \x01+ <length> <utf8-bytes>.
+    // The length uses ASN.1-style encoding (single byte < 0x80, or 0x81 NN,
+    // or 0x82 HH LL for longer strings).
+    for (let i = 0; i < blob.length - 3; i++) {
+      if (blob[i] !== 0x01) continue;
+      const tag = blob[i + 1]!;
+      if (tag !== 0x2b /* + */ && tag !== 0x2a /* * */) continue;
+
+      let len: number;
+      let dataStart: number;
+      const b = blob[i + 2]!;
+      if (b < 0x80) {
+        len = b;
+        dataStart = i + 3;
+      } else if (b === 0x81) {
+        if (i + 3 >= blob.length) continue;
+        len = blob[i + 3]!;
+        dataStart = i + 4;
+      } else if (b === 0x82) {
+        if (i + 4 >= blob.length) continue;
+        len = (blob[i + 3]! << 8) | blob[i + 4]!;
+        dataStart = i + 5;
+      } else {
+        continue;
+      }
+
+      if (len <= 0 || dataStart + len > blob.length) continue;
+
+      const text = blob
+        .subarray(dataStart, dataStart + len)
+        .toString("utf-8")
+        .replace(/\uFFFD+$/, "");
+      if (text && !isInternalAttr(text)) return text;
+    }
+
+    // --- Strategy 2: fallback — printable runs after NSString marker ---
+    // Collect runs in positional order and return the first non-internal one.
+    // This handles blobs where the \x01+ marker is absent or non-standard.
+    const binStr = blob.toString("binary");
+    const nsIdx = binStr.indexOf("NSString");
+    if (nsIdx === -1) return null;
+
+    const after = blob.subarray(nsIdx + 8); // "NSString".length === 8
+    const runs: { start: number; length: number }[] = [];
     let runStart = -1;
     for (let i = 0; i < after.length; i++) {
-      const b = after[i]!;
-      // Printable ASCII or multi-byte UTF-8 start
-      if (b >= 0x20 && b !== 0x7f) {
+      const byte = after[i]!;
+      if (byte >= 0x20 && byte !== 0x7f) {
         if (runStart === -1) runStart = i;
       } else {
         if (runStart !== -1) {
-          const len = i - runStart;
-          if (len > bestLen) {
-            bestStart = runStart;
-            bestLen = len;
-          }
+          runs.push({ start: runStart, length: i - runStart });
           runStart = -1;
         }
       }
     }
-    // Check final run
     if (runStart !== -1) {
-      const len = after.length - runStart;
-      if (len > bestLen) {
-        bestStart = runStart;
-        bestLen = len;
-      }
-    }
-    if (bestStart < 0 || bestLen <= 0) return null;
-
-    let text = after.subarray(bestStart, bestStart + bestLen).toString("utf-8");
-
-    // Clean trailing replacement chars from incomplete UTF-8 at blob boundary
-    text = text.replace(/\uFFFD+$/, "");
-
-    // Strip leading type+length prefix: NSKeyedArchiver often emits a type marker
-    // (0x2B = "+") followed by a length byte whose value encodes the string length.
-    // Both bytes are printable ASCII so they survive the "longest run" filter.
-    // Only strip when the second byte's value matches the remaining text length
-    // (±2 tolerance for trailing artifacts already trimmed) to avoid false positives
-    // on messages that legitimately start with "+".
-    if (text.length > 2 && text.charCodeAt(0) === 0x2b) {
-      const candidateLen = text.charCodeAt(1);
-      const remaining = text.substring(2);
-      if (Math.abs(candidateLen - remaining.length) <= 2) {
-        text = remaining;
-      }
+      runs.push({ start: runStart, length: after.length - runStart });
     }
 
-    return text || null;
+    // Iterate in positional order — text content precedes attribute names
+    for (const run of runs) {
+      if (run.length < 2) continue;
+
+      let text = after
+        .subarray(run.start, run.start + run.length)
+        .toString("utf-8")
+        .replace(/\uFFFD+$/, "");
+
+      // Strip +<len> prefix: the byte after '+' encodes the UTF-8 *byte* length
+      if (text.length > 2 && text.charCodeAt(0) === 0x2b) {
+        const candidateLen = text.charCodeAt(1);
+        const rest = text.substring(2);
+        if (
+          Math.abs(candidateLen - Buffer.byteLength(rest, "utf-8")) <= 2
+        ) {
+          text = rest;
+        }
+      }
+
+      if (!text || isInternalAttr(text)) continue;
+      return text;
+    }
+
+    return null;
   } catch {
     return null;
   }
