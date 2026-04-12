@@ -22,7 +22,7 @@ export interface CallSession {
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
-  campaign?: string;  // Campaign ID for auto-logging attempts
+  campaignId?: string;  // Campaign ID for auto-logging attempts
   contactId?: string; // Contact ID for campaign attempt entry
 
   // Milestone timestamps (ISO 8601) for call lifecycle metrics

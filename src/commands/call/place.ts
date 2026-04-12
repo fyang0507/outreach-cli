@@ -8,8 +8,8 @@ import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 interface PlaceOptions {
   to: string;
   from?: string;
-  campaign?: string;
-  contact?: string;
+  campaignId?: string;
+  contactId?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
@@ -22,8 +22,8 @@ export function registerPlaceCommand(parent: Command): void {
     .description("Place an outbound call")
     .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
-    .option("--campaign <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
-    .option("--contact <id>", "Contact ID — included in campaign attempt entry")
+    .option("--campaign-id <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
+    .option("--contact-id <id>", "Contact ID — included in campaign attempt entry")
     .option("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
@@ -48,8 +48,8 @@ export function registerPlaceCommand(parent: Command): void {
         const result = await sendToDaemon("call.place", {
           to: opts.to,
           from,
-          campaign: opts.campaign,
-          contact: opts.contact,
+          campaignId: opts.campaignId,
+          contactId: opts.contactId,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
