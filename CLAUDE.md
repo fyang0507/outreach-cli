@@ -18,7 +18,7 @@ node dist/cli.js --help
 Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 ```
 
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history}`
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach call init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding. Includes `TranscriptBatcher` that consolidates per-word Gemini transcript fragments into turn-level entries (flushes on speaker change, 800ms silence, or cleanup).
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
@@ -26,6 +26,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
 - **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
 - **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound.
+- **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — OAuth2 auth + token management, send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), health check.
 
 ## Key files
 
@@ -48,7 +49,10 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/commands/call/*.ts` | One file per call command (init, teardown, place, listen, status, hangup) |
 | `src/commands/sms/send.ts` | `outreach sms send` — send iMessage + log campaign attempt |
 | `src/commands/sms/history.ts` | `outreach sms history` — read iMessage thread |
+| `src/commands/email/send.ts` | `outreach email send` — send email via Gmail + log campaign attempt |
+| `src/commands/email/history.ts` | `outreach email history` — read email thread or address history |
 | `src/providers/messages.ts` | Messages DB reader + AppleScript sender + phone normalization |
+| `src/providers/gmail.ts` | Gmail API client: OAuth2 auth, send, history, health check |
 | `src/logs/sessionLog.ts` | JSONL file helpers for campaign logs, contacts, and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
@@ -62,7 +66,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 
 | Source | Contains | Example |
 |---|---|---|
-| `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` |
 | `outreach.config.yaml` | Application behavior | Data repo path, identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
 
 ## Running a call

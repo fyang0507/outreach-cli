@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { readCampaignEvents, readContact } from "../logs/sessionLog.js";
 import { readMessageHistory, normalizePhone } from "../providers/messages.js";
+import { readEmailHistory } from "../providers/gmail.js";
 import { outputJson, outputError } from "../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../exitCodes.js";
 
@@ -91,6 +92,22 @@ export function registerContextCommand(program: Command): void {
               channelMessages.sms = messages;
             } catch {
               // DB not accessible, skip
+            }
+          }
+
+          if (channels.has("email")) {
+            const emailAddr =
+              typeof contact.email === "string" ? contact.email : null;
+            if (emailAddr) {
+              try {
+                const messages = await readEmailHistory({
+                  address: emailAddr,
+                  limit: 10,
+                });
+                channelMessages.email = messages;
+              } catch {
+                // Gmail not accessible, skip
+              }
             }
           }
 

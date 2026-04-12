@@ -1,8 +1,8 @@
 # Outreach CLI
 
-Agent-native CLI for real-world outreach — phone calls and SMS (iMessage). Designed for AI agents, not humans. An orchestrator agent uses this CLI to place calls, send messages, assemble cross-channel context, and manage lifecycle.
+Agent-native CLI for real-world outreach — phone calls, SMS (iMessage), and email (Gmail). Designed for AI agents, not humans. An orchestrator agent uses this CLI to place calls, send messages, send emails, assemble cross-channel context, and manage lifecycle.
 
-Calls are powered by **Gemini Live API** (voice-native model) + **Twilio** (telephony). The voice agent handles IVR navigation, call screening, and conversation autonomously. SMS is sent via iMessage (AppleScript) with message history read from the local Messages database (`better-sqlite3`, readonly).
+Calls are powered by **Gemini Live API** (voice-native model) + **Twilio** (telephony). The voice agent handles IVR navigation, call screening, and conversation autonomously. SMS is sent via iMessage (AppleScript) with message history read from the local Messages database (`better-sqlite3`, readonly). Email is sent via **Gmail API** (OAuth2) with native thread reconstruction, reply-all, and attachment support via `nodemailer` MailComposer.
 
 ## Setup
 
@@ -33,6 +33,8 @@ cp outreach.config.example.yaml outreach.config.yaml
 | `TWILIO_AUTH_TOKEN` | Twilio Console > Account > Auth Token |
 | `OUTREACH_DEFAULT_FROM` | Your personal phone number (must be [verified in Twilio](https://console.twilio.com/us1/develop/phone-numbers/manage/verified)) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey) |
+| `GMAIL_CLIENT_ID` | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) — OAuth 2.0 Client ID |
+| `GMAIL_CLIENT_SECRET` | Google Cloud Console — OAuth 2.0 Client Secret |
 
 **`outreach.config.yaml`** — application behavior:
 
@@ -72,12 +74,19 @@ outreach sms send --to "+15551234567" --body "Following up" \
   --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3"
 outreach sms history --phone "+15551234567" --limit 20
 
+# --- Email (Gmail) ---
+outreach email send --to "recipient@example.com" \
+  --subject "Following up" --body "Hi, just checking in." \
+  --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3"
+outreach email history --address "recipient@example.com" --limit 20
+outreach email history --thread-id "18f1a2b3c4d5e6f7"  # full thread with bodies
+
 # --- Cross-channel context ---
 outreach context --campaign-id "2026-04-15-dental"
 outreach context --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" --since 30
 ```
 
-Multiple calls can run concurrently — each `call place` creates an independent session. SMS is stateless (no daemon needed). See `SKILL.md` for workflow patterns.
+Multiple calls can run concurrently — each `call place` creates an independent session. SMS and email are stateless (no daemon needed). Email requires a one-time OAuth2 authorization (browser-based, token stored in the data repo at `<data_repo_path>/outreach/gmail-token.json` and syncs across machines via git). See `SKILL.md` for workflow patterns.
 
 For agent integration details, see `SKILL.md`.
 
@@ -125,8 +134,10 @@ src/
     context.ts                   # outreach context (cross-channel briefing)
     call/{init,teardown,place,listen,status,hangup}.ts
     sms/{send,history}.ts        # SMS commands
+    email/{send,history}.ts      # Email commands
   providers/
     messages.ts                  # iMessage DB reader + AppleScript sender
+    gmail.ts                     # Gmail API client (OAuth2, send, history)
   daemon/
     server.ts                    # HTTP + WS server, IPC handler
     mediaStreamsBridge.ts        # Twilio Media Streams <-> Gemini Live bridge
