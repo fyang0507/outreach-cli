@@ -1,12 +1,12 @@
 # Outreach CLI
 
-Agent-native CLI for real-world outreach — phone calls today, SMS and email next. Designed for AI agents, not humans. An orchestrator agent uses this CLI to place calls, monitor transcripts, and manage call lifecycle.
+Agent-native CLI for real-world outreach — phone calls and SMS (iMessage). Designed for AI agents, not humans. An orchestrator agent uses this CLI to place calls, send messages, assemble cross-channel context, and manage lifecycle.
 
-Calls are powered by **Gemini Live API** (voice-native model) + **Twilio** (telephony). The voice agent handles IVR navigation, call screening, and conversation autonomously — no human-in-the-loop during calls.
+Calls are powered by **Gemini Live API** (voice-native model) + **Twilio** (telephony). The voice agent handles IVR navigation, call screening, and conversation autonomously. SMS is sent via iMessage (AppleScript) with message history read from the local Messages database (`better-sqlite3`, readonly).
 
 ## Setup
 
-Requires Node.js 20+ and npm.
+Requires Node.js 20+, npm, and macOS (for iMessage support). The terminal app needs **Full Disk Access** (System Settings > Privacy & Security) to read the Messages database.
 
 ```bash
 git clone https://github.com/fyang0507/outreach-cli.git
@@ -53,22 +53,31 @@ outreach --help
 ## Usage
 
 ```bash
-outreach init                              # start tunnel + daemon
+outreach health                            # check all channels
 
+# --- Calls ---
+outreach call init                         # start tunnel + daemon
 outreach call place \
   --to "+15551234567" \
   --objective "Schedule a haircut for Thursday afternoon" \
   --persona "Be conversational and flexible on timing" \
   --hangup-when "Appointment is confirmed or no availability"
-
 outreach call listen --id <callId>         # get transcript
 outreach call status --id <callId>         # check call state
 outreach call hangup --id <callId>         # end call early
+outreach call teardown                     # stop tunnel + daemon
 
-outreach teardown                          # stop tunnel + daemon
+# --- SMS (iMessage) ---
+outreach sms send --to "+15551234567" --body "Following up" \
+  --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3"
+outreach sms history --phone "+15551234567" --limit 20
+
+# --- Cross-channel context ---
+outreach context --campaign-id "2026-04-15-dental"
+outreach context --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" --since 30
 ```
 
-Multiple calls can run concurrently — each `call place` creates an independent session. See `SKILL.md` for parallel outreach patterns.
+Multiple calls can run concurrently — each `call place` creates an independent session. SMS is stateless (no daemon needed). See `SKILL.md` for workflow patterns.
 
 For agent integration details, see `SKILL.md`.
 
@@ -112,11 +121,12 @@ src/
   appConfig.ts                   # outreach.config.yaml loader
   runtime.ts                     # ~/.outreach/runtime.json state
   commands/
-    init.ts                      # outreach init
-    teardown.ts                  # outreach teardown
-    runtimeStatus.ts             # outreach status
-    call/{place,listen,status,hangup}.ts
-    log/{append,read}.ts
+    health.ts                    # outreach health
+    context.ts                   # outreach context (cross-channel briefing)
+    call/{init,teardown,place,listen,status,hangup}.ts
+    sms/{send,history}.ts        # SMS commands
+  providers/
+    messages.ts                  # iMessage DB reader + AppleScript sender
   daemon/
     server.ts                    # HTTP + WS server, IPC handler
     mediaStreamsBridge.ts        # Twilio Media Streams <-> Gemini Live bridge
@@ -128,7 +138,7 @@ src/
     transcode.ts                 # mulaw <-> PCM codec + resampling
     systemInstruction.ts         # System prompt builder
   logs/
-    sessionLog.ts                # JSONL session/transcript helpers
+    sessionLog.ts                # JSONL session/transcript/contact helpers
 prompts/
   voice-agent.md                 # Static voice agent instructions
 outreach.config.yaml             # Gemini tuning parameters
@@ -154,3 +164,4 @@ Daemon logs go to stdout/stderr of the process started by `outreach init`. Trans
 | `docs/design.md` | Engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
 | `docs/plan/memory-layer.md` | Memory/data layer design — schemas and data repo structure |
+| `docs/plan/sms-context.md` | SMS channel + cross-channel context implementation plan |
