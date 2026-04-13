@@ -147,7 +147,7 @@ outreach call teardown                     # clean up when done
 
 Multiple calls can run concurrently — each `call place` creates an independent session.
 
-For agent integration details — campaign workflows, data model, post-action patterns — see `skills/SKILL.md`. Channel-specific references: `skills/call.md`, `skills/sms.md`, `skills/email.md`. These skill files are the source of truth — `npm run build` copies them to `<data_repo>/.agents/skills/` so the agent workspace always has docs matching the CLI version.
+For agent integration details — campaign workflows, data model, post-action patterns — see `skills/outreach-cli/SKILL.md`. Channel-specific references: `skills/outreach-cli/call.md`, `skills/outreach-cli/sms.md`, `skills/outreach-cli/email.md`. These skill files are the source of truth — `npm run build` copies them to `<data_repo>/.agents/skills/outreach-cli/` so the agent workspace always has docs matching the CLI version.
 
 ## Data layer
 
@@ -160,7 +160,7 @@ The CLI produces raw data (transcripts, campaign attempt entries). An external *
   transcripts/     # call transcripts (auto-saved by CLI)
 ```
 
-The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/SKILL.md` for schemas and conventions.
+The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/outreach-cli/SKILL.md` for schemas and conventions.
 
 ## Design philosophy
 
@@ -238,12 +238,13 @@ src/
   logs/
     sessionLog.ts                # JSONL file helpers
 scripts/
-  sync-skills.js                 # Build hook — syncs skills/ → <data_repo>/.agents/skills/
+  sync-skills.js                 # Build hook — syncs skills/outreach-cli/ → <data_repo>/.agents/skills/outreach-cli/
 skills/
-  SKILL.md                       # Agent onboarding — campaign framework + data model
-  call.md                        # Agent reference — call channel
-  sms.md                         # Agent reference — SMS channel
-  email.md                       # Agent reference — email channel
+  outreach-cli/
+    SKILL.md                     # Agent onboarding — campaign framework + data model
+    call.md                      # Agent reference — call channel
+    sms.md                       # Agent reference — SMS channel
+    email.md                     # Agent reference — email channel
 prompts/
   voice-agent.md                 # Static voice agent instructions (phone mechanics)
 ```
@@ -271,10 +272,10 @@ All CLI output is JSON via `outputJson()` / `outputError()`. Exit codes: 0=succe
 | Path | Description |
 |---|---|
 | `CLAUDE.md` | AI agent codebase guide |
-| `skills/SKILL.md` | Agent onboarding — campaign framework + data model |
-| `skills/call.md` | Agent reference — call channel |
-| `skills/sms.md` | Agent reference — SMS channel |
-| `skills/email.md` | Agent reference — email channel |
+| `skills/outreach-cli/SKILL.md` | Agent onboarding — campaign framework + data model |
+| `skills/outreach-cli/call.md` | Agent reference — call channel |
+| `skills/outreach-cli/sms.md` | Agent reference — SMS channel |
+| `skills/outreach-cli/email.md` | Agent reference — email channel |
 | `docs/done/design.md` | Initial engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
 | `docs/done/memory-layer.md` | Data layer design — schemas and data repo structure |

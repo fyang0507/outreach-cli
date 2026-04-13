@@ -68,15 +68,15 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/logs/sessionLog.ts` | JSONL file helpers for campaign logs, contacts, and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
-| `scripts/sync-skills.js` | Build hook — copies `skills/` → `<data_repo>/.agents/skills/` to keep agent workspace in sync |
+| `scripts/sync-skills.js` | Build hook — copies `skills/outreach-cli/` → `<data_repo>/.agents/skills/outreach-cli/` to keep agent workspace in sync |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
 | `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
-| `skills/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
-| `skills/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
-| `skills/sms.md` | Agent reference — SMS channel (iMessage) |
-| `skills/email.md` | Agent reference — email channel (Gmail) |
+| `skills/outreach-cli/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
+| `skills/outreach-cli/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
+| `skills/outreach-cli/sms.md` | Agent reference — SMS channel (iMessage) |
+| `skills/outreach-cli/email.md` | Agent reference — email channel (Gmail) |
 
-Skills are the source of truth in this repo. `npm run build` copies them to `<data_repo_path>/.agents/skills/` so the agent workspace always has docs matching the current CLI version.
+Skills are the source of truth in this repo. `npm run build` copies them to `<data_repo_path>/.agents/skills/outreach-cli/` so the agent workspace always has docs matching the current CLI version.
 
 ## Configuration
 
@@ -175,7 +175,7 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `skills/SKILL.md` | Agent-facing user guide — campaign framework |
-| `skills/call.md` | Agent-facing user guide — call channel |
-| `skills/sms.md` | Agent-facing user guide — SMS channel |
-| `skills/email.md` | Agent-facing user guide — email channel |
+| `skills/outreach-cli/SKILL.md` | Agent-facing user guide — campaign framework |
+| `skills/outreach-cli/call.md` | Agent-facing user guide — call channel |
+| `skills/outreach-cli/sms.md` | Agent-facing user guide — SMS channel |
+| `skills/outreach-cli/email.md` | Agent-facing user guide — email channel |
