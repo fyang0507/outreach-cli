@@ -102,6 +102,12 @@ Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
 
 The human provides raw information; the agent processes it. `contact_id` is optional (some inputs are campaign-level, e.g. "my schedule changed"). `context` is optional — human's interpretation or color beyond the facts. There is no `verdict` — the agent should ingest the `human_input` and produce a follow-up `outcome` with its own judgment if the input materially changes a contact's standing.
 
+**Email `human_input` with `thread_id`**: When recording inbound email activity, include `thread_id` so `outreach context` can discover and fetch the thread. The agent finds the thread_id via `outreach email search`, confirms with the user, then records:
+```json
+{"ts":"2026-04-12T09:00:00Z","type":"human_input","contact_id":"c_a1b2c3","channel":"email","thread_id":"18f1a2b3c4d5e6f7","content":"Received reply confirming Thursday availability"}
+```
+The `context` command extracts `thread_id` from any event with `channel === "email"` — no filter on event type.
+
 **`decision`** — campaign-level resolution:
 ```json
 {"ts":"2026-04-06T12:00:00Z","type":"decision","chosen":"c_d4e5f6","reason":"Best price and availability","resolution":"Booked Apr 22 2pm with Dr. Smith, $180"}
@@ -145,7 +151,7 @@ outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2
 outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3" --since 30
 ```
 
-Returns: `{ campaign: <header>, events: [...], recent_messages: { <contact_id>: { sms: [...], email: [...] } } }`
+Returns: `{ campaign: <header>, events: [...], recent_messages: { <contact_id>: { sms: [...], email_threads: [{ thread_id, subject, messages: [...] }, ...] } } }`
 
 The command reads the campaign JSONL, optionally filters events by `--contact-id`, then for each included contact with SMS or email activity, fetches recent iMessage history and/or Gmail history. `--since` controls the SMS message history window (default 7 days) — it does not filter campaign events.
 
