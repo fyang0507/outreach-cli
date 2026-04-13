@@ -37,10 +37,23 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", calls: activeSessions.length });
 });
 
+// --- Twilio signature validation middleware ---
+
+// Build middleware once at startup. If TWILIO_AUTH_TOKEN is set, use twilio.webhook()
+// to validate X-Twilio-Signature on inbound requests. If not set, skip validation
+// gracefully (the daemon already enforces the token in handleCallPlace before placing calls).
+const twilioValidation: import("express").RequestHandler = process.env.TWILIO_AUTH_TOKEN
+  ? twilio.webhook({ validate: true })
+  : (_req, _res, next) => next();
+
+if (!process.env.TWILIO_AUTH_TOKEN) {
+  console.log("[daemon] TWILIO_AUTH_TOKEN not set — Twilio webhook signature validation is disabled");
+}
+
 // --- Twilio status callback ---
 
-app.post("/call-status/:callId", (req, res) => {
-  const { callId } = req.params;
+app.post("/call-status/:callId", twilioValidation, (req, res) => {
+  const callId = req.params.callId as string;
   const callStatus = req.body.CallStatus as string | undefined;
   const session = getSession(callId);
 
@@ -73,8 +86,8 @@ app.post("/call-status/:callId", (req, res) => {
 
 // --- Twilio AMD callback ---
 
-app.post("/call-amd/:callId", (req, res) => {
-  const { callId } = req.params;
+app.post("/call-amd/:callId", twilioValidation, (req, res) => {
+  const callId = req.params.callId as string;
   const answeredBy = req.body.AnsweredBy as string | undefined;
   const session = getSession(callId);
 
@@ -250,11 +263,23 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           return;
         }
 
+        // Validate CallSid: the session already has callSid from Twilio REST API (set at call creation).
+        // If the inbound stream reports a different CallSid, it may be a forged connection.
+        const inboundCallSid = msg.start?.callSid;
+        if (session.callSid && inboundCallSid && inboundCallSid !== session.callSid) {
+          console.warn(
+            `[media-stream] CallSid mismatch for call ${callId}: ` +
+            `expected ${session.callSid}, got ${inboundCallSid} — rejecting connection`
+          );
+          ws.close();
+          return;
+        }
+
         console.log(`[media-stream] Start event received for call ${callId}`);
         session.ws = ws;
         session.lastActivityTime = Date.now();
         if (msg.start?.streamSid) session.streamSid = msg.start.streamSid;
-        if (msg.start?.callSid) session.callSid = msg.start.callSid;
+        if (inboundCallSid) session.callSid = inboundCallSid;
         session.status = "in_progress";
 
         const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
