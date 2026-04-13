@@ -2,8 +2,8 @@ import { google, gmail_v1 } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 import { outreachConfig } from "../config.js";
 import { loadAppConfig } from "../appConfig.js";
@@ -93,6 +93,7 @@ async function loadStoredToken(client: OAuth2Client): Promise<boolean> {
 
 async function saveToken(client: OAuth2Client): Promise<void> {
   const tokenPath = await getTokenPath();
+  await mkdir(dirname(tokenPath), { recursive: true });
   await writeFile(tokenPath, JSON.stringify(client.credentials), "utf-8");
 }
 
