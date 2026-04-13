@@ -396,6 +396,67 @@ export async function sendEmail(
   };
 }
 
+// --- Search ---
+
+export interface SearchThread {
+  thread_id: string;
+  subject: string;
+  messages: EmailSummary[];
+}
+
+export async function searchEmails(opts: {
+  query: string;
+  limit?: number;
+}): Promise<SearchThread[]> {
+  const gmail = await getGmailClient();
+  const limit = opts.limit ?? 10;
+
+  const list = await gmail.users.messages.list({
+    userId: "me",
+    q: opts.query,
+    maxResults: limit,
+  });
+
+  const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
+  if (messageIds.length === 0) return [];
+
+  // Fetch metadata only (no body) — lightweight for search
+  const summaries: EmailSummary[] = [];
+  for (const id of messageIds) {
+    const msg = await gmail.users.messages.get({
+      userId: "me",
+      id,
+      format: "metadata",
+      metadataHeaders: ["From", "To", "Cc", "Subject", "Date"],
+    });
+    summaries.push(messageToSummary(msg.data, false));
+  }
+
+  // Group by thread
+  const threadMap = new Map<string, EmailSummary[]>();
+  for (const s of summaries) {
+    const existing = threadMap.get(s.threadId);
+    if (existing) {
+      existing.push(s);
+    } else {
+      threadMap.set(s.threadId, [s]);
+    }
+  }
+
+  // Build thread-grouped output, chronological within each thread
+  const threads: SearchThread[] = [];
+  for (const [threadId, messages] of threadMap) {
+    messages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    threads.push({
+      thread_id: threadId,
+      subject: messages[0].subject,
+      messages,
+    });
+  }
+
+  return threads;
+}
+
 // --- History ---
 
 function messageToSummary(
