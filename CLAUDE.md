@@ -162,7 +162,7 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 
 | Path | Purpose |
 |---|---|
-| `docs/design.md` | Initial engineering design document |
+| `docs/done/design.md` | Initial engineering design document |
 | `docs/done/memory-layer.md` | Data layer design — schemas and data repo structure |
 | `docs/done/email-channel.md` | Email channel implementation design |
 | `docs/done/sms-context.md` | SMS + cross-channel context design |

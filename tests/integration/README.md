@@ -69,7 +69,7 @@ Each script is idempotent: it tears down any existing daemon before starting and
 
 ### Daemon logs
 
-The daemon writes to stdout/stderr. To see tool call logs (`send_dtmf`, `end_call`), check the daemon output. When running via `outreach init`, daemon logs go to the spawned background process. You can find the PID in `/tmp/outreach-daemon.pid` and inspect its output.
+The daemon writes to stdout/stderr. To see tool call logs (`send_dtmf`, `end_call`), check the daemon output. When running via `outreach call init`, daemon logs go to the spawned background process. You can find the PID in `/tmp/outreach-daemon.pid` and inspect its output.
 
 ### Transcript files
 

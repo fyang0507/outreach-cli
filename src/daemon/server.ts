@@ -400,7 +400,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     }
   }
   if (!webhookBaseUrl) {
-    return { error: "config_error", message: "OUTREACH_WEBHOOK_URL must be set (or run 'outreach init')" };
+    return { error: "config_error", message: "OUTREACH_WEBHOOK_URL must be set (or run 'outreach call init')" };
   }
 
   const appConfig = await loadAppConfig();

@@ -273,7 +273,7 @@ All CLI output is JSON via `outputJson()` / `outputError()`. Exit codes: 0=succe
 | `skills/call.md` | Agent reference — call channel |
 | `skills/sms.md` | Agent reference — SMS channel |
 | `skills/email.md` | Agent reference — email channel |
-| `docs/design.md` | Initial engineering design document |
+| `docs/done/design.md` | Initial engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
 | `docs/done/memory-layer.md` | Data layer design — schemas and data repo structure |
 | `docs/done/email-channel.md` | Email channel implementation design |
