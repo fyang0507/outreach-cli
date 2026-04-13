@@ -462,16 +462,15 @@ export async function readEmailHistory(opts: {
   const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
   if (messageIds.length === 0) return [];
 
-  // Fetch metadata for each message
+  // Fetch full messages (with body)
   const summaries: EmailSummary[] = [];
   for (const id of messageIds) {
     const msg = await gmail.users.messages.get({
       userId: "me",
       id,
-      format: "metadata",
-      metadataHeaders: ["From", "To", "Cc", "Subject", "Date"],
+      format: "full",
     });
-    summaries.push(messageToSummary(msg.data, false));
+    summaries.push(messageToSummary(msg.data, true));
   }
 
   // Return chronological order (reverse Gmail's newest-first)

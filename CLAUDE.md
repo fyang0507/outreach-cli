@@ -59,7 +59,10 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `src/exitCodes.ts` | Exit code constants (0-4) |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
 | `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
-| `SKILL.md` | Agent onboarding reference — how to use the CLI |
+| `skill/SKILL.md` | Agent onboarding — campaign framework + data model |
+| `skill/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
+| `skill/sms.md` | Agent reference — SMS channel (iMessage) |
+| `skill/email.md` | Agent reference — email channel (Gmail) |
 
 ## Configuration
 
@@ -153,4 +156,7 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `SKILL.md` | Agent-facing user guide |
+| `skill/SKILL.md` | Agent-facing user guide — campaign framework |
+| `skill/call.md` | Agent-facing user guide — call channel |
+| `skill/sms.md` | Agent-facing user guide — SMS channel |
+| `skill/email.md` | Agent-facing user guide — email channel |

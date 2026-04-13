@@ -1,0 +1,47 @@
+# Email channel
+
+Email via Gmail API (OAuth2 auth, nodemailer MailComposer for send).
+
+## Sending an email
+
+```bash
+outreach email send \
+  --subject "Following up on our conversation" \
+  --body "Hi, I wanted to follow up on scheduling." \
+  --campaign-id "2026-04-15-dental-cleaning" \
+  --contact-id "c_a1b2c3"
+```
+
+**Required**: `--subject`, `--body`, `--campaign-id`, `--contact-id`
+**Optional**: `--to <address>` — override the email address resolved from the contact record. `--cc <addresses>`, `--bcc <addresses>`, `--reply-to-id <gmail-message-id>` (enables threading), `--no-reply-all` (reply to sender only; default is reply-all when replying), `--attach <path...>` (file attachments)
+
+The destination email is resolved from the contact's `email` field. Pass `--to` only to override.
+
+The CLI sends via Gmail API (OAuth2), then auto-appends an `attempt` entry with `channel: "email"`, `message_id`, and `thread_id` to the campaign JSONL.
+
+Returns: `{ "to": "...", "subject": "...", "message_id": "...", "thread_id": "...", "status": "sent" }`
+
+**Replying to a thread**: pass `--reply-to-id` with the Gmail message ID from a previous send or history lookup. The CLI auto-resolves threading headers (`In-Reply-To`, `References`), sets `Re:` subject prefix, and reply-all recipients (original sender → To, original To+Cc minus self → Cc). Use `--no-reply-all` to reply to sender only. Explicit `--to`/`--cc` override auto-resolved recipients.
+
+## First-time auth
+
+If no Gmail token exists in the data repo (`<data_repo_path>/outreach/gmail-token.json`), the CLI triggers an interactive OAuth flow — opens the browser, spins up a local callback server on port 8089, and exchanges the code for tokens. Subsequent runs reuse the stored token (auto-refreshed). The token syncs across machines via git along with the rest of the data repo.
+
+## Reading email history
+
+```bash
+# By contact — resolves email from contact record
+outreach email history --contact-id "c_a1b2c3" --limit 20
+
+# By email address
+outreach email history --address "recipient@example.com" --limit 20
+
+# By thread ID
+outreach email history --thread-id "18f1a2b3c4d5e6f7"
+```
+
+One of `--contact-id`, `--address`, or `--thread-id` is required. All modes return full messages with body text. Contact and address modes return recent messages involving that email address in chronological order. Thread mode returns the full thread. Empty results return `{ address, thread_id, messages: [] }`.
+
+## Email-specific notes
+
+Email is asynchronous — the send and reply happen in different agent sessions. Use `outreach context` to gather reply context in a follow-up session. Use `email history` only when context is insufficient (e.g., need a specific thread or address not tied to a campaign).
