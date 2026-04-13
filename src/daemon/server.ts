@@ -158,6 +158,9 @@ function logCallCost(session: CallSession): void {
  * Called from all call-end paths (forceHangup, handleCallHangup, bridge cleanup).
  */
 async function finalizeCall(session: CallSession): Promise<void> {
+  if (session.finalized) return;
+  session.finalized = true;
+
   // Compute and append call_summary as final event
   const durationMs = Date.now() - session.startTime;
   const ringDurationMs = session.ringingAt && session.answeredAt
@@ -304,6 +307,11 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           geminiConfig: appConfig.gemini,
           systemInstruction,
           preConnectedGemini: preConnected,
+          onCleanup: () => {
+            finalizeCall(session).catch((err) => {
+              console.error(`[daemon] Failed to finalize call ${callId}:`, err);
+            });
+          },
         });
 
         session.bridge = bridge;

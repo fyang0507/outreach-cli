@@ -3,7 +3,7 @@ import twilio from "twilio";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
 import { appendEvent, type CallSession } from "./sessions.js";
-import { appendCampaignEvent, writeTranscript, isoNow } from "../logs/sessionLog.js";
+import { isoNow } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
 
@@ -75,6 +75,7 @@ export interface MediaStreamsBridgeOptions {
   geminiConfig: GeminiConfig;
   systemInstruction: string;
   preConnectedGemini?: GeminiLiveSession;
+  onCleanup?: () => void;
 }
 
 export class MediaStreamsBridge {
@@ -84,12 +85,14 @@ export class MediaStreamsBridge {
   private session: CallSession;
   private cleaned = false;
   private batcher: TranscriptBatcher;
+  private onCleanup?: () => void;
 
   constructor(opts: MediaStreamsBridgeOptions) {
     this.twilioWs = opts.twilioWs;
     this.callId = opts.callId;
     this.session = opts.session;
     this.batcher = new TranscriptBatcher(opts.session);
+    this.onCleanup = opts.onCleanup;
 
     if (opts.preConnectedGemini) {
       // Use pre-connected session and wire up callbacks
@@ -330,25 +333,9 @@ export class MediaStreamsBridge {
     this.session.ws = undefined;
     this.session.bridge = undefined;
 
-    // Write transcript + campaign attempt
-    const finalize = async () => {
-      await writeTranscript(this.callId, this.session.fullTranscript);
-      if (this.session.campaignId) {
-        const hasRemoteSpeech = this.session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
-        const result = hasRemoteSpeech ? "connected" : "no_answer";
-        await appendCampaignEvent(this.session.campaignId, {
-          ts: isoNow(),
-          contact_id: this.session.contactId ?? null,
-          type: "attempt",
-          channel: "call",
-          result,
-          call_id: this.callId,
-        });
-      }
-    };
-    finalize().catch((err) => {
-      console.error(`[media-bridge] Failed to finalize call ${this.callId}:`, err);
-    });
-
+    // Notify server to finalize (write transcript + campaign attempt)
+    if (this.onCleanup) {
+      this.onCleanup();
+    }
   }
 }
