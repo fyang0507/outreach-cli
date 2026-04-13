@@ -8,7 +8,6 @@ set -euo pipefail
 
 OUTREACH="node dist/cli.js"
 MAX_DURATION=60
-LISTEN_TIMEOUT=60000
 POLL_INTERVAL=5
 
 # IVR test line — toll-free, always answers
@@ -40,7 +39,7 @@ skip() { echo -e "${YELLOW}[SKIP]${NC} $1 — $2"; SKIP_COUNT=$((SKIP_COUNT + 1)
 
 cleanup() {
   log "Running teardown..."
-  $OUTREACH teardown 2>/dev/null || true
+  $OUTREACH call teardown 2>/dev/null || true
 }
 
 trap cleanup EXIT
@@ -99,14 +98,14 @@ if [ ! -f "dist/cli.js" ]; then
 fi
 
 log "Cleaning up any existing daemon..."
-$OUTREACH teardown 2>/dev/null || true
+$OUTREACH call teardown 2>/dev/null || true
 sleep 1
 
 # --- Init ---
 
 log "Running outreach init..."
-INIT_OUTPUT=$($OUTREACH init 2>/dev/null) || {
-  echo "Error: 'outreach init' failed. Check .env and prerequisites."
+INIT_OUTPUT=$($OUTREACH call init 2>/dev/null) || {
+  echo "Error: 'outreach call init' failed. Check .env and prerequisites."
   echo "$INIT_OUTPUT"
   exit 1
 }
@@ -241,26 +240,12 @@ else
   log "Call A has transcript: $HAS_A"
   log "Call B has transcript: $HAS_B"
 
-  # Check transcript files exist
-  FILE_A="$HOME/.outreach/transcripts/${CALL_A_ID}.jsonl"
-  FILE_B="$HOME/.outreach/transcripts/${CALL_B_ID}.jsonl"
-
-  FILE_A_EXISTS="false"
-  FILE_B_EXISTS="false"
-  [ -f "$FILE_A" ] && FILE_A_EXISTS="true"
-  [ -f "$FILE_B" ] && FILE_B_EXISTS="true"
-
-  log "Transcript file A exists: $FILE_A_EXISTS"
-  log "Transcript file B exists: $FILE_B_EXISTS"
-
-  if [ "$FILE_A_EXISTS" = "true" ] && [ "$FILE_B_EXISTS" = "true" ]; then
-    pass "TC-C4: Independent transcripts — both files written"
-  elif [ "$FILE_A_EXISTS" = "true" ] || [ "$FILE_B_EXISTS" = "true" ]; then
-    pass "TC-C4: Independent transcripts — at least one file written (calls may have been too short)"
+  if [ "$HAS_A" = "true" ] && [ "$HAS_B" = "true" ]; then
+    pass "TC-C4: Independent transcripts — both calls have transcript entries"
+  elif [ "$HAS_A" = "true" ] || [ "$HAS_B" = "true" ]; then
+    pass "TC-C4: Independent transcripts — at least one call has transcript (calls may have been too short)"
   else
-    # Transcript files are written on call end — if both calls ended, files should exist
-    # But for very short calls or IVR rejection, this can be empty
-    fail "TC-C4: Independent transcripts" "No transcript files found"
+    fail "TC-C4: Independent transcripts" "No transcript entries captured from either call"
   fi
 fi
 
@@ -286,10 +271,6 @@ done
 
 echo ""
 log "Passed: $PASS_COUNT  Failed: $FAIL_COUNT  Skipped: $SKIP_COUNT"
-echo ""
-
-log "Transcript files in ~/.outreach/transcripts/:"
-ls -la ~/.outreach/transcripts/ 2>/dev/null || echo "  (none)"
 echo ""
 
 if [ "$FAIL_COUNT" -gt 0 ]; then

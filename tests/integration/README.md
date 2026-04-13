@@ -14,7 +14,7 @@ Live integration tests that exercise the voice agent's ability to navigate IVR m
    - `GOOGLE_GENERATIVE_AI_API_KEY` in `.env`
 
 3. **ngrok** installed and authenticated
-   - `outreach init` uses ngrok to expose the local daemon
+   - `outreach call init` uses ngrok to expose the local daemon
 
 4. **jq** installed
    - `brew install jq` (macOS) or `apt-get install jq` (Linux)
@@ -73,18 +73,18 @@ The daemon writes to stdout/stderr. To see tool call logs (`send_dtmf`, `end_cal
 
 ### Transcript files
 
-Each call writes a JSONL transcript to `~/.outreach/transcripts/<call_id>.jsonl`. Inspect with:
+Each call writes a JSONL transcript to `<data_repo>/outreach/transcripts/<call_id>.jsonl` (where `<data_repo>` is the path configured in `outreach.config.yaml`). Inspect with:
 
 ```bash
-cat ~/.outreach/transcripts/call_*.jsonl | jq .
+cat <data_repo>/outreach/transcripts/call_*.jsonl | jq .
 ```
 
-### Session logs
+### Campaign logs
 
-Session events (call.started, call.ended) are written to `~/.outreach/sessions/`. Inspect with:
+Campaign events are written to `<data_repo>/outreach/campaigns/`. Inspect with:
 
 ```bash
-cat ~/.outreach/sessions/*.jsonl | jq .
+cat <data_repo>/outreach/campaigns/*.jsonl | jq .
 ```
 
 ### Twilio console

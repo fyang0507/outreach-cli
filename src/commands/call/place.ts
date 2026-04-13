@@ -59,6 +59,16 @@ export function registerPlaceCommand(parent: Command): void {
         return;
       }
 
+      let maxDuration: number | undefined;
+      if (opts.maxDuration) {
+        maxDuration = parseInt(opts.maxDuration, 10);
+        if (isNaN(maxDuration) || maxDuration <= 0) {
+          outputError(INPUT_ERROR, "--max-duration must be a positive integer (seconds)");
+          process.exit(INPUT_ERROR);
+          return;
+        }
+      }
+
       try {
         const result = await sendToDaemon("call.place", {
           to,
@@ -68,7 +78,7 @@ export function registerPlaceCommand(parent: Command): void {
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
-          maxDuration: opts.maxDuration ? parseInt(opts.maxDuration, 10) : undefined,
+          maxDuration: maxDuration,
         });
 
         const res = result as { error?: string; message?: string };

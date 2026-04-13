@@ -22,6 +22,7 @@ export interface CallSession {
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
+  finalized: boolean; // Whether finalizeCall() has already run (idempotency guard)
   campaignId?: string;  // Campaign ID for auto-logging attempts
   contactId?: string; // Contact ID for campaign attempt entry
 
@@ -75,6 +76,7 @@ export function createSession(params: {
   const session: CallSession = {
     id: params.id ?? generateCallId(),
     status: "ringing",
+    finalized: false,
     from: params.from,
     to: params.to,
     startTime: now,
