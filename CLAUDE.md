@@ -10,22 +10,32 @@ npm run build
 node dist/cli.js --help
 ```
 
-## Architecture (V2 — Gemini Live)
+## Architecture
 
-**Gemini Live API** (`gemini-3.1-flash-live-preview`) handles the entire call autonomously — STT, reasoning, and TTS in a single voice-native model. No sub-agent needed during the call.
+Three channel providers behind a unified CLI:
 
 ```
-Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
+                              ┌─ Daemon ─ Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
+Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + Messages DB)
+                              ├─ Gmail provider (OAuth2 + Gmail API)
+                              └─ Data I/O (campaigns, contacts, transcripts)
 ```
 
+**Shared:**
 - **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
+- **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
+
+**Call channel** (Twilio + Gemini Live):
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach call init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding. Includes `TranscriptBatcher` that consolidates per-word Gemini transcript fragments into turn-level entries (flushes on speaker change, 800ms silence, or cleanup).
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
 - **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
-- **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
+
+**SMS channel** (iMessage):
 - **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound.
+
+**Email channel** (Gmail):
 - **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — OAuth2 auth + token management, send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), search (query → thread-grouped metadata), health check.
 
 ## Key files
@@ -153,6 +163,10 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | Path | Purpose |
 |---|---|
 | `docs/design.md` | Initial engineering design document |
+| `docs/done/memory-layer.md` | Data layer design — schemas and data repo structure |
+| `docs/done/email-channel.md` | Email channel implementation design |
+| `docs/done/sms-context.md` | SMS + cross-channel context design |
+| `docs/done/thread-grouped-email-context.md` | Thread-grouped email context design |
 | `docs/done/tuning-reference.md` | Full parameter reference for Gemini config |
 | `docs/done/v2-architecture-options.md` | V2 architecture options analysis |
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
