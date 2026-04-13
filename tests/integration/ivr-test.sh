@@ -7,7 +7,6 @@ set -euo pipefail
 
 OUTREACH="node dist/cli.js"
 MAX_DURATION=60
-LISTEN_TIMEOUT=60000
 POLL_INTERVAL=5
 
 # IVR test line — MCI/Verizon directory with "press 1 for..." menus
@@ -40,7 +39,7 @@ skip() { echo -e "${YELLOW}[SKIP]${NC} $1 — $2"; SKIP_COUNT=$((SKIP_COUNT + 1)
 
 cleanup() {
   log "Running teardown..."
-  $OUTREACH teardown 2>/dev/null || true
+  $OUTREACH call teardown 2>/dev/null || true
 }
 
 # Always teardown on exit
@@ -108,14 +107,14 @@ fi
 
 # Teardown any existing daemon before starting fresh
 log "Cleaning up any existing daemon..."
-$OUTREACH teardown 2>/dev/null || true
+$OUTREACH call teardown 2>/dev/null || true
 sleep 1
 
 # --- Init ---
 
 log "Running outreach init..."
-INIT_OUTPUT=$($OUTREACH init 2>/dev/null) || {
-  echo "Error: 'outreach init' failed. Check .env and prerequisites."
+INIT_OUTPUT=$($OUTREACH call init 2>/dev/null) || {
+  echo "Error: 'outreach call init' failed. Check .env and prerequisites."
   echo "$INIT_OUTPUT"
   exit 1
 }
@@ -142,10 +141,6 @@ if [ -z "$TC1_ID" ]; then
   fail "TC-1: Basic DTMF" "Failed to place call"
 else
   log "Call placed: $TC1_ID"
-
-  # Listen with wait for initial transcript
-  log "Listening for transcript..."
-  $OUTREACH call listen --id "$TC1_ID" --wait --timeout "$LISTEN_TIMEOUT" >/dev/null 2>&1 || true
 
   # Wait for call to end (agent should hang up after navigating past menu)
   wait_for_end "$TC1_ID" "$((MAX_DURATION + 10))"
@@ -207,10 +202,6 @@ elif [ -z "$TC4_ID" ]; then
 else
   log "Call placed: $TC4_ID"
 
-  # Listen with wait
-  log "Listening for transcript..."
-  $OUTREACH call listen --id "$TC4_ID" --wait --timeout "$LISTEN_TIMEOUT" >/dev/null 2>&1 || true
-
   # Wait for end — should be quick since objective is just "say hello"
   wait_for_end "$TC4_ID" "$((MAX_DURATION + 10))"
 
@@ -260,11 +251,6 @@ done
 
 echo ""
 log "Passed: $PASS_COUNT  Failed: $FAIL_COUNT  Skipped: $SKIP_COUNT"
-echo ""
-
-# Check transcript files
-log "Transcript files in ~/.outreach/transcripts/:"
-ls -la ~/.outreach/transcripts/ 2>/dev/null || echo "  (none)"
 echo ""
 
 # Teardown handled by trap
