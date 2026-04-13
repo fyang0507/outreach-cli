@@ -2,14 +2,15 @@ import { Command } from "commander";
 import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outreachConfig } from "../../config.js";
+import { resolveContactAddress } from "../../contacts.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
 interface PlaceOptions {
-  to: string;
+  to?: string;
   from?: string;
-  campaignId?: string;
-  contactId?: string;
+  campaignId: string;
+  contactId: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
@@ -20,15 +21,29 @@ export function registerPlaceCommand(parent: Command): void {
   parent
     .command("place")
     .description("Place an outbound call")
-    .requiredOption("--to <number>", "Destination phone number")
+    .option("--to <number>", "Destination phone number (resolved from contact if omitted)")
     .option("--from <number>", "Caller ID phone number")
-    .option("--campaign-id <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
-    .option("--contact-id <id>", "Contact ID — included in campaign attempt entry")
+    .requiredOption("--campaign-id <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
+    .requiredOption("--contact-id <id>", "Contact ID — used for address resolution and campaign tracking")
     .option("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
     .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 300s)")
     .action(async (opts: PlaceOptions) => {
+      // Resolve destination phone
+      let to: string;
+      if (opts.to) {
+        to = opts.to;
+      } else {
+        try {
+          to = await resolveContactAddress(opts.contactId, "call");
+        } catch (err) {
+          outputError(INPUT_ERROR, (err as Error).message);
+          process.exit(INPUT_ERROR);
+          return;
+        }
+      }
+
       const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
       if (!from) {
         outputError(INPUT_ERROR, "No --from number provided and OUTREACH_DEFAULT_FROM is not set");
@@ -46,7 +61,7 @@ export function registerPlaceCommand(parent: Command): void {
 
       try {
         const result = await sendToDaemon("call.place", {
-          to: opts.to,
+          to,
           from,
           campaignId: opts.campaignId,
           contactId: opts.contactId,

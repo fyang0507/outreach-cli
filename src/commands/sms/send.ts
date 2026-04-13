@@ -1,25 +1,38 @@
 import { Command } from "commander";
 import { sendIMessage, normalizePhone } from "../../providers/messages.js";
+import { resolveContactAddress } from "../../contacts.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
-import { SUCCESS, OPERATION_FAILED } from "../../exitCodes.js";
+import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 
 export function registerSendCommand(parent: Command): void {
   parent
     .command("send")
     .description("Send an iMessage and log campaign attempt")
-    .requiredOption("--to <number>", "Recipient phone number")
+    .option("--to <number>", "Recipient phone number (resolved from contact if omitted)")
     .requiredOption("--body <text>", "Message body")
     .requiredOption("--campaign-id <id>", "Campaign ID for tracking")
     .requiredOption("--contact-id <id>", "Contact ID for tracking")
     .action(
       async (opts: {
-        to: string;
+        to?: string;
         body: string;
         campaignId: string;
         contactId: string;
       }) => {
-        const normalized = normalizePhone(opts.to);
+        // Resolve destination phone
+        let normalized: string;
+        if (opts.to) {
+          normalized = normalizePhone(opts.to);
+        } else {
+          try {
+            normalized = await resolveContactAddress(opts.contactId, "sms");
+          } catch (err) {
+            outputError(INPUT_ERROR, (err as Error).message);
+            process.exit(INPUT_ERROR);
+            return;
+          }
+        }
 
         try {
           sendIMessage(normalized, opts.body);

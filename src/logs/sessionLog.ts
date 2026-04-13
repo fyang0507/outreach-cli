@@ -1,6 +1,7 @@
 import { mkdir, appendFile, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
+import type { Contact } from "../contacts.js";
 
 // --- Timestamp helper ---
 
@@ -140,9 +141,9 @@ export async function readCampaignEvents(
 
 export async function readContact(
   contactId: string,
-): Promise<Record<string, unknown>> {
+): Promise<Contact> {
   const { contactsDir } = await getDataDirs();
   const filePath = join(contactsDir, `${contactId}.json`);
   const content = await readFile(filePath, "utf-8");
-  return JSON.parse(content) as Record<string, unknown>;
+  return JSON.parse(content) as Contact;
 }
