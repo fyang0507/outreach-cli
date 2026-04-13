@@ -58,6 +58,12 @@ export interface EmailSummary {
   attachments?: { filename: string; mimeType: string; size: number }[];
 }
 
+export interface EmailThread {
+  thread_id: string;
+  subject: string;
+  messages: EmailSummary[];
+}
+
 // --- Auth + token management ---
 
 function createOAuth2Client(): OAuth2Client {
@@ -537,4 +543,76 @@ export async function readEmailHistory(opts: {
   // Return chronological order (reverse Gmail's newest-first)
   summaries.reverse();
   return summaries;
+}
+
+// --- Thread-grouped history ---
+
+export async function readEmailThreads(opts: {
+  threadIds?: string[];
+  address?: string;
+  limit?: number;
+}): Promise<EmailThread[]> {
+  if (opts.threadIds && opts.threadIds.length > 0) {
+    // Thread-ID path: fetch each thread individually
+    const results = await Promise.allSettled(
+      opts.threadIds.map((tid) => readEmailHistory({ threadId: tid })),
+    );
+
+    const threads: EmailThread[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]!;
+      if (r.status === "fulfilled" && r.value.length > 0) {
+        threads.push({
+          thread_id: opts.threadIds[i]!,
+          subject: r.value[0]!.subject,
+          messages: r.value,
+        });
+      }
+    }
+
+    // Sort chronologically by first message date
+    threads.sort(
+      (a, b) =>
+        new Date(a.messages[0]!.date).getTime() -
+        new Date(b.messages[0]!.date).getTime(),
+    );
+    return threads;
+  }
+
+  // Address fallback: fetch flat list, group by threadId
+  if (!opts.address) return [];
+
+  const messages = await readEmailHistory({
+    address: opts.address,
+    limit: opts.limit ?? 10,
+  });
+  if (messages.length === 0) return [];
+
+  // Group by threadId
+  const groups = new Map<string, EmailSummary[]>();
+  for (const msg of messages) {
+    const existing = groups.get(msg.threadId);
+    if (existing) {
+      existing.push(msg);
+    } else {
+      groups.set(msg.threadId, [msg]);
+    }
+  }
+
+  const threads: EmailThread[] = [];
+  for (const [tid, msgs] of groups) {
+    threads.push({
+      thread_id: tid,
+      subject: msgs[0]!.subject,
+      messages: msgs,
+    });
+  }
+
+  // Sort chronologically by first message date
+  threads.sort(
+    (a, b) =>
+      new Date(a.messages[0]!.date).getTime() -
+      new Date(b.messages[0]!.date).getTime(),
+  );
+  return threads;
 }

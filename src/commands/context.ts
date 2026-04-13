@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { readCampaignEvents, readContact } from "../logs/sessionLog.js";
 import { readMessageHistory, normalizePhone } from "../providers/messages.js";
-import { readEmailHistory } from "../providers/gmail.js";
+import { readEmailThreads } from "../providers/gmail.js";
 import { outputJson, outputError } from "../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../exitCodes.js";
 import type { Contact } from "../contacts.js";
@@ -97,17 +97,35 @@ export function registerContextCommand(program: Command): void {
           }
 
           if (channels.has("email")) {
-            const emailAddr = contact.email ?? null;
-            if (emailAddr) {
-              try {
-                const messages = await readEmailHistory({
-                  address: emailAddr,
-                  limit: 10,
-                });
-                channelMessages.email = messages;
-              } catch {
-                // Gmail not accessible, skip
+            // Extract tracked thread_ids from campaign events
+            const emailThreadIds = new Set<string>();
+            for (const e of events) {
+              if (
+                e.contact_id === cid &&
+                e.channel === "email" &&
+                typeof e.thread_id === "string"
+              ) {
+                emailThreadIds.add(e.thread_id);
               }
+            }
+
+            try {
+              const threadIds = [...emailThreadIds];
+              if (threadIds.length > 0) {
+                channelMessages.email_threads = await readEmailThreads({
+                  threadIds,
+                });
+              } else {
+                const emailAddr = contact.email ?? null;
+                if (emailAddr) {
+                  channelMessages.email_threads = await readEmailThreads({
+                    address: emailAddr,
+                    limit: 10,
+                  });
+                }
+              }
+            } catch {
+              // Gmail not accessible, skip
             }
           }
 

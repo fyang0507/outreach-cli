@@ -57,4 +57,16 @@ Returns thread-grouped results with metadata and snippets (no body). Use `email 
 
 ## Email-specific notes
 
-Email is asynchronous — the send and reply happen in different agent sessions. Use `outreach context` to gather reply context in a follow-up session. Use `email history` only when context is insufficient (e.g., need a specific thread or address not tied to a campaign).
+Email is asynchronous — the send and reply happen in different agent sessions. Use `outreach context` to gather reply context in a follow-up session — it returns email history grouped by thread (`email_threads`), with each thread containing its full message list. To reply to a thread, use `--reply-to-id` with a message ID from the target thread. Use `email history` only when context is insufficient (e.g., need a specific thread or address not tied to a campaign).
+
+### Inbound thread discovery
+
+When the user reports receiving an email that isn't already tracked in campaign events:
+
+1. Run `outreach email search --query "<relevant terms>"` to find the thread
+2. Confirm the correct thread with the user
+3. Record a `human_input` event with `channel: "email"` and `thread_id`:
+   ```json
+   {"ts":"...","type":"human_input","contact_id":"c_a1b2c3","channel":"email","thread_id":"18f...","content":"Received reply confirming availability"}
+   ```
+4. Future `outreach context` calls will discover and fetch this thread automatically
