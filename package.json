@@ -6,7 +6,7 @@
     "outreach": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc && node scripts/sync-skills.js"
   },
   "dependencies": {
     "@google/genai": "^1.48.0",

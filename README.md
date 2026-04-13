@@ -36,8 +36,8 @@ All channels share the same `--campaign-id` + `--contact-id` pattern — the CLI
 git clone https://github.com/fyang0507/outreach-cli.git
 cd outreach-cli
 npm install
-npm run build
-npm link        # makes `outreach` available globally
+npm run build          # compiles TS + syncs skills/ → data repo
+npm link               # makes `outreach` available globally
 ```
 
 ### 2. Configure secrets
@@ -147,7 +147,7 @@ outreach call teardown                     # clean up when done
 
 Multiple calls can run concurrently — each `call place` creates an independent session.
 
-For agent integration details — campaign workflows, data model, post-action patterns — see `skills/SKILL.md`. Channel-specific references: `skills/call.md`, `skills/sms.md`, `skills/email.md`.
+For agent integration details — campaign workflows, data model, post-action patterns — see `skills/SKILL.md`. Channel-specific references: `skills/call.md`, `skills/sms.md`, `skills/email.md`. These skill files are the source of truth — `npm run build` copies them to `<data_repo>/.agents/skills/` so the agent workspace always has docs matching the CLI version.
 
 ## Data layer
 
@@ -237,6 +237,8 @@ src/
     systemInstruction.ts         # System prompt builder
   logs/
     sessionLog.ts                # JSONL file helpers
+scripts/
+  sync-skills.js                 # Build hook — syncs skills/ → <data_repo>/.agents/skills/
 skills/
   SKILL.md                       # Agent onboarding — campaign framework + data model
   call.md                        # Agent reference — call channel
@@ -249,7 +251,7 @@ prompts/
 ## Development
 
 ```bash
-npm run build                    # compile TypeScript -> dist/
+npm run build                    # compile TypeScript -> dist/ + sync skills/ → data repo
 ```
 
 SMS and email commands work immediately after build — no daemon needed. For call development, start the call infrastructure first:

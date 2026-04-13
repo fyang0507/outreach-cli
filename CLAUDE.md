@@ -6,7 +6,7 @@ Agent-native CLI for real-world outreach — calls, SMS, email. The CLI is a too
 
 ```bash
 npm install
-npm run build
+npm run build          # compiles TS + syncs skills/ → <data_repo>/.agents/skills/
 node dist/cli.js --help
 ```
 
@@ -68,12 +68,15 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/logs/sessionLog.ts` | JSONL file helpers for campaign logs, contacts, and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
+| `scripts/sync-skills.js` | Build hook — copies `skills/` → `<data_repo>/.agents/skills/` to keep agent workspace in sync |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
 | `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
-| `skills/SKILL.md` | Agent onboarding — campaign framework + data model |
+| `skills/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
 | `skills/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
 | `skills/sms.md` | Agent reference — SMS channel (iMessage) |
 | `skills/email.md` | Agent reference — email channel (Gmail) |
+
+Skills are the source of truth in this repo. `npm run build` copies them to `<data_repo_path>/.agents/skills/` so the agent workspace always has docs matching the current CLI version.
 
 ## Configuration
 
