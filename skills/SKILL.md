@@ -216,6 +216,36 @@ When the campaign objective is resolved, append a `decision` entry with `chosen`
 
 After all updates are written, sync the data repo with git.
 
+## Feedback and improvement
+
+Your primary role is executing outreach tasks. But you are also encouraged to surface feedback on the CLI itself — rough edges, missing capabilities, confusing behavior, or workflow friction you encounter while working. You are the primary user of this tool; your observations drive its improvement.
+
+### What to report
+
+- **Bugs**: commands that error unexpectedly, incorrect output, silent failures
+- **Friction**: workflows that take too many steps, flags that should have defaults, missing convenience commands
+- **Missing features**: capabilities you wished existed while executing a task
+- **Unclear behavior**: error messages that don't help, output that's hard to parse, ambiguous flag semantics
+
+### How to report
+
+Append feedback entries to `$DATA_REPO/outreach/cli-feedback.jsonl` (one JSON object per line, append-only):
+
+```json
+{"ts":"2026-04-13T15:30:00Z","category":"friction","command":"outreach context","description":"No way to filter context by channel — had to read full output and ignore irrelevant SMS data when only email mattered","suggestion":"Add --channel flag to context command"}
+```
+
+**Fields:**
+- `ts` — ISO 8601 timestamp
+- `category` — one of: `bug`, `friction`, `missing_feature`, `unclear_behavior`
+- `command` — the CLI command involved (if applicable)
+- `description` — what happened and why it was a problem
+- `suggestion` — optional, your proposed improvement
+
+### When to report
+
+Don't interrupt your workflow to write feedback. Append entries after completing a task or at the end of a session when you have a natural pause. If you notice something minor, a one-liner is fine — not every entry needs a detailed suggestion.
+
 ## Output format
 
 All commands output JSON. Errors: `{ "error": "<code>", "message": "<details>" }`. Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout.
