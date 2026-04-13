@@ -51,6 +51,7 @@ One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in pl
 {
   "id": "c_a1b2c3",
   "phone": "+15551234567",
+  "sms_phone": "+15559876543",
   "email": null,
   "name": "Dr. Smith's Office",
   "tags": ["dentist", "downtown"],
@@ -61,6 +62,9 @@ One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in pl
 ```
 
 - **ID convention**: `c_` prefix + random hex (e.g., `c_a1b2c3`). Use this as the filename.
+- **`phone`**: primary phone number, used for calls.
+- **`sms_phone`**: optional SMS-specific phone number. When present, SMS commands use it instead of `phone`. Use this when a contact has a landline for calls and a mobile for texts.
+- **`email`**: email address for sending. Used as send target for new threads; `null` when unknown.
 - Contacts are built up progressively — phone number first, then name/notes after a call.
 - Before creating a new contact, grep by phone to avoid duplicates.
 
@@ -122,7 +126,7 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
-Note: when `--campaign-id` is passed to `call place`, the CLI auto-appends the `attempt` entry. Similarly, `sms send` auto-appends an `attempt` with `channel: "sms"`, and `email send` auto-appends an `attempt` with `channel: "email"` (including `message_id` and `thread_id`). You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts or message threads.
+Note: all send commands (`call place`, `sms send`, `email send`) require `--campaign-id` and `--contact-id`, and auto-append the `attempt` entry to the campaign JSONL. Email attempts also include `message_id` and `thread_id`. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts or message threads.
 
 ### Sync
 
@@ -171,15 +175,18 @@ Embed gathered information into `--objective` so the voice agent can use it duri
 
 ```bash
 outreach call place \
-  --to "+15551234567" \
+  --campaign-id "2026-04-15-dental-cleaning" \
+  --contact-id "c_a1b2c3" \
   --objective "Schedule a haircut appointment. Available Thursday or Friday afternoon after 2pm." \
   --persona "Be conversational and flexible on timing" \
   --hangup-when "The appointment is confirmed or they say no availability"
 ```
 
-**Required**: `--to`
+**Required**: `--campaign-id`, `--contact-id`
 **Recommended**: `--objective`, `--persona`, `--hangup-when`
-**Optional**: `--campaign-id <id>` + `--contact-id <id>` — auto-log attempt to campaign JSONL at call end. `--max-duration <seconds>` — override the default 300s max call duration.
+**Optional**: `--to <number>` — override the phone number resolved from the contact record. `--max-duration <seconds>` — override the default 300s max call duration.
+
+The destination phone number is resolved from the contact's `phone` field. Pass `--to` only to override (e.g., try a different number than what's on file).
 
 Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
@@ -226,37 +233,44 @@ Never silently create a new campaign when an existing one might apply — the us
 
 ```bash
 outreach sms send \
-  --to "+15551234567" \
   --body "Hi, following up on our conversation about scheduling." \
   --campaign-id "2026-04-15-dental-cleaning" \
   --contact-id "c_a1b2c3"
 ```
 
-All four flags are **required** — every SMS is campaign-tracked. The CLI sends via iMessage (AppleScript), then auto-appends an `attempt` entry with `channel: "sms"` to the campaign JSONL.
+**Required**: `--body`, `--campaign-id`, `--contact-id`
+**Optional**: `--to <number>` — override the phone number resolved from the contact record.
+
+The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI sends via iMessage (AppleScript), then auto-appends an `attempt` entry with `channel: "sms"` to the campaign JSONL.
 
 Returns: `{ "to": "+15551234567", "status": "sent" }`
 
 ## Reading SMS history
 
 ```bash
+# By contact — resolves phone from contact record (sms_phone ?? phone)
+outreach sms history --contact-id "c_a1b2c3" --limit 20
+
+# By raw phone number
 outreach sms history --phone "+15551234567" --limit 20
 ```
 
-Returns the most recent messages from the iMessage thread for that phone number, including attachments (as MIME types) and tapback reactions. Empty thread returns `{ phone, messages: [] }`.
+One of `--contact-id` or `--phone` is required. Returns the most recent messages from the iMessage thread for that phone number, including attachments (as MIME types) and tapback reactions. Empty thread returns `{ phone, messages: [] }`.
 
 ## Sending an email
 
 ```bash
 outreach email send \
-  --to "recipient@example.com" \
   --subject "Following up on our conversation" \
   --body "Hi, I wanted to follow up on scheduling." \
   --campaign-id "2026-04-15-dental-cleaning" \
   --contact-id "c_a1b2c3"
 ```
 
-**Required**: `--to`, `--subject`, `--body`, `--campaign-id`, `--contact-id`
-**Optional**: `--cc <addresses>`, `--bcc <addresses>`, `--reply-to-id <gmail-message-id>` (enables threading), `--no-reply-all` (reply to sender only; default is reply-all when replying), `--attach <path...>` (file attachments)
+**Required**: `--subject`, `--body`, `--campaign-id`, `--contact-id`
+**Optional**: `--to <address>` — override the email address resolved from the contact record. `--cc <addresses>`, `--bcc <addresses>`, `--reply-to-id <gmail-message-id>` (enables threading), `--no-reply-all` (reply to sender only; default is reply-all when replying), `--attach <path...>` (file attachments)
+
+The destination email is resolved from the contact's `email` field. Pass `--to` only to override.
 
 The CLI sends via Gmail API (OAuth2), then auto-appends an `attempt` entry with `channel: "email"`, `message_id`, and `thread_id` to the campaign JSONL.
 
@@ -269,6 +283,9 @@ Returns: `{ "to": "...", "subject": "...", "message_id": "...", "thread_id": "..
 ## Reading email history
 
 ```bash
+# By contact — resolves email from contact record
+outreach email history --contact-id "c_a1b2c3" --limit 20
+
 # By email address — metadata only (from, to, subject, date, snippet)
 outreach email history --address "recipient@example.com" --limit 20
 
@@ -276,7 +293,7 @@ outreach email history --address "recipient@example.com" --limit 20
 outreach email history --thread-id "18f1a2b3c4d5e6f7"
 ```
 
-One of `--address` or `--thread-id` is required. Address mode returns recent messages involving that address (chronological order, metadata only). Thread mode returns the full thread with message bodies.
+One of `--contact-id`, `--address`, or `--thread-id` is required. Contact and address modes return recent messages involving that email address (chronological order, metadata only). Thread mode returns the full thread with message bodies.
 
 ## Assembling context
 
@@ -315,7 +332,7 @@ outreach health → search $DATA_REPO/outreach/campaigns/ for matching slug/obje
 With a campaign in hand, decide the next action based on context — place a call, send an SMS, or wait for a callback.
 
 ```
-outreach context --campaign-id ... [--contact-id ...] → decide channel → outreach call place / outreach sms send → post-action workflow
+outreach context --campaign-id ... [--contact-id ...] → decide channel → outreach {call place,sms send,email send} --contact-id ... --campaign-id ... → post-action workflow
 ```
 
 ### Single call (detailed walkthrough)
@@ -334,7 +351,7 @@ outreach health
 outreach call init
 
 # --- outreach ---
-outreach call place --to "..." --campaign-id "2026-04-15-dental-cleaning" --objective "..." --persona "..." --hangup-when "..."
+outreach call place --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3" --objective "..." --persona "..." --hangup-when "..."
 outreach call listen/status --id <id> # monitor call or check status
 
 # --- post-call (direct file I/O) ---
@@ -395,7 +412,7 @@ Unlike phone calls, SMS and email are asynchronous — the send and the reply ha
 
 **Reply session**: A later invocation (triggered by the user noticing a reply) starts a new session. The typical flow:
 
-1. **Read the reply** — `outreach sms history --phone <number>` or `outreach context --campaign-id ... --contact-id ...`
+1. **Read the reply** — `outreach sms history --contact-id <id>` or `outreach context --campaign-id ... --contact-id ...`
 2. **Record the outcome** — if an outcome is reached, append an `outcome` entry.
 3. **Update the contact record** — if the reply revealed new info.
 4. **Decide next action** — follow-up SMS, escalate to a call, or record a `decision` if the objective is resolved.

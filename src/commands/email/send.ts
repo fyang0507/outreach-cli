@@ -1,14 +1,15 @@
 import { Command } from "commander";
 import { sendEmail } from "../../providers/gmail.js";
+import { resolveContactAddress } from "../../contacts.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
-import { SUCCESS, OPERATION_FAILED } from "../../exitCodes.js";
+import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 
 export function registerSendCommand(parent: Command): void {
   parent
     .command("send")
     .description("Send an email via Gmail and log campaign attempt")
-    .requiredOption("--to <address>", "Recipient email address")
+    .option("--to <address>", "Recipient email address (resolved from contact if omitted)")
     .requiredOption("--subject <text>", "Email subject")
     .requiredOption("--body <text>", "Email body (plain text)")
     .requiredOption("--campaign-id <id>", "Campaign ID for tracking")
@@ -20,7 +21,7 @@ export function registerSendCommand(parent: Command): void {
     .option("--attach <paths...>", "File paths to attach")
     .action(
       async (opts: {
-        to: string;
+        to?: string;
         subject: string;
         body: string;
         campaignId: string;
@@ -31,10 +32,24 @@ export function registerSendCommand(parent: Command): void {
         replyAll: boolean;
         attach?: string[];
       }) => {
+        // Resolve destination email
+        let to: string;
+        if (opts.to) {
+          to = opts.to;
+        } else {
+          try {
+            to = await resolveContactAddress(opts.contactId, "email");
+          } catch (err) {
+            outputError(INPUT_ERROR, (err as Error).message);
+            process.exit(INPUT_ERROR);
+            return;
+          }
+        }
+
         let result;
         try {
           result = await sendEmail({
-            to: opts.to,
+            to,
             subject: opts.subject,
             body: opts.body,
             cc: opts.cc,

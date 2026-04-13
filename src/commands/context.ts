@@ -4,6 +4,7 @@ import { readMessageHistory, normalizePhone } from "../providers/messages.js";
 import { readEmailHistory } from "../providers/gmail.js";
 import { outputJson, outputError } from "../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../exitCodes.js";
+import type { Contact } from "../contacts.js";
 
 export function registerContextCommand(program: Command): void {
   program
@@ -62,16 +63,16 @@ export function registerContextCommand(program: Command): void {
         > = {};
 
         for (const cid of contactIds) {
-          // Read contact to get phone
-          let contact: Record<string, unknown>;
+          // Read contact to get phone/email
+          let contact: Contact;
           try {
             contact = await readContact(cid);
           } catch {
             continue; // contact file not found, skip
           }
 
-          const phone =
-            typeof contact.phone === "string" ? contact.phone : null;
+          // Prefer sms_phone for SMS history, fall back to phone
+          const smsPhone = contact.sms_phone ?? contact.phone ?? null;
 
           // Detect channels from events for this contact
           const channels = new Set<string>();
@@ -83,9 +84,9 @@ export function registerContextCommand(program: Command): void {
 
           const channelMessages: Record<string, unknown> = {};
 
-          if (channels.has("sms") && phone) {
+          if (channels.has("sms") && smsPhone) {
             try {
-              const messages = readMessageHistory(normalizePhone(phone), {
+              const messages = readMessageHistory(normalizePhone(smsPhone), {
                 limit: 10,
                 sinceDays,
               });
@@ -96,8 +97,7 @@ export function registerContextCommand(program: Command): void {
           }
 
           if (channels.has("email")) {
-            const emailAddr =
-              typeof contact.email === "string" ? contact.email : null;
+            const emailAddr = contact.email ?? null;
             if (emailAddr) {
               try {
                 const messages = await readEmailHistory({

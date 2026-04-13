@@ -18,7 +18,7 @@ node dist/cli.js --help
 Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 ```
 
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history}`
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach call init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
 - **Audio bridge** (`src/daemon/mediaStreamsBridge.ts`): Bridges Twilio Media Streams WebSocket (mulaw 8kHz) to Gemini Live session (PCM 16kHz/24kHz) with real-time transcoding. Includes `TranscriptBatcher` that consolidates per-word Gemini transcript fragments into turn-level entries (flushes on speaker change, 800ms silence, or cleanup).
 - **Transcoding** (`src/audio/transcode.ts`): mulaw↔PCM codec conversion + sample rate resampling (8k↔16k↔24k).
@@ -32,6 +32,7 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 
 | Path | Purpose |
 |---|---|
+| `src/contacts.ts` | Contact interface + `resolveContactAddress()` — shared contact→address resolution |
 | `src/cli.ts` | CLI entrypoint, wires all commands |
 | `src/daemon/server.ts` | Daemon: HTTP server, WebSocket handler, IPC handler, call logic |
 | `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams ↔ Gemini Live audio bridge + turn-level transcript batching |
@@ -69,22 +70,56 @@ Orchestrator Agent → CLI commands → Daemon → Twilio Media Streams ↔ Audi
 | `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` |
 | `outreach.config.yaml` | Application behavior | Data repo path, identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
 
-## Running a call
+## Identifier model
+
+All send commands (`call place`, `sms send`, `email send`) share a unified identifier pattern. `--contact-id` is the universal person identifier — the CLI resolves the channel-appropriate address from the contact record. `--to` is an optional override for when the agent needs to reach a different address than what's on file.
+
+**Flags by command:**
+
+| Command | Required | Resolved from contact | Override |
+|---|---|---|---|
+| `call place` | `--campaign-id`, `--contact-id` | `contact.phone` | `--to` |
+| `sms send` | `--campaign-id`, `--contact-id`, `--body` | `contact.sms_phone ?? contact.phone` | `--to` |
+| `email send` | `--campaign-id`, `--contact-id`, `--subject`, `--body` | `contact.email` | `--to` |
+| `sms history` | one of: `--contact-id`, `--phone` | `contact.sms_phone ?? contact.phone` | `--phone` |
+| `email history` | one of: `--contact-id`, `--address`, `--thread-id` | `contact.email` | `--address` |
+
+Resolution lives in `src/contacts.ts` → `resolveContactAddress(contactId, channel)`.
+
+## Outreach quickstart
 
 ```bash
 npm run build
-outreach health                        # check data repo + channel readiness
+outreach health                        # check data repo + all channel readiness
+
+# --- Call ---
 outreach call init                     # start ngrok + daemon
 outreach call place \
-  --to "+1555..." \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3" \
   --objective "Schedule appointment" \
   --persona "Be conversational and flexible on timing" \
   --hangup-when "Appointment confirmed"
 outreach call listen --id <id>         # monitor transcript
 outreach call teardown                 # clean up
+
+# --- SMS ---
+outreach sms send \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3" \
+  --body "Hi, following up on scheduling."
+outreach sms history --contact-id "c_a1b2c3"
+
+# --- Email ---
+outreach email send \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3" \
+  --subject "Following up" \
+  --body "Hi, wanted to follow up on scheduling."
+outreach email history --contact-id "c_a1b2c3"
 ```
 
-The voice agent handles the entire call autonomously. Use `call listen` to monitor progress and `call hangup` to end early if needed.
+The voice agent handles calls autonomously. Use `call listen` to monitor progress and `call hangup` to end early. SMS and email are fire-and-forget — replies arrive in later sessions.
 
 ## Design principles
 
@@ -118,4 +153,4 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `docs/plan/memory-layer.md` | Memory/context layer design (principle stays, specific in `SKILL.md`) |
+| `SKILL.md` | Agent-facing user guide |

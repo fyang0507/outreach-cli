@@ -1,16 +1,36 @@
 import { Command } from "commander";
 import { readMessageHistory, normalizePhone } from "../../providers/messages.js";
+import { resolveContactAddress } from "../../contacts.js";
 import { outputJson, outputError } from "../../output.js";
-import { SUCCESS, INFRA_ERROR } from "../../exitCodes.js";
+import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
 export function registerHistoryCommand(parent: Command): void {
   parent
     .command("history")
-    .description("Read iMessage thread for a phone number")
-    .requiredOption("--phone <number>", "Phone number (E.164 or raw digits)")
+    .description("Read iMessage thread by contact or phone number")
+    .option("--phone <number>", "Phone number (E.164 or raw digits)")
+    .option("--contact-id <id>", "Contact ID (resolves phone from contact record)")
     .option("--limit <n>", "Max messages to return", "20")
-    .action(async (opts: { phone: string; limit: string }) => {
-      const normalized = normalizePhone(opts.phone);
+    .action(async (opts: { phone?: string; contactId?: string; limit: string }) => {
+      if (!opts.phone && !opts.contactId) {
+        outputError(INPUT_ERROR, "Either --phone or --contact-id is required");
+        process.exit(INPUT_ERROR);
+        return;
+      }
+
+      let normalized: string;
+      if (opts.phone) {
+        normalized = normalizePhone(opts.phone);
+      } else {
+        try {
+          normalized = await resolveContactAddress(opts.contactId!, "sms");
+        } catch (err) {
+          outputError(INPUT_ERROR, (err as Error).message);
+          process.exit(INPUT_ERROR);
+          return;
+        }
+      }
+
       const limit = parseInt(opts.limit, 10);
 
       let messages;
