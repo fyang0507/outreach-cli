@@ -89,9 +89,9 @@ outreach context --campaign-id "2026-04-15-dental"
 outreach context --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" --since 30
 ```
 
-Multiple calls can run concurrently — each `call place` creates an independent session. SMS and email are stateless (no daemon needed). Email requires a one-time OAuth2 authorization (browser-based, token stored in the data repo at `<data_repo_path>/outreach/gmail-token.json` and syncs across machines via git). See `skill/SKILL.md` for workflow patterns.
+Multiple calls can run concurrently — each `call place` creates an independent session. SMS and email are stateless (no daemon needed). Email requires a one-time OAuth2 authorization (browser-based, token stored in the data repo at `<data_repo_path>/outreach/gmail-token.json` and syncs across machines via git). See `skills/SKILL.md` for workflow patterns.
 
-For agent integration details, see `skill/SKILL.md`.
+For agent integration details, see `skills/SKILL.md`.
 
 ## Design philosophy
 
@@ -173,7 +173,7 @@ Daemon logs go to stdout/stderr of the process started by `outreach init`. Trans
 | Path | Description |
 |---|---|
 | `CLAUDE.md` | AI agent codebase guide |
-| `skill/SKILL.md` | Agent onboarding — how to use the CLI |
+| `skills/SKILL.md` | Agent onboarding — how to use the CLI |
 | `docs/design.md` | Engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
 | `docs/plan/memory-layer.md` | Memory/data layer design — schemas and data repo structure |
