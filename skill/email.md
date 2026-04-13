@@ -42,6 +42,19 @@ outreach email history --thread-id "18f1a2b3c4d5e6f7"
 
 One of `--contact-id`, `--address`, or `--thread-id` is required. All modes return full messages with body text. Contact and address modes return recent messages involving that email address in chronological order. Thread mode returns the full thread. Empty results return `{ address, thread_id, messages: [] }`.
 
+## Searching for emails
+
+```bash
+outreach email search --query "<gmail search query>" --limit 5
+```
+
+**Required**: `--query` — standard Gmail search syntax.
+**Optional**: `--limit <n>` (default 10) — max messages to fetch before grouping by thread.
+
+Returns thread-grouped results with metadata and snippets (no body). Use `email history --thread-id` to drill into a specific thread for full content.
+
+**When to use search vs history**: Search is for discovering threads when you don't have an identifier — e.g., the user mentions an inbound email but you have no contact ID, address, or thread ID. Once you have the `thread_id` from search results, use `email history --thread-id` for full content.
+
 ## Email-specific notes
 
 Email is asynchronous — the send and reply happen in different agent sessions. Use `outreach context` to gather reply context in a follow-up session. Use `email history` only when context is insufficient (e.g., need a specific thread or address not tied to a campaign).

@@ -12,6 +12,7 @@ import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
 import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
 import { registerHistoryCommand as registerEmailHistoryCommand } from "./commands/email/history.js";
+import { registerSearchCommand as registerEmailSearchCommand } from "./commands/email/search.js";
 
 const program = new Command();
 
@@ -33,6 +34,7 @@ registerHistoryCommand(sms);
 const email = program.command("email").description("Email / Gmail commands");
 registerEmailSendCommand(email);
 registerEmailHistoryCommand(email);
+registerEmailSearchCommand(email);
 
 // --- call subcommand group ---
 const call = program.command("call").description("Voice call commands");
