@@ -25,7 +25,7 @@ export function registerPlaceCommand(parent: Command): void {
     .option("--from <number>", "Caller ID phone number")
     .requiredOption("--campaign-id <id>", "Campaign ID — auto-logs attempt to campaign JSONL")
     .requiredOption("--contact-id <id>", "Contact ID — used for address resolution and campaign tracking")
-    .option("--objective <text>", "What this call should accomplish")
+    .requiredOption("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
     .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 300s)")
