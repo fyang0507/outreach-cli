@@ -54,13 +54,16 @@ outreach --help
 
 ## Usage
 
+All send commands use `--contact-id` to resolve the destination address from the contact record. `--to` is an optional override. `--campaign-id` and `--contact-id` are required on every send command.
+
 ```bash
 outreach health                            # check all channels
 
 # --- Calls ---
 outreach call init                         # start tunnel + daemon
 outreach call place \
-  --to "+15551234567" \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3" \
   --objective "Schedule a haircut for Thursday afternoon" \
   --persona "Be conversational and flexible on timing" \
   --hangup-when "Appointment is confirmed or no availability"
@@ -70,15 +73,15 @@ outreach call hangup --id <callId>         # end call early
 outreach call teardown                     # stop tunnel + daemon
 
 # --- SMS (iMessage) ---
-outreach sms send --to "+15551234567" --body "Following up" \
+outreach sms send --body "Following up" \
   --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3"
-outreach sms history --phone "+15551234567" --limit 20
+outreach sms history --contact-id "c_a1b2c3" --limit 20
 
 # --- Email (Gmail) ---
-outreach email send --to "recipient@example.com" \
+outreach email send \
   --subject "Following up" --body "Hi, just checking in." \
   --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3"
-outreach email history --address "recipient@example.com" --limit 20
+outreach email history --contact-id "c_a1b2c3" --limit 20
 outreach email history --thread-id "18f1a2b3c4d5e6f7"  # full thread with bodies
 
 # --- Cross-channel context ---
@@ -117,15 +120,14 @@ The CLI produces raw data (transcripts, campaign attempt entries). An external *
   transcripts/     # call transcripts
 ```
 
-The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI's only integration point is `--campaign` on `call place`, which auto-logs call attempts to the campaign JSONL.
-
-See `docs/plan/memory-layer.md` for the full data model design, including contact schema, campaign event types (attempt/outcome/decision), and channel-specific schemas for future SMS/email support.
+The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — all send commands (`call place`, `sms send`, `email send`) require `--campaign-id` and `--contact-id`, and auto-log attempt entries to the campaign JSONL.
 
 ## Project structure
 
 ```
 src/
   cli.ts                         # CLI entrypoint
+  contacts.ts                    # Contact interface + address resolution
   config.ts                      # .env secrets loader
   appConfig.ts                   # outreach.config.yaml loader
   runtime.ts                     # ~/.outreach/runtime.json state
