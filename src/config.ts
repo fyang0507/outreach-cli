@@ -1,6 +1,9 @@
 import { config } from "dotenv";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
-config({ quiet: true });
+const __dirname = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(__dirname, "..", ".env"), quiet: true });
 
 /**
  * Environment config — secrets and infrastructure only.

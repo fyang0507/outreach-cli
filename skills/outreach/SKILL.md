@@ -1,21 +1,22 @@
 ---
-name: outreach-cli
-description: Outreach CLI for calls, SMS, and email
+name: outreach
+description: Omnichannel outreach — calls, SMS, email, and calendar (Google Calendar). Campaign lifecycle, contact management, and cross-channel context via the outreach CLI.
 ---
 
-Tool for making phone calls, sending SMS (iMessage), and sending email (Gmail) on behalf of a user. The voice agent (Gemini Live) handles calls autonomously — you provide the objective and persona, then monitor via transcript. SMS and email are stateless fire-and-forget. The `context` command assembles cross-channel briefings from campaign data + recent messages.
+Omnichannel outreach capability — voice calls (Twilio + Gemini Live), SMS (iMessage), email (Gmail), and calendar (Google Calendar) through a unified CLI. Covers both the tool (CLI commands for sending, monitoring, and querying) and the protocol (campaign lifecycle, contact management, outcome tracking, cross-channel context assembly).
 
 **Channel-specific references** (load only the channel you need):
 - [call.md](./call.md) — voice calls via Twilio + Gemini Live
 - [sms.md](./sms.md) — SMS via iMessage
 - [email.md](./email.md) — email via Gmail
+- [calendar.md](./calendar.md) — calendar events via Google Calendar
 
 ## Prerequisites
 
 Before any outreach, check system health and initialize the data repo:
 
 ```bash
-outreach health        # validates data repo, shows readiness of all channels (call, sms, email)
+outreach health        # validates data repo, shows readiness of all channels (call, sms, email, calendar)
 ```
 
 `health` returns `data_repo.path` in its JSON output — use this as `$DATA_REPO` for all file operations below. It validates the data repo exists and is in sync with remote, and ensures the directory structure is created.
@@ -129,7 +130,7 @@ Sync the data repo with git directly.
 
 ## Identifier model
 
-All send commands (`call place`, `sms send`, `email send`) share a unified identifier pattern:
+All send commands (`call place`, `sms send`, `email send`) and calendar commands (`calendar add`, `calendar remove`) share a unified identifier pattern:
 
 - **`--campaign-id`** + **`--contact-id`** are required on every send command. The CLI resolves the channel-appropriate address from the contact record.
 - **`--to`** is an optional override for when the agent needs to reach a different address than what's on file.
@@ -212,7 +213,27 @@ Between sessions, the user may receive callbacks, emails, or have in-person conv
 
 When the campaign objective is resolved, append a `decision` entry with `chosen` (contact ID), `reason`, and `resolution`. A decision does not close the campaign — if the user later cancels or changes plans, append an `amendment` entry (with `action`: `cancelled`, `rescheduled`, or `changed_provider`) and continue.
 
-### 5. Sync the data repo
+### 5. Create a calendar event (when applicable)
+
+When a decision involves a scheduled appointment or meeting, create a calendar event:
+
+```bash
+outreach calendar add \
+  --summary "Dental cleaning" \
+  --start "2026-04-22T14:00:00" \
+  --end "2026-04-22T15:00:00" \
+  --campaign-id "2026-04-15-dental-cleaning" \
+  --contact-id "c_a1b2c3"
+```
+
+The `event_id` is recorded in the campaign JSONL attempt entry and used for subsequent modifications.
+
+- **Rescheduling** (amendment with `action: "rescheduled"`): remove the old event, then add a new one with updated times. The old `event_id` is in the campaign attempt entry from the original `calendar add`.
+- **Cancelling** (amendment with `action: "cancelled"`): remove the event using the stored `event_id`.
+
+See [calendar.md](./calendar.md) for full command reference.
+
+### 6. Sync the data repo
 
 After all updates are written, sync the data repo with git.
 

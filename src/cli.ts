@@ -13,12 +13,14 @@ import { registerHistoryCommand } from "./commands/sms/history.js";
 import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
 import { registerHistoryCommand as registerEmailHistoryCommand } from "./commands/email/history.js";
 import { registerSearchCommand as registerEmailSearchCommand } from "./commands/email/search.js";
+import { registerAddCommand as registerCalendarAddCommand } from "./commands/calendar/add.js";
+import { registerRemoveCommand as registerCalendarRemoveCommand } from "./commands/calendar/remove.js";
 
 const program = new Command();
 
 program
   .name("outreach")
-  .description("Agent-native outreach CLI — calls, SMS, email")
+  .description("Agent-native outreach CLI — calls, SMS, email, calendar")
   .version("0.1.0");
 
 // --- top-level commands ---
@@ -35,6 +37,11 @@ const email = program.command("email").description("Email / Gmail commands");
 registerEmailSendCommand(email);
 registerEmailHistoryCommand(email);
 registerEmailSearchCommand(email);
+
+// --- calendar subcommand group ---
+const calendar = program.command("calendar").description("Google Calendar commands");
+registerCalendarAddCommand(calendar);
+registerCalendarRemoveCommand(calendar);
 
 // --- call subcommand group ---
 const call = program.command("call").description("Voice call commands");

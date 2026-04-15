@@ -1,5 +1,8 @@
 import { config } from "dotenv";
-config({ quiet: true });
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+const __dotdir = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(__dotdir, "..", "..", ".env"), quiet: true });
 
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
