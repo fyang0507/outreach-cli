@@ -1,5 +1,5 @@
 /**
- * Copies skills/outreach-cli/ to <data_repo_path>/.agents/skills/outreach-cli/
+ * Copies skills/outreach/ to <data_repo_path>/.agents/skills/outreach/
  * so the agent workspace always has skill docs matching the current CLI build.
  */
 
@@ -13,7 +13,7 @@ if (dataRepo.startsWith("~/")) {
   dataRepo = join(process.env.HOME, dataRepo.slice(2));
 }
 
-const dest = join(dataRepo, ".agents", "skills", "outreach-cli");
+const dest = join(dataRepo, ".agents", "skills", "outreach");
 mkdirSync(dest, { recursive: true });
-cpSync("skills/outreach-cli", dest, { recursive: true });
+cpSync("skills/outreach", dest, { recursive: true });
 console.log(`Skills synced → ${dest}`);

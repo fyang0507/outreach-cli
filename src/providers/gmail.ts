@@ -1,27 +1,6 @@
 import { google, gmail_v1 } from "googleapis";
-import { OAuth2Client } from "google-auth-library";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
-import { createServer } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { execSync } from "node:child_process";
-import { outreachConfig } from "../config.js";
-import { loadAppConfig } from "../appConfig.js";
-
-// --- Constants ---
-
-const SCOPES = [
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.readonly",
-];
-const REDIRECT_PORT = 8089;
-const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth2callback`;
-
-// Token stored in data repo so it syncs across machines via git
-async function getTokenPath(): Promise<string> {
-  const config = await loadAppConfig();
-  return join(config.data_repo_path, "outreach", "gmail-token.json");
-}
+import { getAuthClient, checkGoogleAuth, getTokenPath } from "./googleAuth.js";
 
 // --- Types ---
 
@@ -64,84 +43,7 @@ export interface EmailThread {
   messages: EmailSummary[];
 }
 
-// --- Auth + token management ---
-
-function createOAuth2Client(): OAuth2Client {
-  if (!outreachConfig.GMAIL_CLIENT_ID || !outreachConfig.GMAIL_CLIENT_SECRET) {
-    throw new Error(
-      "GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET must be set in .env",
-    );
-  }
-  return new google.auth.OAuth2(
-    outreachConfig.GMAIL_CLIENT_ID,
-    outreachConfig.GMAIL_CLIENT_SECRET,
-    REDIRECT_URI,
-  );
-}
-
-async function loadStoredToken(client: OAuth2Client): Promise<boolean> {
-  try {
-    const tokenPath = await getTokenPath();
-    const content = await readFile(tokenPath, "utf-8");
-    const tokens = JSON.parse(content);
-    client.setCredentials(tokens);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function saveToken(client: OAuth2Client): Promise<void> {
-  const tokenPath = await getTokenPath();
-  await mkdir(dirname(tokenPath), { recursive: true });
-  await writeFile(tokenPath, JSON.stringify(client.credentials), "utf-8");
-}
-
-async function authorizeInteractive(client: OAuth2Client): Promise<void> {
-  const authUrl = client.generateAuthUrl({
-    access_type: "offline",
-    scope: SCOPES,
-    prompt: "consent",
-  });
-
-  process.stderr.write(`\nAuthorize Gmail access: ${authUrl}\n`);
-
-  // Auto-open browser on macOS
-  try {
-    execSync(`open "${authUrl}"`, { stdio: "ignore" });
-    process.stderr.write("Browser opened. Waiting for callback...\n");
-  } catch {
-    process.stderr.write("Open the URL above in your browser.\n");
-  }
-
-  const code = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      server.close();
-      reject(new Error("OAuth callback timed out after 60s"));
-    }, 60_000);
-
-    const server = createServer((req, res) => {
-      const url = new URL(req.url ?? "/", `http://localhost:${REDIRECT_PORT}`);
-      const code = url.searchParams.get("code");
-      if (url.pathname === "/oauth2callback" && code) {
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end("<h3>Authorization successful. You can close this tab.</h3>");
-        clearTimeout(timeout);
-        server.close();
-        resolve(code);
-      } else {
-        res.writeHead(400);
-        res.end("Missing code parameter");
-      }
-    });
-
-    server.listen(REDIRECT_PORT);
-  });
-
-  const { tokens } = await client.getToken(code);
-  client.setCredentials(tokens);
-  await saveToken(client);
-}
+// --- Auth + client ---
 
 // Module-level cache
 let _gmailClient: gmail_v1.Gmail | null = null;
@@ -149,18 +51,7 @@ let _gmailClient: gmail_v1.Gmail | null = null;
 export async function getGmailClient(): Promise<gmail_v1.Gmail> {
   if (_gmailClient) return _gmailClient;
 
-  const auth = createOAuth2Client();
-  const loaded = await loadStoredToken(auth);
-
-  if (!loaded) {
-    await authorizeInteractive(auth);
-  }
-
-  // Auto-persist on token refresh
-  auth.on("tokens", async () => {
-    await saveToken(auth);
-  });
-
+  const auth = await getAuthClient();
   _gmailClient = google.gmail({ version: "v1", auth });
   return _gmailClient;
 }
@@ -171,25 +62,11 @@ export async function checkGmailAuth(): Promise<{
   hint?: string;
   email?: string;
 }> {
-  if (!outreachConfig.GMAIL_CLIENT_ID || !outreachConfig.GMAIL_CLIENT_SECRET) {
-    return {
-      ok: false,
-      error: "credentials_missing",
-      hint: "Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in .env",
-    };
-  }
-
-  const auth = createOAuth2Client();
-  const loaded = await loadStoredToken(auth);
-  if (!loaded) {
-    return {
-      ok: false,
-      error: "not_authorized",
-      hint: "Run 'outreach email send' or 'outreach email history' to trigger OAuth flow",
-    };
-  }
+  const googleAuth = await checkGoogleAuth();
+  if (!googleAuth.ok) return googleAuth;
 
   try {
+    const auth = await getAuthClient();
     const gmail = google.gmail({ version: "v1", auth });
     const profile = await gmail.users.getProfile({ userId: "me" });
     return { ok: true, email: profile.data.emailAddress ?? undefined };

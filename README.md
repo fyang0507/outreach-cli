@@ -1,14 +1,15 @@
 # Outreach CLI
 
-Omnichannel outreach CLI for AI agents — voice calls, SMS, and email through a unified interface. An orchestrator agent delegates tasks to sub-agents, each using this CLI to reach contacts, gather context across channels, and track campaign progress.
+Omnichannel outreach CLI for AI agents — voice calls, SMS, email, and calendar through a unified interface. An orchestrator agent delegates tasks to sub-agents, each using this CLI to reach contacts, gather context across channels, and track campaign progress.
 
-Three channels, one contact model:
+Four channels, one contact model:
 
 | Channel | Provider | How it works |
 |---|---|---|
 | **Call** | Twilio + Gemini Live API | Voice-native model handles STT, reasoning, and TTS autonomously with sub-1s latency |
 | **SMS** | iMessage (AppleScript + Messages DB) | Fire-and-forget send, local message history via `better-sqlite3` |
 | **Email** | Gmail API (OAuth2 + nodemailer) | Send with threading/reply-all/attachments, search, thread-grouped history |
+| **Calendar** | Google Calendar API (OAuth2) | Add/remove events, shared auth with Gmail |
 
 All channels share the same `--campaign-id` + `--contact-id` pattern — the CLI resolves the right address (phone, sms_phone, or email) from the contact record. `outreach context` assembles a cross-channel briefing from campaign events + recent SMS and email threads.
 
@@ -26,7 +27,7 @@ All channels share the same `--campaign-id` + `--contact-id` pattern — the CLI
 |---|---|---|
 | Twilio | Account SID, Auth Token, verified phone number | [Twilio Console](https://console.twilio.com/) — verify your personal number under [Verified Caller IDs](https://console.twilio.com/us1/develop/phone-numbers/manage/verified) |
 | Google AI | Generative AI API key | [Google AI Studio](https://aistudio.google.com/apikey) |
-| Gmail | OAuth 2.0 Client ID and Secret | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) — create an OAuth 2.0 Client ID (Desktop app type), enable the Gmail API |
+| Gmail + Calendar | OAuth 2.0 Client ID and Secret | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) — create an OAuth 2.0 Client ID (Desktop app type), enable the Gmail API and Google Calendar API |
 
 ## Setup
 
@@ -80,14 +81,16 @@ The rest (Gemini model/voice/VAD for calls, default persona, thinking level) shi
 
 ```bash
 outreach --version
-outreach health    # checks data repo + readiness of all channels (call, sms, email)
+outreach health    # checks data repo + readiness of all channels (call, sms, email, calendar)
 ```
 
 `health` validates the data repo exists, creates the directory structure if needed, and reports per-channel readiness. Fix any errors it reports before proceeding.
 
-### 5. Gmail first-time auth
+### 5. Google first-time auth
 
-The first time you use an email command, the CLI triggers an interactive OAuth flow — it opens a browser for Google sign-in, spins up a local callback server on port 8089, and exchanges the authorization code for tokens. The token is stored at `<data_repo_path>/outreach/gmail-token.json` and auto-refreshes on subsequent runs. It syncs across machines via git along with the rest of the data repo.
+The first time you use a Gmail or Calendar command, the CLI triggers an interactive OAuth flow — it opens a browser for Google sign-in, spins up a local callback server on port 8089, and exchanges the authorization code for tokens. The token is stored at `<data_repo_path>/outreach/gmail-token.json` and auto-refreshes on subsequent runs. It syncs across machines via git along with the rest of the data repo.
+
+The token covers both Gmail and Calendar scopes. If you previously authorized Gmail only, delete the token file and re-run any Google-backed command to re-authorize with the full scope set.
 
 ## Usage
 
@@ -122,6 +125,16 @@ outreach sms send \
 outreach email send \
   --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" \
   --subject "Following up" --body "Hi, wanted to follow up on scheduling."
+
+# --- Calendar ---
+outreach calendar add \
+  --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" \
+  --summary "Dental cleaning" \
+  --start "2026-04-22T14:00:00" --end "2026-04-22T15:00:00"
+
+outreach calendar remove \
+  --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" \
+  --event-id "abc123xyz"
 ```
 
 ### Reading history across channels
@@ -147,7 +160,7 @@ outreach call teardown                     # clean up when done
 
 Multiple calls can run concurrently — each `call place` creates an independent session.
 
-For agent integration details — campaign workflows, data model, post-action patterns — see `skills/outreach-cli/SKILL.md`. Channel-specific references: `skills/outreach-cli/call.md`, `skills/outreach-cli/sms.md`, `skills/outreach-cli/email.md`. These skill files are the source of truth — `npm run build` copies them to `<data_repo>/.agents/skills/outreach-cli/` so the agent workspace always has docs matching the CLI version.
+For agent integration details — campaign workflows, data model, post-action patterns — see `skills/outreach/SKILL.md`. Channel-specific references: `skills/outreach/call.md`, `skills/outreach/sms.md`, `skills/outreach/email.md`, `skills/outreach/calendar.md`. These skill files are the source of truth — `npm run build` copies them to `<data_repo>/.agents/skills/outreach/` so the agent workspace always has docs matching the CLI version.
 
 ## Data layer
 
@@ -160,7 +173,7 @@ The CLI produces raw data (transcripts, campaign attempt entries). An external *
   transcripts/     # call transcripts (auto-saved by CLI)
 ```
 
-The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/outreach-cli/SKILL.md` for schemas and conventions.
+The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/outreach/SKILL.md` for schemas and conventions.
 
 ## Design philosophy
 
@@ -184,10 +197,11 @@ The CLI wraps **infrastructure complexity** — Twilio telephony, Gemini Live vo
                               ┌─ Daemon (call only) ─ Twilio Media Streams <-> Audio Bridge <-> Gemini Live
 Orchestrator Agent -> CLI  ───┼─ iMessage provider (AppleScript + Messages DB)
                               ├─ Gmail provider (OAuth2 + Gmail API)
+                              ├─ Google Calendar provider (OAuth2 + Calendar API)
                               └─ [not covered in outreach CLI] Data I/O (campaigns, contacts, transcripts)
 ```
 
-Each channel has its own provider. Calls are the most complex — they require a background daemon that bridges Twilio's media streams to Gemini Live with real-time audio transcoding. SMS and email are direct (no daemon, no background process).
+Each channel has its own provider. Calls are the most complex — they require a background daemon that bridges Twilio's media streams to Gemini Live with real-time audio transcoding. SMS, email, and calendar are direct (no daemon, no background process).
 
 | Layer | Path | Role |
 |---|---|---|
@@ -203,7 +217,11 @@ Each channel has its own provider. Calls are the most complex — they require a
 | **SMS** | | |
 | Messages | `src/providers/messages.ts` | iMessage DB reader (`better-sqlite3`) + AppleScript sender |
 | **Email** | | |
-| Gmail | `src/providers/gmail.ts` | Gmail API client (OAuth2, send, history, search) |
+| Gmail | `src/providers/gmail.ts` | Gmail API client (send, history, search) |
+| **Calendar** | | |
+| Google Calendar | `src/providers/gcalendar.ts` | Calendar API client (add, remove) |
+| **Shared Google Auth** | | |
+| Google Auth | `src/providers/googleAuth.ts` | Shared OAuth2 (Gmail + Calendar scopes, token management) |
 
 ## Project structure
 
@@ -222,9 +240,12 @@ src/
     call/{init,teardown,place,listen,status,hangup}.ts
     sms/{send,history}.ts
     email/{send,history,search}.ts
+    calendar/{add,remove}.ts
   providers/
     messages.ts                  # iMessage DB reader + AppleScript sender
+    googleAuth.ts                # Shared Google OAuth2 (Gmail + Calendar)
     gmail.ts                     # Gmail API client
+    gcalendar.ts                 # Google Calendar API client
   daemon/
     server.ts                    # HTTP + WS server, IPC handler
     mediaStreamsBridge.ts        # Twilio <-> Gemini audio bridge
@@ -238,13 +259,14 @@ src/
   logs/
     sessionLog.ts                # JSONL file helpers
 scripts/
-  sync-skills.js                 # Build hook — syncs skills/outreach-cli/ → <data_repo>/.agents/skills/outreach-cli/
+  sync-skills.js                 # Build hook — syncs skills/outreach/ → <data_repo>/.agents/skills/outreach/
 skills/
-  outreach-cli/
+  outreach/
     SKILL.md                     # Agent onboarding — campaign framework + data model
     call.md                      # Agent reference — call channel
     sms.md                       # Agent reference — SMS channel
     email.md                     # Agent reference — email channel
+    calendar.md                  # Agent reference — calendar channel
 prompts/
   voice-agent.md                 # Static voice agent instructions (phone mechanics)
 ```
@@ -255,7 +277,7 @@ prompts/
 npm run build                    # compile TypeScript -> dist/ + sync skills/ → data repo
 ```
 
-SMS and email commands work immediately after build — no daemon needed. For call development, start the call infrastructure first:
+SMS, email, and calendar commands work immediately after build — no daemon needed. For call development, start the call infrastructure first:
 
 ```bash
 outreach call init               # start ngrok + daemon
@@ -272,10 +294,11 @@ All CLI output is JSON via `outputJson()` / `outputError()`. Exit codes: 0=succe
 | Path | Description |
 |---|---|
 | `CLAUDE.md` | AI agent codebase guide |
-| `skills/outreach-cli/SKILL.md` | Agent onboarding — campaign framework + data model |
-| `skills/outreach-cli/call.md` | Agent reference — call channel |
-| `skills/outreach-cli/sms.md` | Agent reference — SMS channel |
-| `skills/outreach-cli/email.md` | Agent reference — email channel |
+| `skills/outreach/SKILL.md` | Agent onboarding — campaign framework + data model |
+| `skills/outreach/call.md` | Agent reference — call channel |
+| `skills/outreach/sms.md` | Agent reference — SMS channel |
+| `skills/outreach/email.md` | Agent reference — email channel |
+| `skills/outreach/calendar.md` | Agent reference — calendar channel |
 | `docs/done/design.md` | Initial engineering design document |
 | `docs/done/tuning-reference.md` | Gemini config parameter reference |
 | `docs/done/memory-layer.md` | Data layer design — schemas and data repo structure |

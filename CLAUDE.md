@@ -1,6 +1,6 @@
 # Outreach CLI
 
-Agent-native CLI for real-world outreach — calls, SMS, email. The CLI is a tool for AI agents, not humans. An orchestrator agent delegates tasks to sub-agents, each using this CLI to make calls, send messages, or send emails.
+Agent-native CLI for real-world outreach — calls, SMS, email, calendar. The CLI is a tool for AI agents, not humans. An orchestrator agent delegates tasks to sub-agents, each using this CLI to make calls, send messages, or send emails.
 
 ## Quick start
 
@@ -12,17 +12,18 @@ node dist/cli.js --help
 
 ## Architecture
 
-Three channel providers behind a unified CLI:
+Four channel providers behind a unified CLI:
 
 ```
                               ┌─ Daemon ─ Twilio Media Streams ↔ Audio Bridge ↔ Gemini Live API
 Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + Messages DB)
                               ├─ Gmail provider (OAuth2 + Gmail API)
+                              ├─ Google Calendar provider (OAuth2 + Calendar API)
                               └─ Data I/O (campaigns, contacts, transcripts)
 ```
 
 **Shared:**
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
 - **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
 
 **Call channel** (Twilio + Gemini Live):
@@ -36,7 +37,10 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 - **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound.
 
 **Email channel** (Gmail):
-- **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — OAuth2 auth + token management, send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), search (query → thread-grouped metadata), health check.
+- **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), search (query → thread-grouped metadata), health check. Uses shared Google OAuth2 auth from `googleAuth.ts`.
+
+**Calendar channel** (Google Calendar):
+- **Google Calendar provider** (`src/providers/gcalendar.ts`): Calendar API client — add events, remove events, health check. Uses shared Google OAuth2 auth from `googleAuth.ts`.
 
 ## Key files
 
@@ -63,20 +67,25 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/commands/email/send.ts` | `outreach email send` — send email via Gmail + log campaign attempt |
 | `src/commands/email/history.ts` | `outreach email history` — read email thread or address history |
 | `src/commands/email/search.ts` | `outreach email search` — Gmail query search, returns thread-grouped metadata |
+| `src/commands/calendar/add.ts` | `outreach calendar add` — create Google Calendar event + log campaign attempt |
+| `src/commands/calendar/remove.ts` | `outreach calendar remove` — delete Google Calendar event + log campaign attempt |
 | `src/providers/messages.ts` | Messages DB reader + AppleScript sender + phone normalization |
-| `src/providers/gmail.ts` | Gmail API client: OAuth2 auth, send, history, search, health check |
+| `src/providers/googleAuth.ts` | Shared Google OAuth2 auth — token management, interactive flow, cached client |
+| `src/providers/gmail.ts` | Gmail API client: send, history, search, health check |
+| `src/providers/gcalendar.ts` | Google Calendar API client: add event, remove event, health check |
 | `src/logs/sessionLog.ts` | JSONL file helpers for campaign logs, contacts, and transcripts |
 | `src/output.ts` | `outputJson()` / `outputError()` — all CLI output is JSON |
 | `src/exitCodes.ts` | Exit code constants (0-4) |
-| `scripts/sync-skills.js` | Build hook — copies `skills/outreach-cli/` → `<data_repo>/.agents/skills/outreach-cli/` to keep agent workspace in sync |
+| `scripts/sync-skills.js` | Build hook — copies `skills/outreach/` → `<data_repo>/.agents/skills/outreach/` to keep agent workspace in sync |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
 | `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
-| `skills/outreach-cli/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
-| `skills/outreach-cli/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
-| `skills/outreach-cli/sms.md` | Agent reference — SMS channel (iMessage) |
-| `skills/outreach-cli/email.md` | Agent reference — email channel (Gmail) |
+| `skills/outreach/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
+| `skills/outreach/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
+| `skills/outreach/sms.md` | Agent reference — SMS channel (iMessage) |
+| `skills/outreach/email.md` | Agent reference — email channel (Gmail) |
+| `skills/outreach/calendar.md` | Agent reference — calendar channel (Google Calendar) |
 
-Skills are the source of truth in this repo. `npm run build` copies them to `<data_repo_path>/.agents/skills/outreach-cli/` so the agent workspace always has docs matching the current CLI version.
+Skills are the source of truth in this repo. `npm run build` copies them to `<data_repo_path>/.agents/skills/outreach/` so the agent workspace always has docs matching the current CLI version.
 
 ## Configuration
 
@@ -89,7 +98,7 @@ Skills are the source of truth in this repo. `npm run build` copies them to `<da
 
 ## Identifier model
 
-All send commands (`call place`, `sms send`, `email send`) share a unified identifier pattern. `--contact-id` is the universal person identifier — the CLI resolves the channel-appropriate address from the contact record. `--to` is an optional override for when the agent needs to reach a different address than what's on file.
+All send commands (`call place`, `sms send`, `email send`) and calendar commands (`calendar add`, `calendar remove`) share a unified identifier pattern. `--contact-id` is the universal person identifier — the CLI resolves the channel-appropriate address from the contact record. `--to` is an optional override for when the agent needs to reach a different address than what's on file.
 
 **Flags by command:**
 
@@ -135,9 +144,21 @@ outreach email send \
   --body "Hi, wanted to follow up on scheduling."
 outreach email history --contact-id "c_a1b2c3"
 outreach email search --query "from:dentist subject:scheduling"
+
+# --- Calendar ---
+outreach calendar add \
+  --summary "Dental cleaning" \
+  --start "2026-04-22T14:00:00" \
+  --end "2026-04-22T15:00:00" \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3"
+outreach calendar remove \
+  --event-id "abc123xyz" \
+  --campaign-id "2026-04-15-dental" \
+  --contact-id "c_a1b2c3"
 ```
 
-The voice agent handles calls autonomously. Use `call listen` to monitor progress and `call hangup` to end early. SMS and email are fire-and-forget — replies arrive in later sessions.
+The voice agent handles calls autonomously. Use `call listen` to monitor progress and `call hangup` to end early. SMS and email are fire-and-forget — replies arrive in later sessions. Calendar commands create/remove events on Google Calendar.
 
 ## Design principles
 
@@ -175,7 +196,8 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `skills/outreach-cli/SKILL.md` | Agent-facing user guide — campaign framework |
-| `skills/outreach-cli/call.md` | Agent-facing user guide — call channel |
-| `skills/outreach-cli/sms.md` | Agent-facing user guide — SMS channel |
-| `skills/outreach-cli/email.md` | Agent-facing user guide — email channel |
+| `skills/outreach/SKILL.md` | Agent-facing user guide — campaign framework |
+| `skills/outreach/call.md` | Agent-facing user guide — call channel |
+| `skills/outreach/sms.md` | Agent-facing user guide — SMS channel |
+| `skills/outreach/email.md` | Agent-facing user guide — email channel |
+| `skills/outreach/calendar.md` | Agent-facing user guide — calendar channel |
