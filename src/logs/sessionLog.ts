@@ -154,7 +154,7 @@ export async function findLatestOutboundAttempt(
   contactId: string,
   channel: string,
 ): Promise<OutboundAttempt | null> {
-  let data: { events: Record<string, unknown>[] };
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
   try {
     data = await readCampaignEvents(campaignId);
   } catch (err) {
@@ -162,9 +162,13 @@ export async function findLatestOutboundAttempt(
     throw err;
   }
 
+  // Check all lines including header — campaign files created by direct send
+  // may not have a separate header line, so the first event lands in `header`.
+  const allLines = [data.header, ...data.events];
+
   // Iterate in reverse to find the latest matching sent attempt
-  for (let i = data.events.length - 1; i >= 0; i--) {
-    const e = data.events[i]!;
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const e = allLines[i]!;
     if (
       e.type === "attempt" &&
       e.contact_id === contactId &&

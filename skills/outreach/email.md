@@ -60,7 +60,7 @@ Returns thread-grouped results with metadata and snippets (no body). Use `email 
 By default, `email send` registers a sundial poll trigger that monitors for inbound replies and fires a callback when one arrives. This is automatic — no extra flags needed.
 
 - **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
-- **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher (sundial `--refresh`). The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
+- **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
 - **Manual check**: `outreach reply-check --campaign-id X --contact-id Y --channel email` — returns `{ replied: true/false }`. Exit 0 = reply found, exit 1 = no reply. Designed as a sundial poll trigger but can be run manually.
 - **Reply detection**: Any non-self message in the thread after the watermark counts — including CC'd recipients, auto-replies, etc. The agent reads the full thread in the callback and decides what's actionable.
 - **Output**: The `watch` field in send output shows watcher status: `created`, `reactivated`, `updated`, `skipped` (no watch config), `failed` (sundial unavailable), or `null` (fire-and-forget).
