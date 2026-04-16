@@ -71,14 +71,27 @@ export async function checkGmailAuth(): Promise<{
     const profile = await gmail.users.getProfile({ userId: "me" });
     return { ok: true, email: profile.data.emailAddress ?? undefined };
   } catch (err) {
-    const msg = (err as Error).message;
     const tokenPath = await getTokenPath();
+    const status = (err as { code?: number }).code;
+    const msg = (err as Error).message;
+    if (status === 401 || msg.includes("invalid_grant")) {
+      return {
+        ok: false,
+        error: "token_expired",
+        hint: `Token expired or revoked. Delete ${tokenPath} and re-authorize.`,
+      };
+    }
+    if (status === 403) {
+      return {
+        ok: false,
+        error: "insufficient_scope",
+        hint: `Gmail scope missing or access denied. Delete ${tokenPath} and re-authorize to grant Gmail access.`,
+      };
+    }
     return {
       ok: false,
       error: "auth_failed",
-      hint: msg.includes("invalid_grant")
-        ? `Token expired. Delete ${tokenPath} and re-authorize`
-        : `Gmail auth check failed: ${msg}`,
+      hint: `Gmail auth check failed: ${msg}. Run 'outreach health' to diagnose.`,
     };
   }
 }

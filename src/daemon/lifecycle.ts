@@ -39,7 +39,7 @@ async function waitForHealth(timeoutMs: number): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("Daemon failed to start within timeout");
+  throw new Error(`Daemon not responding on port ${port} after ${timeoutMs / 1000}s. Try 'outreach call teardown' then 'outreach call init'.`);
 }
 
 export async function ensureDaemon(): Promise<void> {

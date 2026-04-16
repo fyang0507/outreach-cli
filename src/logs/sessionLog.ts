@@ -144,6 +144,14 @@ export async function readContact(
 ): Promise<Contact> {
   const { contactsDir } = await getDataDirs();
   const filePath = join(contactsDir, `${contactId}.json`);
-  const content = await readFile(filePath, "utf-8");
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Contact '${contactId}' not found at ${filePath}. Check the contact ID or create the contact record.`);
+    }
+    throw err;
+  }
   return JSON.parse(content) as Contact;
 }

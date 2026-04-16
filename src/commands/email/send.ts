@@ -5,6 +5,15 @@ import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 
+function withEmailHint(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("invalid_grant") || lower.includes("401"))
+    return `${msg}. Gmail token may be expired. Run 'outreach health' to check, then re-authorize if needed.`;
+  if (lower.includes("recipient") || lower.includes("address"))
+    return `${msg}. Check the --to address or contact email field.`;
+  return `${msg}. Run 'outreach health' to check email channel readiness.`;
+}
+
 export function registerSendCommand(parent: Command): void {
   parent
     .command("send")
@@ -61,7 +70,7 @@ export function registerSendCommand(parent: Command): void {
         } catch (err) {
           outputError(
             OPERATION_FAILED,
-            `Failed to send email: ${(err as Error).message}`,
+            withEmailHint(`Failed to send email: ${(err as Error).message}`),
           );
           process.exit(OPERATION_FAILED);
           return;

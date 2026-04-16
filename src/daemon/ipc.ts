@@ -11,7 +11,7 @@ export function sendToDaemon(method: string, params: object, timeoutMs?: number)
 
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`IPC timeout: daemon did not respond within ${timeout / 1000}s`));
+      reject(new Error(`Daemon not responding (timed out after ${timeout / 1000}s). Try 'outreach call teardown' then 'outreach call init'.`));
     }, timeout);
 
     socket.on("connect", () => {
@@ -28,18 +28,19 @@ export function sendToDaemon(method: string, params: object, timeoutMs?: number)
         try {
           resolve(JSON.parse(line));
         } catch {
-          reject(new Error("Invalid JSON from daemon"));
+          reject(new Error("Daemon returned invalid response. Try 'outreach call teardown' then 'outreach call init'."));
         }
       }
     });
 
     socket.on("error", (err) => {
       clearTimeout(timer);
-      reject(
-        new Error(
-          `Cannot connect to daemon at ${SOCKET_PATH}: ${err.message}`,
-        ),
-      );
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ECONNREFUSED" || code === "ENOENT") {
+        reject(new Error("Daemon not running. Run 'outreach call init' to start it."));
+      } else {
+        reject(new Error(`Cannot connect to daemon: ${err.message}. Try 'outreach call teardown' then 'outreach call init'.`));
+      }
     });
   });
 }

@@ -116,14 +116,27 @@ export async function checkCalendarAuth(): Promise<{
     await calendar.events.list({ calendarId: "primary", maxResults: 1 });
     return { ok: true };
   } catch (err) {
-    const msg = (err as Error).message;
     const tokenPath = await getTokenPath();
+    const status = (err as { code?: number }).code;
+    const msg = (err as Error).message;
+    if (status === 401 || msg.includes("invalid_grant")) {
+      return {
+        ok: false,
+        error: "token_expired",
+        hint: `Token expired or revoked. Delete ${tokenPath} and re-authorize.`,
+      };
+    }
+    if (status === 403) {
+      return {
+        ok: false,
+        error: "insufficient_scope",
+        hint: `Calendar scope missing or access denied. Delete ${tokenPath} and re-authorize to grant calendar access.`,
+      };
+    }
     return {
       ok: false,
       error: "auth_failed",
-      hint: msg.includes("insufficient")
-        ? `Calendar scope missing. Delete ${tokenPath} and re-authorize to grant calendar access`
-        : `Calendar auth check failed: ${msg}`,
+      hint: `Calendar auth check failed: ${msg}. Run 'outreach health' to diagnose.`,
     };
   }
 }

@@ -38,7 +38,7 @@ export function registerStatusCommand(parent: Command): void {
         outputJson(result);
         process.exit(SUCCESS);
       } catch (err) {
-        outputError(INFRA_ERROR, `IPC error: ${(err as Error).message}`);
+        outputError(INFRA_ERROR, (err as Error).message);
         process.exit(INFRA_ERROR);
       }
     });

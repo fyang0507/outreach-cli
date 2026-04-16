@@ -4,6 +4,15 @@ import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, OPERATION_FAILED } from "../../exitCodes.js";
 
+function withCalendarHint(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("invalid_grant") || lower.includes("401"))
+    return `${msg}. Token may be expired. Run 'outreach health' to check, then re-authorize if needed.`;
+  if (lower.includes("not found") || lower.includes("404"))
+    return `${msg}. Event may have already been removed. Check the --event-id.`;
+  return `${msg}. Run 'outreach health' to check calendar readiness.`;
+}
+
 export function registerRemoveCommand(parent: Command): void {
   parent
     .command("remove")
@@ -23,7 +32,7 @@ export function registerRemoveCommand(parent: Command): void {
         } catch (err) {
           outputError(
             OPERATION_FAILED,
-            `Failed to remove calendar event: ${(err as Error).message}`,
+            withCalendarHint(`Failed to remove calendar event: ${(err as Error).message}`),
           );
           process.exit(OPERATION_FAILED);
           return;

@@ -44,7 +44,7 @@ async function waitForHealth(port: number, timeoutMs: number): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("Daemon failed to start within timeout");
+  throw new Error(`Daemon not responding on port ${port} after ${timeoutMs / 1000}s. Check daemon logs or try 'outreach call teardown' then 'outreach call init'.`);
 }
 
 // ---- E5: ngrok URL polling with backoff (replaces fixed sleep) ----
