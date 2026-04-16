@@ -6,7 +6,9 @@ const execFile = promisify(execFileCb);
 
 export interface WatchResult {
   schedule_id?: string;
-  status: "created" | "reactivated" | "updated" | "skipped" | "failed";
+  // "skipped"/"failed" are set by this module; any other value is sundial's
+  // status string passed through verbatim (e.g. "active", "refreshed").
+  status: "skipped" | "failed" | string;
   error?: string;
 }
 
@@ -77,7 +79,7 @@ export async function registerReplyWatch(opts: {
     const result = JSON.parse(stdout) as Record<string, unknown>;
     return {
       schedule_id: result.id as string | undefined,
-      status: result.status as "created" | "reactivated" | "updated",
+      status: result.status as string,
     };
   } catch (err) {
     const error = err as NodeJS.ErrnoException;

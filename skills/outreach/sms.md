@@ -37,7 +37,7 @@ By default, `sms send` registers a sundial poll trigger that monitors for inboun
 - **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
 - **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
 - **Manual check**: `outreach reply-check --campaign-id X --contact-id Y --channel sms` — returns `{ replied: true/false }`. Exit 0 = reply found, exit 1 = no reply. Designed as a sundial poll trigger but can be run manually.
-- **Output**: The `watch` field in send output shows watcher status: `created`, `reactivated`, `updated`, `skipped` (no watch config), `failed` (sundial unavailable), or `null` (fire-and-forget).
+- **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (sundial unavailable), or `{ schedule_id, status }` where `status` is sundial's verbatim status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
 
 ## SMS-specific notes
 

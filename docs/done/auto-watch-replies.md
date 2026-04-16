@@ -125,7 +125,9 @@ Registration: `registerReplyCheckCommand(program: Command)` following existing p
 ```typescript
 export interface WatchResult {
   schedule_id?: string;
-  status: "created" | "reactivated" | "updated" | "skipped" | "failed";
+  // "skipped"/"failed" are set by this module; any other value is sundial's
+  // status string passed through verbatim (e.g. "active", "refreshed").
+  status: "skipped" | "failed" | string;
   error?: string;
 }
 
@@ -164,14 +166,11 @@ export async function registerReplyWatch(opts: {
    ], { timeout: 10_000 });
    ```
 7. Parse JSON result:
-   - Success → return `{ schedule_id: result.id, status: result.status }` (sundial returns `"created"`, `"reactivated"`, or `"updated"`)
+   - Success → return `{ schedule_id: result.id, status: result.status }` — `result.status` is sundial's status string, passed through verbatim (e.g. `"active"` for a new schedule, `"refreshed"` when an existing one was updated).
    - ENOENT → `{ status: "failed", error: "sundial not installed" }`
    - Other error → `{ status: "failed", error }`
 
-Because `--refresh` is always passed, there is no duplicate rejection to handle. Sundial resolves the identity by `--name`:
-- No existing schedule with that name → `created`
-- Completed schedule with that name → `reactivated` (fresh countdown)
-- Active schedule with that name → `updated` (timeout refreshed, countdown reset)
+Because `--refresh` is always passed, there is no duplicate rejection to handle. Sundial resolves the identity by `--name` and reports whatever lifecycle status applies (e.g. a new schedule reports `"active"`, an updated one reports `"refreshed"`).
 
 ### 7. Wire auto-watch into SMS send
 
@@ -225,7 +224,7 @@ Changes:
    });
    ```
 
-**Design:** `watch: null` means explicitly opted out (`--fire-and-forget`). `watch: { status: "skipped" }` means no watch config. `created`/`reactivated`/`updated` are success states from sundial. `failed` means sundial was unavailable. The agent has full visibility but doesn't need to act on any of these — they're informational.
+**Design:** `watch: null` means explicitly opted out (`--fire-and-forget`). `watch: { status: "skipped" }` means no watch config. On success the status is sundial's verbatim value (e.g. `"active"`, `"refreshed"`). `failed` means sundial was unavailable. The agent has full visibility but doesn't need to act on any of these — they're informational.
 
 ### 8. Wire auto-watch into email send
 
@@ -257,11 +256,11 @@ Outreach-cli always passes `--refresh` when calling `sundial add`. The agent nev
 
 Because `--refresh` is always passed and watcher identity is keyed by `--name` (`outreach-{campaign}-{contact}-{channel}`), all three lifecycle scenarios resolve cleanly:
 
-| Scenario | What sundial does | Status returned |
+| Scenario | What sundial does | Status returned (sundial) |
 |---|---|---|
-| First send (no watcher) | Creates new poll schedule | `created` |
-| Re-send after reply (completed watcher) | Reactivates with fresh countdown | `reactivated` |
-| Re-send before reply (active watcher) | Updates in place, resets timeout | `updated` |
+| First send (no watcher) | Creates new poll schedule | `active` |
+| Re-send before reply (active watcher) | Updates in place, resets timeout | `refreshed` |
+| Re-send after completion | Reactivates with fresh countdown | (sundial-owned, see sundial docs) |
 
 No duplicate rejection, no error handling branches, no special cases. The watch module is stateless — it fires `sundial add --refresh` and reads the result.
 
@@ -285,11 +284,11 @@ No duplicate rejection, no error handling branches, no special cases. The watch 
 
 1. `npm run build` succeeds
 2. `outreach reply-check --campaign-id X --contact-id Y --channel sms` → exit 1 (no outbound)
-3. `outreach sms send --campaign-id X --contact-id Y --body "Hi"` → output includes `watch: { status: "created", schedule_id: "..." }`
+3. `outreach sms send --campaign-id X --contact-id Y --body "Hi"` → output includes `watch: { schedule_id: "...", status: "active" }` (sundial's verbatim status)
 4. `outreach sms send ... --fire-and-forget` → output has `watch: null`
 5. `sundial list --json` shows watcher after send (when sundial running)
 6. Reply from target phone → `outreach reply-check ...` → exit 0
 7. Same flow for email channel
 8. No `watch` in config → send works, `watch: { status: "skipped" }`
 9. Sundial not on PATH → send works, `watch: { status: "failed" }`
-10. Send twice to same contact → second send shows `watch: { status: "updated" }` (same schedule ID, timeout refreshed)
+10. Send twice to same contact → second send shows `watch: { status: "refreshed" }` (same schedule ID, timeout refreshed)
