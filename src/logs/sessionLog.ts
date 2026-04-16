@@ -139,6 +139,55 @@ export async function readCampaignEvents(
   return { header, events };
 }
 
+// --- Outbound attempt lookup ---
+
+export interface OutboundAttempt {
+  ts: string;
+  contact_id: string;
+  channel: string;
+  message_id?: string; // email only
+  thread_id?: string; // email only
+}
+
+export async function findLatestOutboundAttempt(
+  campaignId: string,
+  contactId: string,
+  channel: string,
+): Promise<OutboundAttempt | null> {
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
+  try {
+    data = await readCampaignEvents(campaignId);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+
+  // Check all lines including header — campaign files created by direct send
+  // may not have a separate header line, so the first event lands in `header`.
+  const allLines = [data.header, ...data.events];
+
+  // Iterate in reverse to find the latest matching sent attempt
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const e = allLines[i]!;
+    if (
+      e.type === "attempt" &&
+      e.contact_id === contactId &&
+      e.channel === channel &&
+      e.result === "sent"
+    ) {
+      return {
+        ts: e.ts as string,
+        contact_id: e.contact_id as string,
+        channel: e.channel as string,
+        message_id: e.message_id as string | undefined,
+        thread_id: e.thread_id as string | undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function readContact(
   contactId: string,
 ): Promise<Contact> {

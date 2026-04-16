@@ -48,12 +48,21 @@ export interface GeminiConfig {
   };
 }
 
+export interface WatchConfig {
+  enabled: boolean;
+  callback_command: string;
+  callback_prompt: string;
+  default_timeout_hours: number;
+  poll_interval_minutes: number;
+}
+
 export interface AppConfig {
   data_repo_path: string;
   identity: IdentityConfig;
   call: CallConfig;
   voice_agent: VoiceAgentConfig;
   gemini: GeminiConfig;
+  watch?: WatchConfig;
 }
 
 let _cached: AppConfig | null = null;
@@ -146,6 +155,29 @@ export async function loadAppConfig(): Promise<AppConfig> {
   const turnTaking = gemini.turn_taking as Record<string, unknown>;
   if (!turnTaking.activity_handling || typeof turnTaking.activity_handling !== "string") {
     throw new Error("outreach.config.yaml: gemini.turn_taking.activity_handling is required");
+  }
+
+  // Validate watch config (optional section)
+  if (config.watch != null) {
+    if (typeof config.watch !== "object") {
+      throw new Error("outreach.config.yaml: watch must be an object");
+    }
+    const watch = config.watch as Record<string, unknown>;
+    if (watch.enabled == null || typeof watch.enabled !== "boolean") {
+      watch.enabled = false;
+    }
+    if (!watch.callback_command || typeof watch.callback_command !== "string") {
+      throw new Error("outreach.config.yaml: watch.callback_command is required when watch section is present");
+    }
+    if (!watch.callback_prompt || typeof watch.callback_prompt !== "string") {
+      throw new Error("outreach.config.yaml: watch.callback_prompt is required when watch section is present");
+    }
+    if (watch.default_timeout_hours == null || typeof watch.default_timeout_hours !== "number") {
+      watch.default_timeout_hours = 72;
+    }
+    if (watch.poll_interval_minutes == null || typeof watch.poll_interval_minutes !== "number") {
+      watch.poll_interval_minutes = 2;
+    }
   }
 
   _cached = parsed as AppConfig;

@@ -4,6 +4,7 @@ import { resolveContactAddress } from "../../contacts.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
+import { registerReplyWatch, type WatchResult } from "../../watch.js";
 
 function withSmsHint(msg: string): string {
   const lower = msg.toLowerCase();
@@ -20,12 +21,14 @@ export function registerSendCommand(parent: Command): void {
     .requiredOption("--body <text>", "Message body")
     .requiredOption("--campaign-id <id>", "Campaign ID for tracking")
     .requiredOption("--contact-id <id>", "Contact ID for tracking")
+    .option("--fire-and-forget", "Skip reply watcher registration")
     .action(
       async (opts: {
         to?: string;
         body: string;
         campaignId: string;
         contactId: string;
+        fireAndForget?: boolean;
       }) => {
         // Resolve destination phone
         let normalized: string;
@@ -58,9 +61,40 @@ export function registerSendCommand(parent: Command): void {
           type: "attempt",
           channel: "sms",
           result: "sent",
+          await_reply: !opts.fireAndForget,
         });
 
-        outputJson({ to: normalized, status: "sent" });
+        // Register reply watcher (never blocks send)
+        let watchResult: WatchResult | null = null;
+        if (!opts.fireAndForget) {
+          try {
+            watchResult = await registerReplyWatch({
+              campaignId: opts.campaignId,
+              contactId: opts.contactId,
+              channel: "sms",
+            });
+            if (watchResult.schedule_id) {
+              await appendCampaignEvent(opts.campaignId, {
+                ts: isoNow(),
+                contact_id: opts.contactId,
+                type: "watch",
+                channel: "sms",
+                watch_schedule_id: watchResult.schedule_id,
+                watch_status: watchResult.status,
+              });
+            }
+          } catch {
+            watchResult = { status: "failed", error: "sundial unavailable" };
+          }
+        }
+
+        outputJson({
+          to: normalized,
+          status: "sent",
+          watch: opts.fireAndForget
+            ? null
+            : (watchResult ?? { status: "skipped" }),
+        });
         process.exit(SUCCESS);
       },
     );

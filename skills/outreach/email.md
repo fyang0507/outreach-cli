@@ -55,6 +55,16 @@ Returns thread-grouped results with metadata and snippets (no body). Use `email 
 
 **When to use search vs history**: Search is for discovering threads when you don't have an identifier — e.g., the user mentions an inbound email but you have no contact ID, address, or thread ID. Once you have the `thread_id` from search results, use `email history --thread-id` for full content.
 
+## Auto-watch for replies
+
+By default, `email send` registers a sundial poll trigger that monitors for inbound replies and fires a callback when one arrives. This is automatic — no extra flags needed.
+
+- **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
+- **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
+- **Manual check**: `outreach reply-check --campaign-id X --contact-id Y --channel email` — returns `{ replied: true/false }`. Exit 0 = reply found, exit 1 = no reply. Designed as a sundial poll trigger but can be run manually.
+- **Reply detection**: Any non-self message in the thread after the watermark counts — including CC'd recipients, auto-replies, etc. The agent reads the full thread in the callback and decides what's actionable.
+- **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (sundial unavailable), or `{ schedule_id, status }` where `status` is sundial's verbatim status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
+
 ## Email-specific notes
 
 Email is asynchronous — the send and reply happen in different agent sessions. Use `outreach context` to gather reply context in a follow-up session — it returns email history grouped by thread (`email_threads`), with each thread containing its full message list. To reply to a thread, use `--reply-to-id` with a message ID from the target thread. Use `email history` only when context is insufficient (e.g., need a specific thread or address not tied to a campaign).
