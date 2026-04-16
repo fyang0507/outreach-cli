@@ -88,9 +88,11 @@ watch:
   # Master switch. Must be explicitly true to activate watchers.
   enabled: false
   # Agent CLI invocation (the command prefix). The resolved prompt is appended
-  # as a single shell-quoted argument. The agent runs headless, so it must have
-  # permission to execute tools (read files, run CLI commands, send messages)
-  # without interactive approval. Use a mode that bypasses permission prompts:
+  # as a single shell-quoted argument. The working directory is automatically
+  # set to data_repo_path so the agent has access to skills and campaign data.
+  # The agent runs headless, so it must have permission to execute tools
+  # (read files, run CLI commands, send messages) without interactive approval.
+  # Use a mode that bypasses permission prompts:
   #   codex exec --yolo
   #   claude --dangerously-skip-permissions -p
   # Examples: "codex exec --yolo", "claude --dangerously-skip-permissions -p", "echo"

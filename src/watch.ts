@@ -47,7 +47,8 @@ export async function registerReplyWatch(opts: {
     .replace(/\{channel\}/g, opts.channel)
     .replace(/\{contact_name\}/g, opts.contactName ?? opts.contactId);
 
-  const callback = `${callback_command} ${shellQuote(prompt)}`;
+  // Run the agent from the data repo so it has access to skills and campaign data
+  const callback = `cd ${shellQuote(config.data_repo_path)} && ${callback_command} ${shellQuote(prompt)}`;
 
   try {
     const { stdout } = await execFile(
