@@ -36,7 +36,7 @@ By default, `sms send` registers a sundial poll trigger that monitors for inboun
 
 - **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
 - **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
-- **Session resume**: Each callback spawns the configured agent (see `watch.callback_agent` in `outreach.config.yaml`). The first callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Session IDs are recorded as `callback_session` events in the campaign JSONL — do not edit these.
+- **Session resume**: Each callback spawns the configured agent (see `watch.callback_agent` in `outreach.config.yaml`). The first callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Each run appends a `callback_run` event to the campaign JSONL (exit code, duration, session info, log path) and full agent stdout/stderr under `outreach/callback-logs/` — do not edit these.
 - **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (sundial unavailable), or `{ schedule_id, status }` where `status` is sundial's verbatim status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
 
 ## SMS-specific notes
