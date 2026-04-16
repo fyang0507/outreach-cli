@@ -80,3 +80,21 @@ gemini:
     # null = auto-detect (correct for multilingual calls).
     input_language_codes: null
     output_language_codes: null
+
+# Auto-watch for replies. When present, sends auto-register a sundial poll
+# trigger that fires the callback when a reply arrives.
+# WARNING: enabling this invokes an agent in headless mode on reply detection.
+watch:
+  # Master switch. Must be explicitly true to activate watchers.
+  enabled: false
+  # Agent CLI invocation (the command prefix). The resolved prompt is appended
+  # as a single shell-quoted argument.
+  # Examples: "codex exec", "claude -p", "echo"
+  callback_command: "claude -p"
+  # Prompt template sent to the agent. Available variables:
+  # {contact_id}, {campaign_id}, {channel}, {contact_name}
+  callback_prompt: "Reply detected from {contact_name} on {channel} for campaign {campaign_id}. Check the reply and decide next steps. Run: outreach {channel} history --contact-id {contact_id}"
+  # Hours before the watcher gives up polling.
+  default_timeout_hours: 72
+  # Minutes between poll checks.
+  poll_interval_minutes: 2

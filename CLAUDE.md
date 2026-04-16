@@ -23,7 +23,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 ```
 
 **Shared:**
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
 - **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
 
 **Call channel** (Twilio + Gemini Live):
@@ -61,6 +61,8 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/config.ts` | Loads `.env` — secrets and infrastructure only |
 | `src/commands/health.ts` | `outreach health` — omnichannel readiness check |
 | `src/commands/context.ts` | `outreach context` — cross-channel JIT briefing assembly |
+| `src/commands/replyCheck.ts` | `outreach reply-check` — sundial poll trigger, checks for inbound replies |
+| `src/watch.ts` | Sundial registration helper — `registerReplyWatch()` for auto-watch on send |
 | `src/commands/call/*.ts` | One file per call command (init, teardown, place, listen, status, hangup) |
 | `src/commands/sms/send.ts` | `outreach sms send` — send iMessage + log campaign attempt |
 | `src/commands/sms/history.ts` | `outreach sms history` — read iMessage thread |
@@ -94,7 +96,7 @@ Skills are the source of truth in this repo. `npm run build` copies them to `<da
 | Source | Contains | Example |
 |---|---|---|
 | `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` |
-| `outreach.config.yaml` | Application behavior | Data repo path, identity (user_name), Gemini model, voice, VAD, thinking level, persona. See `docs/done/tuning-reference.md` for full parameter documentation. |
+| `outreach.config.yaml` | Application behavior | Data repo path, identity (user_name), Gemini model, voice, VAD, thinking level, persona, watch (auto-reply watcher config). See `docs/done/tuning-reference.md` for full parameter documentation. |
 
 ## Identifier model
 
@@ -105,10 +107,11 @@ All send commands (`call place`, `sms send`, `email send`) and calendar commands
 | Command | Required | Resolved from contact | Override |
 |---|---|---|---|
 | `call place` | `--campaign-id`, `--contact-id` | `contact.phone` | `--to` |
-| `sms send` | `--campaign-id`, `--contact-id`, `--body` | `contact.sms_phone ?? contact.phone` | `--to` |
-| `email send` | `--campaign-id`, `--contact-id`, `--subject`, `--body` | `contact.email` | `--to` |
+| `sms send` | `--campaign-id`, `--contact-id`, `--body` | `contact.sms_phone ?? contact.phone` | `--to`, `--fire-and-forget` |
+| `email send` | `--campaign-id`, `--contact-id`, `--subject`, `--body` | `contact.email` | `--to`, `--fire-and-forget` |
 | `sms history` | one of: `--contact-id`, `--phone` | `contact.sms_phone ?? contact.phone` | `--phone` |
 | `email history` | one of: `--contact-id`, `--address`, `--thread-id` | `contact.email` | `--address` |
+| `reply-check` | `--campaign-id`, `--contact-id`, `--channel` | — | — |
 
 Resolution lives in `src/contacts.ts` → `resolveContactAddress(contactId, channel)`.
 

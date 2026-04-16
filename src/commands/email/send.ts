@@ -4,6 +4,7 @@ import { resolveContactAddress } from "../../contacts.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
+import { registerReplyWatch, type WatchResult } from "../../watch.js";
 
 function withEmailHint(msg: string): string {
   const lower = msg.toLowerCase();
@@ -28,6 +29,7 @@ export function registerSendCommand(parent: Command): void {
     .option("--reply-to-id <id>", "Gmail message ID to reply to (enables threading)")
     .option("--no-reply-all", "Reply to sender only (default is reply-all when --reply-to-id is set)")
     .option("--attach <paths...>", "File paths to attach")
+    .option("--fire-and-forget", "Skip reply watcher registration")
     .action(
       async (opts: {
         to?: string;
@@ -40,6 +42,7 @@ export function registerSendCommand(parent: Command): void {
         replyToId?: string;
         replyAll: boolean;
         attach?: string[];
+        fireAndForget?: boolean;
       }) => {
         // Resolve destination email
         let to: string;
@@ -84,7 +87,32 @@ export function registerSendCommand(parent: Command): void {
           result: "sent",
           message_id: result.messageId,
           thread_id: result.threadId,
+          await_reply: !opts.fireAndForget,
         });
+
+        // Register reply watcher (never blocks send)
+        let watchResult: WatchResult | null = null;
+        if (!opts.fireAndForget) {
+          try {
+            watchResult = await registerReplyWatch({
+              campaignId: opts.campaignId,
+              contactId: opts.contactId,
+              channel: "email",
+            });
+            if (watchResult.schedule_id) {
+              await appendCampaignEvent(opts.campaignId, {
+                ts: isoNow(),
+                contact_id: opts.contactId,
+                type: "watch",
+                channel: "email",
+                watch_schedule_id: watchResult.schedule_id,
+                watch_status: watchResult.status,
+              });
+            }
+          } catch {
+            watchResult = { status: "failed", error: "sundial unavailable" };
+          }
+        }
 
         outputJson({
           to: result.to,
@@ -93,6 +121,9 @@ export function registerSendCommand(parent: Command): void {
           message_id: result.messageId,
           thread_id: result.threadId,
           status: "sent",
+          watch: opts.fireAndForget
+            ? null
+            : (watchResult ?? { status: "skipped" }),
         });
         process.exit(SUCCESS);
       },

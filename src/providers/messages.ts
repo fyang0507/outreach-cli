@@ -155,7 +155,7 @@ function parseTapbackTarget(guid: string): string | null {
 
 export function readMessageHistory(
   phone: string,
-  options: { limit?: number; sinceDays?: number } = {},
+  options: { limit?: number; sinceDays?: number; since?: string } = {},
 ): MessageEntry[] {
   const normalized = normalizePhone(phone);
   const limit = options.limit ?? 50;
@@ -166,7 +166,13 @@ export function readMessageHistory(
     // Build date filter
     let dateFilter = "";
     const params: unknown[] = [normalized];
-    if (options.sinceDays !== undefined) {
+    if (options.since !== undefined) {
+      // ISO 8601 → CoreData nanoseconds since 2001-01-01
+      const coreDataNs =
+        (Date.parse(options.since) / 1000 - 978_307_200) * 1_000_000_000;
+      dateFilter = " AND m.date >= ?";
+      params.push(coreDataNs);
+    } else if (options.sinceDays !== undefined) {
       // CoreData nanoseconds since 2001-01-01
       const sinceDate = new Date();
       sinceDate.setDate(sinceDate.getDate() - options.sinceDays);

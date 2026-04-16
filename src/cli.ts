@@ -8,6 +8,7 @@ import { registerInitCommand } from "./commands/call/init.js";
 import { registerTeardownCommand } from "./commands/call/teardown.js";
 import { registerHealthCommand } from "./commands/health.js";
 import { registerContextCommand } from "./commands/context.js";
+import { registerReplyCheckCommand } from "./commands/replyCheck.js";
 import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
 import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
@@ -26,6 +27,7 @@ program
 // --- top-level commands ---
 registerHealthCommand(program);
 registerContextCommand(program);
+registerReplyCheckCommand(program);
 
 // --- sms subcommand group ---
 const sms = program.command("sms").description("SMS / iMessage commands");

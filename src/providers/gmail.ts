@@ -101,7 +101,7 @@ export async function checkGmailAuth(): Promise<{
 // Cached self-email
 let _selfEmail: string | null = null;
 
-async function getSelfEmail(
+export async function getSelfEmail(
   gmail: gmail_v1.Gmail,
 ): Promise<string> {
   if (_selfEmail) return _selfEmail;
