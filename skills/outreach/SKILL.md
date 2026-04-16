@@ -126,7 +126,7 @@ After an amendment, the campaign is effectively active again — further `attemp
 
 **System-written events** — the CLI also appends two event types you should not author or edit manually:
 - `watch` — records the sundial schedule ID when a send registers a reply watcher.
-- `callback_session` — records the agent session ID captured on a reply callback so the next callback resumes the same session. Tied to `watch.callback_agent` in `outreach.config.yaml`; changing that config invalidates stored sessions and the next callback starts fresh.
+- `callback_run` — one entry per callback-dispatch invocation. Records `agent`, `exit_code`, `duration_ms`, whether it resumed a prior session (`resumed`, `prior_session_id`), whether a new session was captured (`session_captured`, `new_session_id`), and the per-run log path (`log_file`, relative to the data repo). The resume chain reads this — the last run with `session_captured: true` for a (contact, channel) is the session the next callback will `--resume`. Changing `watch.callback_agent` in `outreach.config.yaml` invalidates stored sessions and the next callback starts fresh. Full agent stdout/stderr for each run is captured under `outreach/callback-logs/`.
 
 ### Sync
 

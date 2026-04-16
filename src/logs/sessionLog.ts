@@ -75,9 +75,16 @@ export type TranscriptEvent =
 
 // --- Data directories ---
 
-let _dirs: { contactsDir: string; campaignsDir: string; transcriptsDir: string } | null = null;
+interface DataDirs {
+  contactsDir: string;
+  campaignsDir: string;
+  transcriptsDir: string;
+  callbackLogsDir: string;
+}
 
-async function getDataDirs(): Promise<{ contactsDir: string; campaignsDir: string; transcriptsDir: string }> {
+let _dirs: DataDirs | null = null;
+
+async function getDataDirs(): Promise<DataDirs> {
   if (_dirs) return _dirs;
   const config = await loadAppConfig();
   const outreachDir = join(config.data_repo_path, "outreach");
@@ -85,6 +92,7 @@ async function getDataDirs(): Promise<{ contactsDir: string; campaignsDir: strin
     contactsDir: join(outreachDir, "contacts"),
     campaignsDir: join(outreachDir, "campaigns"),
     transcriptsDir: join(outreachDir, "transcripts"),
+    callbackLogsDir: join(outreachDir, "callback-logs"),
   };
   return _dirs;
 }
@@ -94,6 +102,21 @@ export async function ensureDataDirs(): Promise<void> {
   await mkdir(contactsDir, { recursive: true });
   await mkdir(campaignsDir, { recursive: true });
   await mkdir(transcriptsDir, { recursive: true });
+}
+
+// Build the absolute log path for a callback-dispatch run and ensure the
+// enclosing directory exists. Filename encodes (campaign, contact, channel,
+// fsTsStamp) to keep runs trivially sortable and greppable.
+export async function buildCallbackLogPath(opts: {
+  campaignId: string;
+  contactId: string;
+  channel: string;
+  fsTsStamp: string;
+}): Promise<string> {
+  const { callbackLogsDir } = await getDataDirs();
+  await mkdir(callbackLogsDir, { recursive: true });
+  const filename = `${opts.campaignId}-${opts.contactId}-${opts.channel}-${opts.fsTsStamp}.log`;
+  return join(callbackLogsDir, filename);
 }
 
 export async function appendCampaignEvent(
@@ -188,21 +211,23 @@ export async function findLatestOutboundAttempt(
   return null;
 }
 
-// --- Callback session lookup ---
+// --- Callback run lookup ---
 
-export interface CallbackSession {
+export interface CallbackRunResumeInfo {
   ts: string;
-  contact_id: string;
-  channel: string;
   agent: string;
-  agent_session_id: string;
+  session_id: string;
 }
 
-export async function findLatestCallbackSession(
+// Find the latest callback_run event for (contactId, channel) that captured a
+// session, so the next callback can --resume from it. Runs without a captured
+// session (crash, parse failure, agent abort) are skipped — we keep walking
+// backwards to find the last successful resume handle.
+export async function findLatestCallbackRun(
   campaignId: string,
   contactId: string,
   channel: string,
-): Promise<CallbackSession | null> {
+): Promise<CallbackRunResumeInfo | null> {
   let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
   try {
     data = await readCampaignEvents(campaignId);
@@ -216,18 +241,17 @@ export async function findLatestCallbackSession(
   for (let i = allLines.length - 1; i >= 0; i--) {
     const e = allLines[i]!;
     if (
-      e.type === "callback_session" &&
+      e.type === "callback_run" &&
       e.contact_id === contactId &&
       e.channel === channel &&
+      e.session_captured === true &&
       typeof e.agent === "string" &&
-      typeof e.agent_session_id === "string"
+      typeof e.new_session_id === "string"
     ) {
       return {
         ts: e.ts as string,
-        contact_id: e.contact_id as string,
-        channel: e.channel as string,
         agent: e.agent,
-        agent_session_id: e.agent_session_id,
+        session_id: e.new_session_id,
       };
     }
   }
