@@ -87,16 +87,14 @@ gemini:
 watch:
   # Master switch. Must be explicitly true to activate watchers.
   enabled: false
-  # Agent CLI invocation (the command prefix). The resolved prompt is appended
-  # as a single shell-quoted argument. The working directory is automatically
-  # set to data_repo_path so the agent has access to skills and campaign data.
-  # The agent runs headless, so it must have permission to execute tools
-  # (read files, run CLI commands, send messages) without interactive approval.
-  # Use a mode that bypasses permission prompts:
-  #   codex exec --yolo
-  #   claude --dangerously-skip-permissions -p
-  # Examples: "codex exec --yolo", "claude --dangerously-skip-permissions -p", "echo"
-  callback_command: "claude --dangerously-skip-permissions -p"
+  # Which agent to spawn when a reply arrives. Supported: "claude", "codex".
+  # The CLI owns a fixed mapping from agent name to invocation flags and session
+  # resume semantics — see src/agents.ts. Subsequent callbacks for the same
+  # (campaign, contact, channel) resume the prior session so the agent keeps
+  # context across replies. Changing this value invalidates stored sessions and
+  # the next callback starts fresh. The agent runs headless from data_repo_path
+  # with permission prompts bypassed.
+  callback_agent: "claude"
   # Prompt template sent to the agent. Available variables:
   # {contact_id}, {campaign_id}, {channel}, {contact_name}
   callback_prompt: "Reply detected from {contact_name} on {channel} for campaign {campaign_id}. Check the reply and decide next steps. Run: outreach {channel} history --contact-id {contact_id}"

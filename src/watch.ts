@@ -16,41 +16,25 @@ function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
 export async function registerReplyWatch(opts: {
   campaignId: string;
   contactId: string;
   channel: "sms" | "email";
-  contactName?: string;
 }): Promise<WatchResult> {
   const config = await loadAppConfig();
   if (!config.watch || !config.watch.enabled) {
     return { status: "skipped" };
   }
 
-  const {
-    callback_command,
-    callback_prompt,
-    default_timeout_hours,
-    poll_interval_minutes,
-  } = config.watch;
+  const { default_timeout_hours, poll_interval_minutes } = config.watch;
 
   const name = `outreach-${sanitize(opts.campaignId)}-${sanitize(opts.contactId)}-${opts.channel}`;
 
+  // Both the trigger and the callback are hidden internal `outreach` subcommands.
+  // They share the same argument signature, and the callback resolves the prompt
+  // + session resume at fire time by reading config and campaign state.
   const trigger = `outreach reply-check --campaign-id ${opts.campaignId} --contact-id ${opts.contactId} --channel ${opts.channel}`;
-
-  // Resolve prompt template, then shell-quote and append to command
-  const prompt = callback_prompt
-    .replace(/\{contact_id\}/g, opts.contactId)
-    .replace(/\{campaign_id\}/g, opts.campaignId)
-    .replace(/\{channel\}/g, opts.channel)
-    .replace(/\{contact_name\}/g, opts.contactName ?? opts.contactId);
-
-  // Run the agent from the data repo so it has access to skills and campaign data
-  const callback = `cd ${shellQuote(config.data_repo_path)} && ${callback_command} ${shellQuote(prompt)}`;
+  const callback = `outreach callback-dispatch --campaign-id ${opts.campaignId} --contact-id ${opts.contactId} --channel ${opts.channel}`;
 
   try {
     const { stdout } = await execFile(

@@ -188,6 +188,53 @@ export async function findLatestOutboundAttempt(
   return null;
 }
 
+// --- Callback session lookup ---
+
+export interface CallbackSession {
+  ts: string;
+  contact_id: string;
+  channel: string;
+  agent: string;
+  agent_session_id: string;
+}
+
+export async function findLatestCallbackSession(
+  campaignId: string,
+  contactId: string,
+  channel: string,
+): Promise<CallbackSession | null> {
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
+  try {
+    data = await readCampaignEvents(campaignId);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+
+  const allLines = [data.header, ...data.events];
+
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const e = allLines[i]!;
+    if (
+      e.type === "callback_session" &&
+      e.contact_id === contactId &&
+      e.channel === channel &&
+      typeof e.agent === "string" &&
+      typeof e.agent_session_id === "string"
+    ) {
+      return {
+        ts: e.ts as string,
+        contact_id: e.contact_id as string,
+        channel: e.channel as string,
+        agent: e.agent,
+        agent_session_id: e.agent_session_id,
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function readContact(
   contactId: string,
 ): Promise<Contact> {

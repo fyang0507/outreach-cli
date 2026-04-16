@@ -61,7 +61,7 @@ By default, `email send` registers a sundial poll trigger that monitors for inbo
 
 - **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
 - **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
-- **Manual check**: `outreach reply-check --campaign-id X --contact-id Y --channel email` — returns `{ replied: true/false }`. Exit 0 = reply found, exit 1 = no reply. Designed as a sundial poll trigger but can be run manually.
+- **Session resume**: Each callback spawns the configured agent (see `watch.callback_agent` in `outreach.config.yaml`). The first callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Session IDs are recorded as `callback_session` events in the campaign JSONL — do not edit these.
 - **Reply detection**: Any non-self message in the thread after the watermark counts — including CC'd recipients, auto-replies, etc. The agent reads the full thread in the callback and decides what's actionable.
 - **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (sundial unavailable), or `{ schedule_id, status }` where `status` is sundial's verbatim status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
 
