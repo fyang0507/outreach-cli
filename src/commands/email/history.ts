@@ -47,11 +47,15 @@ export function registerHistoryCommand(parent: Command): void {
             limit,
           });
         } catch (err) {
+          const status = (err as { code?: number }).code;
           const msg = (err as Error).message;
-          const hint = msg.includes("invalid_grant")
-            ? "Gmail token expired. Delete gmail-token.json from data repo and re-authorize"
-            : msg;
-          outputError(INFRA_ERROR, hint);
+          if (status === 401 || msg.includes("invalid_grant")) {
+            outputError(INFRA_ERROR, "Gmail token expired or revoked. Run 'outreach health' to check, then re-authorize if needed.");
+          } else if (status === 403) {
+            outputError(INFRA_ERROR, "Gmail access denied. Re-authorize to grant Gmail read access.");
+          } else {
+            outputError(INFRA_ERROR, `Failed to read email history: ${msg}. Run 'outreach health' to check email channel readiness.`);
+          }
           process.exit(INFRA_ERROR);
           return;
         }

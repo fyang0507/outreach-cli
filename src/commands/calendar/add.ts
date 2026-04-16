@@ -4,6 +4,15 @@ import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 
+function withCalendarHint(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("invalid_grant") || lower.includes("401"))
+    return `${msg}. Token may be expired. Run 'outreach health' to check, then re-authorize if needed.`;
+  if (lower.includes("not found"))
+    return `${msg}. Check that the calendar exists and is accessible.`;
+  return `${msg}. Run 'outreach health' to check calendar readiness.`;
+}
+
 export function registerAddCommand(parent: Command): void {
   parent
     .command("add")
@@ -32,12 +41,12 @@ export function registerAddCommand(parent: Command): void {
         const endDate = new Date(opts.end);
 
         if (isNaN(startDate.getTime())) {
-          outputError(INPUT_ERROR, `Invalid start datetime: ${opts.start}`);
+          outputError(INPUT_ERROR, `Invalid start datetime: ${opts.start}. Expected ISO 8601, e.g. 2026-04-22T14:00:00`);
           process.exit(INPUT_ERROR);
           return;
         }
         if (isNaN(endDate.getTime())) {
-          outputError(INPUT_ERROR, `Invalid end datetime: ${opts.end}`);
+          outputError(INPUT_ERROR, `Invalid end datetime: ${opts.end}. Expected ISO 8601, e.g. 2026-04-22T15:00:00`);
           process.exit(INPUT_ERROR);
           return;
         }
@@ -60,7 +69,7 @@ export function registerAddCommand(parent: Command): void {
         } catch (err) {
           outputError(
             OPERATION_FAILED,
-            `Failed to add calendar event: ${(err as Error).message}`,
+            withCalendarHint(`Failed to add calendar event: ${(err as Error).message}`),
           );
           process.exit(OPERATION_FAILED);
           return;

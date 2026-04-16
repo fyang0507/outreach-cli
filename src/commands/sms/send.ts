@@ -5,6 +5,13 @@ import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 
+function withSmsHint(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("not allowed") || lower.includes("not permitted"))
+    return `${msg}. Grant Accessibility access to your terminal app in System Settings → Privacy & Security.`;
+  return `${msg}. Check that Messages.app is signed in. Run 'outreach health' to check SMS readiness.`;
+}
+
 export function registerSendCommand(parent: Command): void {
   parent
     .command("send")
@@ -39,7 +46,7 @@ export function registerSendCommand(parent: Command): void {
         } catch (err) {
           outputError(
             OPERATION_FAILED,
-            `Failed to send iMessage: ${(err as Error).message}`,
+            withSmsHint(`Failed to send iMessage: ${(err as Error).message}`),
           );
           process.exit(OPERATION_FAILED);
           return;

@@ -38,10 +38,11 @@ export function registerHistoryCommand(parent: Command): void {
         messages = readMessageHistory(normalized, { limit });
       } catch (err) {
         const msg = (err as Error).message;
-        const hint = msg.includes("SQLITE_CANTOPEN") || msg.includes("unable to open")
-          ? "Grant Full Disk Access to your terminal app in System Settings → Privacy & Security"
-          : msg;
-        outputError(INFRA_ERROR, hint);
+        if (msg.includes("SQLITE_CANTOPEN") || msg.includes("unable to open")) {
+          outputError(INFRA_ERROR, "iMessage database not accessible. Grant Full Disk Access to your terminal app in System Settings → Privacy & Security.");
+        } else {
+          outputError(INFRA_ERROR, `Failed to read SMS history: ${msg}. Run 'outreach health' to check SMS readiness.`);
+        }
         process.exit(INFRA_ERROR);
         return;
       }
