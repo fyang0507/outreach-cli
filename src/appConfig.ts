@@ -50,7 +50,7 @@ export interface GeminiConfig {
 
 export interface WatchConfig {
   enabled: boolean;
-  callback_command: string;
+  callback_agent: string;
   callback_prompt: string;
   default_timeout_hours: number;
   poll_interval_minutes: number;
@@ -166,8 +166,8 @@ export async function loadAppConfig(): Promise<AppConfig> {
     if (watch.enabled == null || typeof watch.enabled !== "boolean") {
       watch.enabled = false;
     }
-    if (!watch.callback_command || typeof watch.callback_command !== "string") {
-      throw new Error("outreach.config.yaml: watch.callback_command is required when watch section is present");
+    if (!watch.callback_agent || typeof watch.callback_agent !== "string") {
+      throw new Error("outreach.config.yaml: watch.callback_agent is required when watch section is present");
     }
     if (!watch.callback_prompt || typeof watch.callback_prompt !== "string") {
       throw new Error("outreach.config.yaml: watch.callback_prompt is required when watch section is present");

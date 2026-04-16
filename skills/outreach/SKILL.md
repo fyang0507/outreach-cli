@@ -124,6 +124,10 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
+**System-written events** — the CLI also appends two event types you should not author or edit manually:
+- `watch` — records the sundial schedule ID when a send registers a reply watcher.
+- `callback_session` — records the agent session ID captured on a reply callback so the next callback resumes the same session. Tied to `watch.callback_agent` in `outreach.config.yaml`; changing that config invalidates stored sessions and the next callback starts fresh.
+
 ### Sync
 
 Sync the data repo with git directly.

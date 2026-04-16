@@ -131,9 +131,9 @@ async function checkEmailReply(
 
 export function registerReplyCheckCommand(program: Command): void {
   program
-    .command("reply-check")
+    .command("reply-check", { hidden: true })
     .description(
-      "Check if a contact has replied since the last outbound message (sundial poll trigger)",
+      "[internal] Sundial poll trigger — exits 0 if a new reply has arrived since the last outbound attempt",
     )
     .requiredOption("--campaign-id <id>", "Campaign ID")
     .requiredOption("--contact-id <id>", "Contact ID")
