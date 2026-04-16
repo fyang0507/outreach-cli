@@ -36,6 +36,10 @@ export async function registerReplyWatch(opts: {
   const trigger = `outreach reply-check --campaign-id ${opts.campaignId} --contact-id ${opts.contactId} --channel ${opts.channel}`;
   const callback = `outreach callback-dispatch --campaign-id ${opts.campaignId} --contact-id ${opts.contactId} --channel ${opts.channel}`;
 
+  // --detach releases sundial's per-schedule mutex as soon as the callback is
+  // spawned, so the agent's nested `outreach email send` can refresh this same
+  // schedule without hitting "currently firing". Outcome observability lives in
+  // the campaign JSONL's `callback_run` event + per-run log file, not sundial.
   try {
     const { stdout } = await execFile(
       "sundial",
@@ -51,6 +55,7 @@ export async function registerReplyWatch(opts: {
         `${default_timeout_hours}h`,
         "--once",
         "--refresh",
+        "--detach",
         "--command",
         callback,
         "--name",
