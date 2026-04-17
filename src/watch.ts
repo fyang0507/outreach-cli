@@ -45,7 +45,6 @@ export async function registerReplyWatch(opts: {
       "sundial",
       [
         "add",
-        "--type",
         "poll",
         "--trigger",
         trigger,

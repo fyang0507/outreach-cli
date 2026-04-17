@@ -193,8 +193,7 @@ Working directory is set to `data_repo_path` so the agent has access to skills a
 
 **Sundial registration** (`watch.ts`) composes both:
 ```
-sundial add \
-  --type poll \
+sundial add poll \
   --trigger "outreach reply-check --campaign-id X --contact-id Y --channel sms" \
   --command "outreach callback-dispatch --campaign-id X --contact-id Y --channel sms" \
   --interval 2m --timeout 72h --once --refresh \
