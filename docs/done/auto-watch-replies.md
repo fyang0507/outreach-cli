@@ -154,7 +154,7 @@ export async function registerReplyWatch(opts: {
 6. Call sundial via `execFile` (promisified, not shell string) with args as array. **Always pass `--refresh`** — outreach-cli is the sole consumer of these watchers, and every send should unconditionally create-or-refresh:
    ```typescript
    execFile("sundial", [
-     "add", "--type", "poll",
+     "add", "poll",
      "--trigger", trigger,
      "--interval", `${interval}m`,
      "--timeout", `${timeout}h`,
