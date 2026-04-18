@@ -1,5 +1,5 @@
 node_modules
 dist
 .env
-outreach.config.yaml
+*.config.yaml
 .DS_Store

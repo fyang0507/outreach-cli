@@ -69,6 +69,7 @@ One JSONL file per campaign in `outreach/campaigns/`. Strictly append-only — n
 **Line 1 — campaign header:**
 ```json
 {
+  "type": "campaign_header",
   "campaign_id": "2026-04-15-dental-cleaning",
   "created": "2026-04-15T10:00:00Z",
   "objective": "Schedule dental cleaning, ideally before end of April",
@@ -102,6 +103,15 @@ Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
 `channel` values: `callback`, `email`, `text`, `in_person`, `research`, `other`
 
 The human provides raw information; the agent processes it. `contact_id` is optional (some inputs are campaign-level, e.g. "my schedule changed"). `context` is optional — human's interpretation or color beyond the facts. There is no `verdict` — the agent should ingest the `human_input` and produce a follow-up `outcome` with its own judgment if the input materially changes a contact's standing.
+
+Some `human_input` entries are authored asynchronously by external observers (e.g., a human replying through an observability layer) rather than by the agent. These entries may differ in shape — for example using `text` instead of `content`, or carrying a `source` field — but are consumed identically: read the content, produce a follow-up `outcome` if it changes a contact's standing. The agent does not need to distinguish the producer.
+
+**`human_question`** — agent asks the human:
+```json
+{"ts":"2026-04-18T16:00:00Z","type":"human_question","contact_id":"c_a1b2c3","question":"Should I prioritize same-week availability or lowest price?","context":"Two viable options with tradeoffs"}
+```
+
+Written by `outreach ask-human`. The CLI registers a sundial watch that polls for new `human_input` entries and resumes your session when one arrives (or when the configured timeout elapses). `contact_id` and `context` are optional. Use when you need operator input and cannot make a well-founded decision from available signal.
 
 **Email `human_input` with `thread_id`**: When recording inbound email activity, include `thread_id` so `outreach context` can discover and fetch the thread. The agent finds the thread_id via `outreach email search`, confirms with the user, then records:
 ```json
@@ -180,7 +190,7 @@ Every outreach task starts the same way: search for an existing campaign before 
 outreach health → search $DATA_REPO/outreach/campaigns/ for matching slug/objective
 ```
 
-- **Found** → load it with `outreach context --campaign-id ...`, review events, resume where it left off.
+- **Found** → load it with `outreach context --campaign-id ...`, review events, resume where it left off. Before taking any new outreach action, scan the latest `human_input` entries in the campaign JSONL — new ones may have arrived asynchronously since your last action and may change what to do next.
 - **Not found** → confirm with user that a new campaign should be created, create contacts + campaign header.
 
 ### Step 2: Gather context and execute outreach
@@ -190,6 +200,16 @@ outreach context --campaign-id ... [--contact-id ...] → decide channel and act
 ```
 
 Use `outreach context` to review campaign state and recent messages before deciding what to do. If context is insufficient, use channel-specific history commands (`call listen`, `sms history`, `email history`) for more detail. Then execute via the appropriate channel — see the channel-specific docs for command usage.
+
+### When you're stuck — `ask-human`
+
+If a decision requires operator input (genuine ambiguity, not just thoroughness), run:
+
+```
+outreach ask-human --campaign-id X --question "..." [--contact-id c_...] [--context "..."]
+```
+
+The command writes a `human_question` event and exits. A future session will resume automatically when the operator answers (via any channel) or the timeout elapses.
 
 ## Post-action workflow
 

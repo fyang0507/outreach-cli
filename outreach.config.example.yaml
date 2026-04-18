@@ -98,6 +98,11 @@ watch:
   # Prompt template sent to the agent. Available variables:
   # {contact_id}, {campaign_id}, {channel}, {contact_name}
   callback_prompt: "Reply detected from {contact_name} on {channel} for campaign {campaign_id}. Check the reply and decide next steps. Run: outreach {channel} history --contact-id {contact_id}"
+  # Prompt fired when a human_input arrives after an ask-human call.
+  # Variables: {contact_id}, {campaign_id}, {channel}, {contact_name}, {question}.
+  callback_prompt_human_input: "Human replied to your question on campaign {campaign_id}. Your question: \"{question}\". Read the latest human_input entries (and any other pending human_question entries) in $DATA_REPO/outreach/campaigns/{campaign_id}.jsonl, ingest the answer, and continue the campaign."
+  # Prompt fired when default_timeout_hours elapsed without a reply.
+  callback_prompt_human_input_timeout: "No answer arrived within the timeout for your question on campaign {campaign_id}. Your question: \"{question}\". Proceed on best judgment; record an amendment or decision if appropriate."
   # Hours before the watcher gives up polling.
   default_timeout_hours: 72
   # Minutes between poll checks.

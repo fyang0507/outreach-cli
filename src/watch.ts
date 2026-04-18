@@ -77,3 +77,62 @@ export async function registerReplyWatch(opts: {
     return { status: "failed", error: error.message };
   }
 }
+
+export async function registerAskHumanWatch(opts: {
+  campaignId: string;
+  contactId?: string;
+}): Promise<WatchResult> {
+  const config = await loadAppConfig();
+  if (!config.watch || !config.watch.enabled) {
+    return { status: "skipped" };
+  }
+
+  const { default_timeout_hours, poll_interval_minutes } = config.watch;
+
+  // One schedule per campaign — multiple outstanding questions share it; the
+  // trigger re-derives the baseline from the latest human_question each poll.
+  const name = `outreach-${sanitize(opts.campaignId)}-ask-human`;
+  const contactArg = opts.contactId ?? "__campaign__";
+
+  const trigger = `outreach ask-human-check --campaign-id ${opts.campaignId} --contact-id ${contactArg}`;
+  const callback = `outreach callback-dispatch --campaign-id ${opts.campaignId} --contact-id ${contactArg} --channel human_input`;
+
+  // sundial --timeout is a hard outer safety cap (2x the soft timeout); the
+  // trigger itself fires on the soft timeout by exit-code-0ing when elapsed.
+  try {
+    const { stdout } = await execFile(
+      "sundial",
+      [
+        "add",
+        "poll",
+        "--trigger",
+        trigger,
+        "--interval",
+        `${poll_interval_minutes}m`,
+        "--timeout",
+        `${default_timeout_hours * 2}h`,
+        "--once",
+        "--refresh",
+        "--detach",
+        "--command",
+        callback,
+        "--name",
+        name,
+        "--json",
+      ],
+      { timeout: 10_000 },
+    );
+
+    const result = JSON.parse(stdout) as Record<string, unknown>;
+    return {
+      schedule_id: result.id as string | undefined,
+      status: result.status as string,
+    };
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === "ENOENT") {
+      return { status: "failed", error: "sundial not installed" };
+    }
+    return { status: "failed", error: error.message };
+  }
+}

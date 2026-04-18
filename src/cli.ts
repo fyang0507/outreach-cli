@@ -10,6 +10,8 @@ import { registerHealthCommand } from "./commands/health.js";
 import { registerContextCommand } from "./commands/context.js";
 import { registerReplyCheckCommand } from "./commands/replyCheck.js";
 import { registerCallbackDispatchCommand } from "./commands/callbackDispatch.js";
+import { registerAskHumanCommand } from "./commands/askHuman.js";
+import { registerAskHumanCheckCommand } from "./commands/askHumanCheck.js";
 import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
 import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
@@ -30,6 +32,8 @@ registerHealthCommand(program);
 registerContextCommand(program);
 registerReplyCheckCommand(program);
 registerCallbackDispatchCommand(program);
+registerAskHumanCommand(program);
+registerAskHumanCheckCommand(program);
 
 // --- sms subcommand group ---
 const sms = program.command("sms").description("SMS / iMessage commands");
