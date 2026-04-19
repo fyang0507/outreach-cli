@@ -266,8 +266,10 @@ export async function hasNewHumanInputSince(
 
   for (const e of allLines) {
     if (e.type !== "human_input") continue;
-    if (typeof e.ts !== "string") continue;
-    if (e.ts > baselineTs) return true;
+    // Relay-inbound entries use `timestamp` instead of `ts`; accept either.
+    const raw = typeof e.ts === "string" ? e.ts : e.timestamp;
+    if (typeof raw !== "string") continue;
+    if (raw > baselineTs) return true;
   }
 
   return false;
