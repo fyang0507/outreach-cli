@@ -37,6 +37,8 @@ sources:
       attempt:          silent
       watch:            silent
       callback_run:     silent
+      identity_access:  silent   # agent pulled an identity field via `outreach whoami`;
+                                 # reviewable for audit, but no notification per pull
       outcome:          notify
       decision:         notify
       amendment:        notify

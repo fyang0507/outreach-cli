@@ -9,10 +9,24 @@
 data_repo_path: ~/path/to/your-data-repo
 
 identity:
-  # Required — who the assistant represents. Used in system instruction identity layer.
+  # Required — reserved, always injected into voice and callback prompts as {user_name}.
   user_name: "Your Name"
-  # Optional — brief context about the user. Helps the voice agent answer questions naturally.
-  bio: null
+
+  # Everything below is optional and pull-only. Agents read these via
+  # `outreach whoami --field <key>,<key>`; the voice agent formats them into
+  # its system instruction at call start. Anything you put here is deemed
+  # shareable with agents the CLI spawns — the gate is the config file itself,
+  # not per-field labels.
+  #
+  # Suggested keys (add only what you're comfortable sharing):
+  first_name: null         # natural sign-off in SMS ("— Fred")
+  full_name: null          # formal email closings
+  legal_name: null         # forms, identity verification
+  address: null            # "where are you based?" / postal
+  phone: null              # call-back number to share
+  email: null              # contact email to share
+  email_signature: null    # multi-line block for outbound emails (use YAML '|' for multiline)
+  # other: null            # free-text catch-all for context that doesn't fit a specific key
 
 call:
   # Hard max call duration in seconds. Overridable per call via --max-duration flag.
@@ -96,13 +110,13 @@ watch:
   # with permission prompts bypassed.
   callback_agent: "claude"
   # Prompt template sent to the agent. Available variables:
-  # {contact_id}, {campaign_id}, {channel}, {contact_name}
-  callback_prompt: "Reply detected from {contact_name} on {channel} for campaign {campaign_id}. Check the reply and decide next steps. Run: outreach {channel} history --contact-id {contact_id}"
+  # {contact_id}, {campaign_id}, {channel}, {contact_name}, {user_name}, {identity_hint}
+  callback_prompt: "Reply detected from {contact_name} on {channel} for campaign {campaign_id} (you are acting on behalf of {user_name}). You are running headless with no human in the loop — do NOT ask for confirmation, just act. Read the conversation, then take the appropriate next action. {identity_hint} Run: outreach {channel} history --contact-id {contact_id}"
   # Prompt fired when a human_input arrives after an ask-human call.
-  # Variables: {contact_id}, {campaign_id}, {channel}, {contact_name}, {question}.
-  callback_prompt_human_input: "Human replied to your question on campaign {campaign_id}. Your question: \"{question}\". Read the latest human_input entries (and any other pending human_question entries) in $DATA_REPO/outreach/campaigns/{campaign_id}.jsonl, ingest the answer, and continue the campaign."
+  # Variables: {contact_id}, {campaign_id}, {channel}, {contact_name}, {question}, {user_name}, {identity_hint}.
+  callback_prompt_human_input: "Human replied to your question on campaign {campaign_id} (you are acting on behalf of {user_name}). Your question: \"{question}\". Read the latest human_input entries (and any other pending human_question entries) in $DATA_REPO/outreach/campaigns/{campaign_id}.jsonl, ingest the answer, and continue the campaign. {identity_hint}"
   # Prompt fired when default_timeout_hours elapsed without a reply.
-  callback_prompt_human_input_timeout: "No answer arrived within the timeout for your question on campaign {campaign_id}. Your question: \"{question}\". Proceed on best judgment; record an amendment or decision if appropriate."
+  callback_prompt_human_input_timeout: "No answer arrived within the timeout for your question on campaign {campaign_id} (you are acting on behalf of {user_name}). Your question: \"{question}\". Proceed on best judgment; record an amendment or decision if appropriate. {identity_hint}"
   # Hours before the watcher gives up polling.
   default_timeout_hours: 72
   # Minutes between poll checks.

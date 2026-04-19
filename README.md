@@ -73,6 +73,11 @@ At minimum, set these two fields:
 data_repo_path: ~/path/to/your-data-repo   # where contacts, campaigns, transcripts live
 identity:
   user_name: "Your Name"                    # who the agent represents (used across all channels)
+  # Optional pullable fields — agents fetch these via `outreach whoami --field <name>`
+  # first_name: "Fred"
+  # email_signature: "— Fred"
+  # address: "..."
+  # other: "free-text context that doesn't fit a specific key"
 ```
 
 The rest (Gemini model/voice/VAD for calls, default persona, thinking level) ships with sensible defaults. See `docs/done/tuning-reference.md` for call tuning parameters. SMS and email require no additional configuration beyond the secrets in `.env`.
@@ -100,9 +105,10 @@ The token covers both Gmail and Calendar scopes. If you previously authorized Gm
 outreach health                            # check data repo + readiness of all channels
 outreach context --campaign-id "2026-04-15-dental"                    # full campaign briefing
 outreach context --campaign-id "2026-04-15-dental" --contact-id "c_a1b2c3" --since 30  # focused
+outreach whoami --field first_name,email_signature  # pull configured identity fields on demand
 ```
 
-`health` validates config and reports per-channel readiness. `context` assembles a JIT briefing — campaign events + recent SMS threads + email threads for the relevant contacts.
+`health` validates config and reports per-channel readiness. `context` assembles a JIT briefing — campaign events + recent SMS threads + email threads for the relevant contacts. `whoami` lets headless callback agents pull identity fields (name, signature, address) without blanket prompt injection — see `skills/outreach/SKILL.md § outreach whoami`.
 
 ### Sending across channels
 
@@ -251,6 +257,7 @@ src/
   commands/
     health.ts                    # outreach health
     context.ts                   # outreach context
+    whoami.ts                    # outreach whoami (identity pull for callback agents)
     call/{init,teardown,place,listen,status,hangup}.ts
     sms/{send,history}.ts
     email/{send,history,search}.ts

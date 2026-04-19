@@ -185,6 +185,17 @@ for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
 done
 ```
 
+## `outreach whoami`
+
+Pull user identity fields on demand when a reply needs them (sign-off name, signature, address, phone, etc.).
+
+```bash
+outreach whoami --list                             # discover available keys
+outreach whoami --field first_name,email_signature # pull specific fields (comma-separated)， add --campaign-id to auto append audit record to JSONL
+```
+
+Pull only what the next reply actually uses. If a needed field isn't in `--list`, use `outreach ask-human` instead of guessing.
+
 ## `outreach ask-human`
 
 Writes a `human_question` event, registers a background watcher that resumes your work when the operator answers, then exits.
