@@ -23,7 +23,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 ```
 
 **Shared:**
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check,ask-human}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check,ask-human}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id` by default; `--to` is optional (resolved from contact record). Pass `--once` on any send (sms/email/call/calendar add/calendar remove) to bypass campaign tracking — required for adhoc tests/demos; mutually exclusive with `--campaign-id`/`--contact-id`/`--fire-and-forget` and requires `--to` on sms/email/call.
 - **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
 
 **Call channel** (Twilio + Gemini Live):
@@ -47,6 +47,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | Path | Purpose |
 |---|---|
 | `src/contacts.ts` | Contact interface + `resolveContactAddress()` — shared contact→address resolution |
+| `src/once.ts` | `validateOnce()` — shared validator for the `--once` adhoc-send flag across all send commands |
 | `src/cli.ts` | CLI entrypoint, wires all commands |
 | `src/daemon/server.ts` | Daemon: HTTP server, WebSocket handler, IPC handler, call logic |
 | `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams ↔ Gemini Live audio bridge + turn-level transcript batching |
@@ -116,6 +117,8 @@ All send commands (`call place`, `sms send`, `email send`) and calendar commands
 | `reply-check` | `--campaign-id`, `--contact-id`, `--channel` | — | — |
 
 Resolution lives in `src/contacts.ts` → `resolveContactAddress(contactId, channel)`.
+
+**Adhoc sends (`--once`).** Every send command accepts `--once` to skip campaign coupling — no `campaign-id`/`contact-id`, no JSONL append, no reply watcher. For smoke tests, demos, and one-off notifications only. Requires `--to` on sms/email/call; `--event-id`/event fields already required on calendar. Validation lives in `src/once.ts` → `validateOnce(channel, opts)`.
 
 ## Outreach quickstart
 

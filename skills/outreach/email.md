@@ -21,6 +21,8 @@ The CLI sends via Gmail API (OAuth2), then auto-appends an `attempt` entry with 
 
 Returns: `{ "to": "...", "subject": "...", "message_id": "...", "thread_id": "...", "status": "sent" }`
 
+**Ad-hoc test (`--once`):** `outreach email send --once --to test@example.com --subject "ping" --body "ping"` — no campaign state, no reply watcher. Use only for smoke-tests or demos; real outreach belongs in a campaign. `--reply-to-id`, `--cc`/`--bcc`, and `--attach` still work. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. Output includes `watch: { "status": "skipped", "reason": "once" }`.
+
 **Replying to a thread**: pass `--reply-to-id` with the Gmail message ID from a previous send or history lookup. The CLI auto-resolves threading headers (`In-Reply-To`, `References`), sets `Re:` subject prefix, and reply-all recipients (original sender → To, original To+Cc minus self → Cc). Use `--no-reply-all` to reply to sender only. Explicit `--to`/`--cc` override auto-resolved recipients.
 
 ## First-time auth

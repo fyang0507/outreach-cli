@@ -74,6 +74,8 @@ The destination phone number is resolved from the contact's `phone` field. Pass 
 
 Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
+**Ad-hoc test (`--once`):** `outreach call place --once --to +15551234567 --objective "Say hello and hang up" --300` — no campaign event. Output includes `"mode": "once"`. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id` and `--contact-id`. Note: `--once` still writes the per-call transcript at `$DATA_REPO/outreach/transcripts/<call_id>.jsonl` — the daemon needs it for `call listen`/`status`/`hangup`. There is no campaign JSONL event linking to it, so these transcripts are not discoverable via `outreach context`.
+
 The voice agent handles the entire call — IVR navigation, conversation, and hangup — based on the objective and persona you provide. You can't to send messages during the call.
 
 ## Monitoring a call

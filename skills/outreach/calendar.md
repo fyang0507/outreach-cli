@@ -22,6 +22,8 @@ The CLI creates the event via Google Calendar API, then auto-appends an `attempt
 
 Returns: `{ "event_id": "...", "html_link": "...", "summary": "...", "start": "...", "end": "...", "status": "created" }`
 
+**Ad-hoc add (`--once`):** `outreach calendar add --once --summary "test" --start 2099-01-01T10:00:00 --end 2099-01-01T11:00:00` — suppresses the campaign JSONL append. The event itself is real on Google Calendar regardless. Output includes `"mode": "once"`. Mutually exclusive with `--campaign-id` and `--contact-id`.
+
 ## Removing an event
 
 ```bash
@@ -38,6 +40,8 @@ The `event_id` comes from a previous `calendar add` result or from the campaign 
 The CLI deletes the event via Google Calendar API, then auto-appends an `attempt` entry with `channel: "calendar"`, `result: "removed"`, and `event_id` to the campaign JSONL.
 
 Returns: `{ "event_id": "...", "status": "removed" }`
+
+**Ad-hoc remove (`--once`):** `outreach calendar remove --once --event-id <id>` — suppresses the campaign JSONL append. Output: `{ "event_id": "...", "status": "removed", "mode": "once" }`. Mutually exclusive with `--campaign-id` and `--contact-id`.
 
 ## Rescheduling
 

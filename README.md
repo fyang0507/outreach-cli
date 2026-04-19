@@ -137,6 +137,20 @@ outreach calendar remove \
   --event-id "abc123xyz"
 ```
 
+#### Adhoc sends (`--once`)
+
+For smoke-tests, demos, or one-off notifications outside any campaign, pass `--once` instead of `--campaign-id`/`--contact-id`. No JSONL event is written and no reply watcher is registered. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`; requires `--to` for sms/email/call.
+
+```bash
+outreach sms send --once --to +15551234567 --body "ping"
+outreach email send --once --to test@example.com --subject "ping" --body "ping"
+outreach call place --once --to +15551234567 --objective "Say hello and hang up" --max-duration 300
+outreach calendar add --once --summary "test" --start 2099-01-01T10:00:00 --end 2099-01-01T11:00:00
+outreach calendar remove --once --event-id abc123xyz
+```
+
+Do not use `--once` as a workaround for missing campaign state — use it only when you genuinely don't want the send tracked.
+
 ### Reading history across channels
 
 ```bash
