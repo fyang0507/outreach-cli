@@ -111,7 +111,7 @@ Some `human_input` entries are authored asynchronously by external observers (e.
 {"ts":"2026-04-18T16:00:00Z","type":"human_question","contact_id":"c_a1b2c3","question":"Should I prioritize same-week availability or lowest price?","context":"Two viable options with tradeoffs"}
 ```
 
-Written by `outreach ask-human`. The CLI registers a sundial watch that polls for new `human_input` entries and resumes your session when one arrives (or when the configured timeout elapses). `contact_id` and `context` are optional. Use when you need operator input and cannot make a well-founded decision from available signal.
+Written by `outreach ask-human`. The CLI registers a background watcher that polls the campaign JSONL for new `human_input` entries and resumes your session when one arrives (or when the configured timeout elapses). `contact_id` and `context` are optional. Use when you need operator input and cannot make a well-founded decision from available signal.
 
 **Email `human_input` with `thread_id`**: When recording inbound email activity, include `thread_id` so `outreach context` can discover and fetch the thread. The agent finds the thread_id via `outreach email search`, confirms with the user, then records:
 ```json
@@ -135,7 +135,7 @@ A `decision` is **not necessarily the final entry**. The user may cancel, resche
 After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
 
 **System-written events** — the CLI also appends two event types you should not author or edit manually:
-- `watch` — records the sundial schedule ID when a send registers a reply watcher.
+- `watch` — records the watcher's schedule ID when a send registers a reply watcher.
 - `callback_run` — one entry per callback-dispatch invocation. Records `agent`, `exit_code`, `duration_ms`, whether it resumed a prior session (`resumed`, `prior_session_id`), whether a new session was captured (`session_captured`, `new_session_id`), and the per-run log path (`log_file`, relative to the data repo). The resume chain reads this — the last run with `session_captured: true` for a (contact, channel) is the session the next callback will `--resume`. Changing `watch.callback_agent` in `outreach.config.yaml` invalidates stored sessions and the next callback starts fresh. Full agent stdout/stderr for each run is captured under `outreach/callback-logs/`.
 
 ### Sync
