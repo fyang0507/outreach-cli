@@ -25,7 +25,6 @@ $DATA_REPO/outreach/
   contacts/              # one JSON file per contact (mutable)
   campaigns/             # one JSONL file per campaign (append-only)
   transcripts/           # call transcripts (CLI-written)
-  callback-logs/         # background agent-run logs (CLI-written, do not edit)
 ```
 
 (`cli-feedback.jsonl` also lives here — see Part 2.)
@@ -68,34 +67,13 @@ One JSONL file per campaign in `campaigns/`. **Strictly append-only — never ed
 
 The `status` field is informational only — this CLI never rewrites it. Infer effective campaign state from the latest un-amended `decision` / `amendment` entries, not from the header.
 
-**Lines 2+ — events.** One JSON object per line. Event types and authorship:
+**Lines 2+ — events.** One JSON object per line. `type` values:
 
-| `type` | Author | Purpose |
-|---|---|---|
-| `attempt` | CLI (send commands) | Procedural record of an outreach action |
-| `outcome` | Agent | Judgment + extracted info after an attempt |
-| `human_input` | Agent **or** external observer | Off-horizon information (callbacks, in-person notes, replies relayed from another channel) |
-| `human_question` | CLI (`ask-human`) | The agent's question to the operator |
-| `decision` | Agent | Campaign objective resolved |
-| `amendment` | Agent | Post-decision change (cancel, reschedule, swap) |
-| `watch` | CLI (send commands) | Reply-watcher schedule registration |
-| `callback_run` | CLI (callback dispatcher) | Per-run record when the watcher fires a session |
+| You write | Don't edit / don't hand-author |
+|---|---|
+| `outcome`, `human_input`, `decision`, `amendment` | `attempt`, `watch`, `callback_run`, `human_question` |
 
-Agent-authored entries are the ones you write; CLI-authored entries (`attempt`, `human_question`, `watch`, `callback_run`) are opaque — do not edit or hand-author them.
-
-### `attempt`
-Common shape — `{ts, type:"attempt", contact_id, channel, result, ...}`. `channel` is one of `call` / `sms` / `email` / `calendar`; channel-specific fields follow.
-
-```json
-{"ts":"2026-04-06T10:15:00Z","contact_id":"c_a1b2c3","type":"attempt","channel":"call","result":"connected","call_id":"call_abc123"}
-```
-
-- **call** — `result` enum: `connected`, `no_answer`, `busy`, `voicemail`, `failed`. Adds `call_id`.
-- **sms** — `result: "sent"`. Adds `await_reply: <bool>` (false when sent with `--fire-and-forget`, true otherwise).
-- **email** — `result: "sent"`. Adds `message_id`, `thread_id`, `await_reply: <bool>`.
-- **calendar** — `result: "created"` (from `calendar add`) or `"removed"` (from `calendar remove`). Adds `event_id`; `calendar add` also adds `summary`, `start`, `end`. The `event_id` is how you later `calendar remove` or re-create on a reschedule — retrieve it from the `calendar add` attempt.
-
-See the per-channel docs for full field lists.
+The CLI-written types are self-explanatory when you encounter them in `outreach context` output — read what's useful, don't author new ones. The four you write have schemas below.
 
 ### `outcome`
 ```json
@@ -125,12 +103,6 @@ For inbound email specifically, include `thread_id` so `outreach context` can fe
 {"ts":"2026-04-12T09:00:00Z","type":"human_input","contact_id":"c_a1b2c3","channel":"email","thread_id":"18f1a2b3c4d5e6f7","content":"Received reply confirming Thursday availability"}
 ```
 
-### `human_question`
-The agent's question to the operator. `contact_id` and `context` are optional.
-```json
-{"ts":"2026-04-18T16:00:00Z","type":"human_question","contact_id":"c_a1b2c3","question":"Prioritize same-week availability or lowest price?","context":"Two viable options with tradeoffs"}
-```
-
 ### `decision`
 Campaign-level resolution.
 ```json
@@ -146,10 +118,6 @@ Modifies a prior decision.
 `action` enum: `cancelled`, `rescheduled`, `changed_provider`.
 
 After an amendment the campaign is effectively active again — more `attempt` / `outcome` / `decision` entries may follow. The latest un-amended `decision` reflects current state.
-
-### `watch` and `callback_run` (CLI-written, opaque)
-- **`watch`** — records a reply-watcher schedule id when a send registers one.
-- **`callback_run`** — one entry per callback-dispatch invocation. Fields include `agent`, `exit_code`, `duration_ms`, resume info (`resumed`, `prior_session_id`, `session_captured`, `new_session_id`), and `log_file` (relative to the data repo). Full agent stdout/stderr for each run is in `callback-logs/`.
 
 ---
 
@@ -199,14 +167,7 @@ Returns `{ campaign, events, recent_messages }`. `recent_messages` is keyed by `
 
 The command reads the campaign JSONL, optionally filters events by `--contact-id`, then — for each included contact with SMS or email activity in the events — fetches recent iMessage history and/or Gmail threads.
 
-> **Note — `--since` scope.** `--since <days>` takes a number of days and controls the **SMS history window only**. It does **not** filter campaign events in the JSONL, and it does not apply to email. To filter events by time (e.g. "last hour"), read the JSONL and filter with `jq`, e.g.:
-> ```bash
-> jq -c --arg t "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
->   'select(.type=="human_input" and .ts > $t)' \
->   "$DATA_REPO/outreach/campaigns/<id>.jsonl"
-> ```
->
-> Worked example — scan every campaign for external-observer replies in the last hour, reading the body via the `content ?? text` normalization rule (Part 1 §`human_input`). `source`, if present, is opaque — don't branch on it:
+> **Note — `--since` scope.** `--since <days>` controls the **SMS history window only**. It does **not** filter campaign events or email. To filter events by time, read the JSONL with `jq` — combine with the `content ?? text` normalization rule for `human_input`:
 > ```bash
 > for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
 >   jq -r --arg t "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
@@ -255,18 +216,11 @@ In this workflow, an **outreach action** means a send (`call place`, `sms send`,
 
 Run `outreach health` if you have not already. Then search `$DATA_REPO/outreach/campaigns/` for an existing campaign matching the operator's request (slug, objective, contacts). An agent prompted with "schedule a dentist visit for X" does not know whether a campaign already exists — it **must check first**.
 
-**Canonical discovery pattern** (until a dedicated command ships, this recipe is the contract; a future CLI subcommand can replace it without changing the workflow):
+**Canonical discovery pattern** (a future CLI subcommand may replace it; the workflow stays the same):
 
 ```bash
-# List candidate campaign files
-ls "$DATA_REPO/outreach/campaigns/"
-
-# Read one campaign's header (line 1) for objective + contacts
-head -n 1 "$DATA_REPO/outreach/campaigns/2026-04-15-dental-cleaning.jsonl" | jq
-
-# Or scan all headers at once, filtering by slug keyword
 for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
-  head -n 1 "$f" | jq -c '{file: "'"$f"'", campaign_id, objective, contacts, status}'
+  head -n 1 "$f" | jq -c '{file: "'"$f"'", campaign_id, objective, contacts}'
 done
 ```
 
@@ -304,7 +258,7 @@ After any send — and after any outside information arrives — update the JSON
 
 ## 5. Before any new outreach action
 
-This step applies **whenever you enter an existing campaign** — whether you were spawned by a watcher, are continuing mid-session, or are picking up an old campaign fresh. The entry reasons vary (reply watcher fired, `ask-human` was answered, the operator relayed something between sessions, the operator re-invoked you) but the pre-action procedure is the same. Watcher observable signals are defined in Part 2 §Auto reply-watcher — don't restate them here.
+Applies **whenever you enter an existing campaign**, regardless of entry reason (watcher fired, `ask-human` was answered, operator re-invoked you, etc.).
 
 1. Read the campaign JSONL (or run `outreach context`).
 2. Scan for new `human_input` entries since your anchor (rule below), plus any outstanding `human_question` entries without a matching answer.
