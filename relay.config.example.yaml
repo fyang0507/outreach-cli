@@ -37,7 +37,6 @@ sources:
       attempt:          silent
       watch:            silent
       callback_run:     silent
-      callback_session: silent   # legacy, predates callback_run; still appears in historical campaigns
       outcome:          notify
       decision:         notify
       amendment:        notify

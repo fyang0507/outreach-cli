@@ -118,7 +118,7 @@ Information from outside the agent's observation horizon.
 - `context` is optional — the human's color/interpretation beyond raw facts.
 - There is no `verdict` on `human_input`. If the input materially changes a contact's standing, produce a follow-up `outcome` with your own judgment.
 
-**External-observer entries.** A separate process may append `human_input` entries directly to the campaign JSONL when the operator replies via an external channel (independent of any agent session). These entries may carry the body under `text` instead of `content`, and may add a `source` field (e.g. `"source": "relay-inbound"`). Normalization rule: **always read `content ?? text`** — both forms carry the body. Treat `source` as an opaque string: its **presence** signals the entry came from outside, but specific values are passthrough — do not branch on them. Agent-authored and external-observer entries are otherwise consumed identically.
+**External-observer entries.** A separate process may append `human_input` entries directly to the campaign JSONL when the operator replies via an external channel (independent of any agent session). These entries may carry the body under `text` instead of `content`, and may add an opaque `source` field identifying the external channel. Normalization rule: **always read `content ?? text`** — both forms carry the body. Treat `source` as an opaque string: its **presence** signals the entry came from outside, but specific values are passthrough — do not branch on them. Agent-authored and external-observer entries are otherwise consumed identically.
 
 For inbound email specifically, include `thread_id` so `outreach context` can fetch the thread:
 ```json
