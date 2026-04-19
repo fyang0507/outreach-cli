@@ -67,13 +67,20 @@ One JSONL file per campaign in `campaigns/`. **Strictly append-only — never ed
 
 The `status` field is informational only — this CLI never rewrites it. Infer effective campaign state from the latest un-amended `decision` / `amendment` entries, not from the header.
 
-**Lines 2+ — events.** One JSON object per line. `type` values:
+**Lines 2+ — events.** One JSON object per line.
 
-| You write | Don't edit / don't hand-author |
-|---|---|
-| `outcome`, `human_input`, `decision`, `amendment` | `attempt`, `watch`, `callback_run`, `human_question` |
+| `type` | Author | Purpose |
+|---|---|---|
+| `attempt` | CLI (send commands) | Procedural record of a send |
+| `outcome` | Agent | Judgment + extracted info after an attempt |
+| `human_input` | Agent **or** external observer | Off-horizon info (callbacks, in-person, replies from another channel) |
+| `human_question` | CLI (`ask-human`) | The agent's question to the operator |
+| `decision` | Agent | Campaign objective resolved |
+| `amendment` | Agent | Post-decision change (cancel, reschedule, swap) |
+| `watch` | CLI (send commands) | Reply-watcher schedule registration |
+| `callback_run` | CLI (callback dispatcher) | Record per dispatch when the watcher fires a session |
 
-The CLI-written types are self-explanatory when you encounter them in `outreach context` output — read what's useful, don't author new ones. The four you write have schemas below.
+You write the four **Agent** rows (schemas below). CLI-authored rows are opaque — read their fields in `outreach context` output as needed, but never edit or hand-author them.
 
 ### `outcome`
 ```json
@@ -167,13 +174,14 @@ Returns `{ campaign, events, recent_messages }`. `recent_messages` is keyed by `
 
 The command reads the campaign JSONL, optionally filters events by `--contact-id`, then — for each included contact with SMS or email activity in the events — fetches recent iMessage history and/or Gmail threads.
 
-> **Note — `--since` scope.** `--since <days>` controls the **SMS history window only**. It does **not** filter campaign events or email. To filter events by time, read the JSONL with `jq` — combine with the `content ?? text` normalization rule for `human_input`:
-> ```bash
-> for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
->   jq -r --arg t "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
->     'select(.type=="human_input" and .ts > $t) | "\(input_filename): \(.content // .text)"' "$f"
-> done
-> ```
+`--since <days>` is a unified window: it narrows campaign events, SMS history, and email threads to the last N days. Header is always returned in full, so campaign objective/contacts survive any window. For sub-day filtering (e.g. "last hour"), read the JSONL with `jq` — combine with the `content ?? text` normalization rule for `human_input`:
+
+```bash
+for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
+  jq -r --arg t "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+    'select(.type=="human_input" and .ts > $t) | "\(input_filename): \(.content // .text)"' "$f"
+done
+```
 
 ## `outreach ask-human`
 

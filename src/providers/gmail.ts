@@ -390,6 +390,7 @@ export async function readEmailHistory(opts: {
   address?: string;
   threadId?: string;
   limit?: number;
+  sinceDays?: number;
 }): Promise<EmailSummary[]> {
   const gmail = await getGmailClient();
   const limit = opts.limit ?? 20;
@@ -411,9 +412,11 @@ export async function readEmailHistory(opts: {
     throw new Error("Either --address or --thread-id is required");
   }
 
+  const sinceClause =
+    opts.sinceDays && opts.sinceDays > 0 ? ` newer_than:${opts.sinceDays}d` : "";
   const list = await gmail.users.messages.list({
     userId: "me",
-    q: `from:${opts.address} OR to:${opts.address}`,
+    q: `(from:${opts.address} OR to:${opts.address})${sinceClause}`,
     maxResults: limit,
   });
 
@@ -442,6 +445,7 @@ export async function readEmailThreads(opts: {
   threadIds?: string[];
   address?: string;
   limit?: number;
+  sinceDays?: number;
 }): Promise<EmailThread[]> {
   if (opts.threadIds && opts.threadIds.length > 0) {
     // Thread-ID path: fetch each thread individually
@@ -461,13 +465,26 @@ export async function readEmailThreads(opts: {
       }
     }
 
+    // Filter threads whose latest message is older than sinceDays cutoff.
+    // Applies to the threadIds path; address path filters at the query layer.
+    const filtered =
+      opts.sinceDays && opts.sinceDays > 0
+        ? threads.filter((t) => {
+            const latest = t.messages[t.messages.length - 1]!.date;
+            return (
+              new Date(latest).getTime() >
+              Date.now() - opts.sinceDays! * 86_400_000
+            );
+          })
+        : threads;
+
     // Sort chronologically by first message date
-    threads.sort(
+    filtered.sort(
       (a, b) =>
         new Date(a.messages[0]!.date).getTime() -
         new Date(b.messages[0]!.date).getTime(),
     );
-    return threads;
+    return filtered;
   }
 
   // Address fallback: fetch flat list, group by threadId
@@ -476,6 +493,7 @@ export async function readEmailThreads(opts: {
   const messages = await readEmailHistory({
     address: opts.address,
     limit: opts.limit ?? 10,
+    sinceDays: opts.sinceDays,
   });
   if (messages.length === 0) return [];
 
