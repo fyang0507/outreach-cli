@@ -23,7 +23,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 ```
 
 **Shared:**
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check,ask-human}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id`; `--to` is optional (resolved from contact record).
 - **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
 
 **Call channel** (Twilio + Gemini Live):
@@ -62,6 +62,8 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/commands/health.ts` | `outreach health` — omnichannel readiness check |
 | `src/commands/context.ts` | `outreach context` — cross-channel JIT briefing assembly |
 | `src/commands/replyCheck.ts` | `outreach reply-check` — sundial poll trigger, checks for inbound replies |
+| `src/commands/askHuman.ts` | `outreach ask-human` — write human_question + register watch |
+| `src/commands/askHumanCheck.ts` | [internal] sundial trigger — fires on new human_input or timeout |
 | `src/watch.ts` | Sundial registration helper — `registerReplyWatch()` for auto-watch on send |
 | `src/commands/call/*.ts` | One file per call command (init, teardown, place, listen, status, hangup) |
 | `src/commands/sms/send.ts` | `outreach sms send` — send iMessage + log campaign attempt |

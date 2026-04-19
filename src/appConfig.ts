@@ -52,6 +52,8 @@ export interface WatchConfig {
   enabled: boolean;
   callback_agent: string;
   callback_prompt: string;
+  callback_prompt_human_input?: string;
+  callback_prompt_human_input_timeout?: string;
   default_timeout_hours: number;
   poll_interval_minutes: number;
 }

@@ -8,6 +8,9 @@ import {
   appendCampaignEvent,
   buildCallbackLogPath,
   findLatestCallbackRun,
+  findLatestHumanInputCallbackRun,
+  findLatestHumanQuestion,
+  hasNewHumanInputSince,
   isoNow,
   readContact,
 } from "../logs/sessionLog.js";
@@ -32,13 +35,15 @@ function resolvePrompt(
     contactId: string;
     channel: string;
     contactName: string;
+    question?: string;
   },
 ): string {
   return template
     .replace(/\{contact_id\}/g, opts.contactId)
     .replace(/\{campaign_id\}/g, opts.campaignId)
     .replace(/\{channel\}/g, opts.channel)
-    .replace(/\{contact_name\}/g, opts.contactName);
+    .replace(/\{contact_name\}/g, opts.contactName)
+    .replace(/\{question\}/g, opts.question ?? "");
 }
 
 // Filesystem-safe ISO-like stamp: "20260416T211842Z".
@@ -92,17 +97,24 @@ export function registerCallbackDispatchCommand(program: Command): void {
     )
     .requiredOption("--campaign-id <id>", "Campaign ID")
     .requiredOption("--contact-id <id>", "Contact ID")
-    .requiredOption("--channel <channel>", 'Channel: "sms" or "email"')
+    .requiredOption(
+      "--channel <channel>",
+      'Channel: "sms", "email", or "human_input"',
+    )
     .action(
       async (opts: {
         campaignId: string;
         contactId: string;
         channel: string;
       }) => {
-        if (opts.channel !== "sms" && opts.channel !== "email") {
+        if (
+          opts.channel !== "sms" &&
+          opts.channel !== "email" &&
+          opts.channel !== "human_input"
+        ) {
           outputError(
             INFRA_ERROR,
-            `Invalid channel "${opts.channel}". Must be "sms" or "email".`,
+            `Invalid channel "${opts.channel}". Must be "sms", "email", or "human_input".`,
           );
           process.exit(INFRA_ERROR);
           return;
@@ -118,7 +130,48 @@ export function registerCallbackDispatchCommand(program: Command): void {
           return;
         }
 
-        const { callback_agent, callback_prompt } = config.watch;
+        const { callback_agent } = config.watch;
+        const isHumanInput = opts.channel === "human_input";
+        const isCampaignSentinel = opts.contactId === "__campaign__";
+
+        let promptTemplate: string;
+        let resumedReason: "human_input" | "timeout" | undefined;
+        let latestQuestion: Awaited<
+          ReturnType<typeof findLatestHumanQuestion>
+        > = null;
+
+        if (isHumanInput) {
+          const humanInputPrompt = config.watch.callback_prompt_human_input;
+          const timeoutPrompt = config.watch.callback_prompt_human_input_timeout;
+          if (!humanInputPrompt || !timeoutPrompt) {
+            outputError(
+              INFRA_ERROR,
+              "watch.callback_prompt_human_input and watch.callback_prompt_human_input_timeout are required for channel=human_input.",
+            );
+            process.exit(INFRA_ERROR);
+            return;
+          }
+
+          latestQuestion = await findLatestHumanQuestion(
+            opts.campaignId,
+            isCampaignSentinel ? undefined : opts.contactId,
+          );
+
+          const baselineTs = latestQuestion?.ts ?? "";
+          const arrived = baselineTs
+            ? await hasNewHumanInputSince(opts.campaignId, baselineTs)
+            : false;
+
+          if (arrived) {
+            promptTemplate = humanInputPrompt;
+            resumedReason = "human_input";
+          } else {
+            promptTemplate = timeoutPrompt;
+            resumedReason = "timeout";
+          }
+        } else {
+          promptTemplate = config.watch.callback_prompt;
+        }
 
         let adapter;
         try {
@@ -130,25 +183,30 @@ export function registerCallbackDispatchCommand(program: Command): void {
         }
 
         let contactName = opts.contactId;
-        try {
-          const contact = await readContact(opts.contactId);
-          if (contact.name) contactName = contact.name;
-        } catch {
-          // Missing contact shouldn't block the callback — fall back to the ID.
+        if (!isCampaignSentinel) {
+          try {
+            const contact = await readContact(opts.contactId);
+            if (contact.name) contactName = contact.name;
+          } catch {
+            // Missing contact shouldn't block the callback — fall back to the ID.
+          }
         }
 
-        const prompt = resolvePrompt(callback_prompt, {
+        const prompt = resolvePrompt(promptTemplate, {
           campaignId: opts.campaignId,
           contactId: opts.contactId,
           channel: opts.channel,
           contactName,
+          question: latestQuestion?.question,
         });
 
-        const prior = await findLatestCallbackRun(
-          opts.campaignId,
-          opts.contactId,
-          opts.channel,
-        );
+        const prior = isHumanInput
+          ? await findLatestHumanInputCallbackRun(opts.campaignId)
+          : await findLatestCallbackRun(
+              opts.campaignId,
+              opts.contactId,
+              opts.channel,
+            );
 
         // Agent mismatch (config changed) invalidates the stored session.
         const canResume = prior !== null && prior.agent === callback_agent;
@@ -197,7 +255,7 @@ export function registerCallbackDispatchCommand(program: Command): void {
 
         await appendCampaignEvent(opts.campaignId, {
           ts: isoNow(),
-          contact_id: opts.contactId,
+          contact_id: isCampaignSentinel ? null : opts.contactId,
           type: "callback_run",
           channel: opts.channel,
           agent: callback_agent,
@@ -209,6 +267,7 @@ export function registerCallbackDispatchCommand(program: Command): void {
           session_captured: newSessionId !== undefined,
           new_session_id: newSessionId ?? null,
           log_file: logFileRel,
+          resumed_reason: resumedReason ?? null,
         });
 
         process.exit(result.code);

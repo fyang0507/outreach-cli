@@ -1,0 +1,49 @@
+# Example relay.config.yaml for outreach-cli.
+#
+# Relay is a separate observability daemon that mirrors JSONL files to
+# Telegram forum topics and writes human replies back into the same files.
+# Outreach does not depend on it — the filesystem is the only contract.
+#
+# Setup: https://github.com/fyang0507/relay/tree/master/skills/relay-integration
+#   1. In the relay checkout: `npm install && npm run build`, set
+#      TELEGRAM_BOT_API_TOKEN in relay's .env, then `relay init`.
+#   2. Copy this file to relay.config.yaml, replace <DATA_REPO_PATH> and
+#      <GROUP_ID> below.
+#   3. Register with: `relay add --config /abs/path/to/relay.config.yaml`.
+#      Verify with `relay list`, check daemon with `relay health`.
+#
+# The data-repo path matches `outreach health | jq -r .data_repo.path`.
+# Relay expands `~` but does not read outreach.config.yaml.
+
+sources:
+  - name: outreach-campaigns
+    path_glob: <DATA_REPO_PATH>/outreach/campaigns/*.jsonl
+
+    # Loop prevention: relay appends human_input on inbound Telegram replies.
+    # The outbound watcher skips any line whose type is in this list, so
+    # replies don't round-trip. Side-effect: agent-authored human_input
+    # entries are also skipped (not mirrored to Telegram). This is
+    # intentional — the downstream `outcome` the agent writes after
+    # ingesting the human_input IS mirrored, and carries the synthesis.
+    inbound_types: [human_input]
+
+    # Tier policy — silent / notify / ignore per event type.
+    # Procedural records stay silent (reviewable but no phone buzz).
+    # Judgment events (outcome, decision, amendment) notify the observer.
+    # campaign_header publishes silently so new topics open with context.
+    tier_key: type   # override if your agents already use a different field name
+    tiers:
+      campaign_header:  silent
+      attempt:          silent
+      watch:            silent
+      callback_run:     silent
+      outcome:          notify
+      decision:         notify
+      amendment:        notify
+      human_input:      notify   # applies to agent-authored entries only;
+                                 # relay-authored ones are filtered above
+      human_question:   notify   # agent-initiated ask; observer sees the question in Telegram
+
+    provider:
+      type: telegram
+      group_id: <GROUP_ID>   # -100xxxxxxxxxx (supergroup with forum topics enabled)

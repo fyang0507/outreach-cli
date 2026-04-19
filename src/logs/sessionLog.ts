@@ -211,6 +211,70 @@ export async function findLatestOutboundAttempt(
   return null;
 }
 
+// --- Human question lookup ---
+
+export interface HumanQuestion {
+  ts: string;
+  campaign_id: string;
+  contact_id?: string;
+  question: string;
+}
+
+export async function findLatestHumanQuestion(
+  campaignId: string,
+  contactId?: string,
+): Promise<HumanQuestion | null> {
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
+  try {
+    data = await readCampaignEvents(campaignId);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+
+  const allLines = [data.header, ...data.events];
+
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const e = allLines[i]!;
+    if (e.type !== "human_question") continue;
+    if (contactId != null && e.contact_id !== contactId) continue;
+    if (typeof e.ts !== "string" || typeof e.question !== "string") continue;
+    return {
+      ts: e.ts,
+      campaign_id: campaignId,
+      contact_id: typeof e.contact_id === "string" ? e.contact_id : undefined,
+      question: e.question,
+    };
+  }
+
+  return null;
+}
+
+export async function hasNewHumanInputSince(
+  campaignId: string,
+  baselineTs: string,
+): Promise<boolean> {
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
+  try {
+    data = await readCampaignEvents(campaignId);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+
+  const allLines = [data.header, ...data.events];
+
+  for (const e of allLines) {
+    if (e.type !== "human_input") continue;
+    // Relay-inbound entries use `timestamp` instead of `ts`; accept either.
+    const raw = typeof e.ts === "string" ? e.ts : e.timestamp;
+    if (typeof raw !== "string") continue;
+    if (raw > baselineTs) return true;
+  }
+
+  return false;
+}
+
 // --- Callback run lookup ---
 
 export interface CallbackRunResumeInfo {
@@ -244,6 +308,42 @@ export async function findLatestCallbackRun(
       e.type === "callback_run" &&
       e.contact_id === contactId &&
       e.channel === channel &&
+      e.session_captured === true &&
+      typeof e.agent === "string" &&
+      typeof e.new_session_id === "string"
+    ) {
+      return {
+        ts: e.ts as string,
+        agent: e.agent,
+        session_id: e.new_session_id,
+      };
+    }
+  }
+
+  return null;
+}
+
+// Campaign-scoped variant for the ask-human channel. ask-human questions may
+// be campaign-level (no contact_id), so the resume chain cannot filter by
+// contact — any prior human_input callback on this campaign is fair game.
+export async function findLatestHumanInputCallbackRun(
+  campaignId: string,
+): Promise<CallbackRunResumeInfo | null> {
+  let data: { header: Record<string, unknown>; events: Record<string, unknown>[] };
+  try {
+    data = await readCampaignEvents(campaignId);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+
+  const allLines = [data.header, ...data.events];
+
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const e = allLines[i]!;
+    if (
+      e.type === "callback_run" &&
+      e.channel === "human_input" &&
       e.session_captured === true &&
       typeof e.agent === "string" &&
       typeof e.new_session_id === "string"

@@ -20,6 +20,10 @@ export function registerContextCommand(program: Command): void {
         since: string;
       }) => {
         const sinceDays = parseInt(opts.since, 10);
+        const sinceCutoffMs =
+          Number.isFinite(sinceDays) && sinceDays > 0
+            ? Date.now() - sinceDays * 86_400_000
+            : null;
 
         // 1. Read campaign
         let header: Record<string, unknown>;
@@ -36,13 +40,21 @@ export function registerContextCommand(program: Command): void {
           return;
         }
 
-        // 2. Filter events if --contact-id
+        // 2. Filter events: --contact-id narrows to a single person; --since
+        // drops events older than the window. Header is always returned in
+        // full (separate field), so campaign objective/contacts are never lost.
         let events = allEvents;
         if (opts.contactId) {
-          events = allEvents.filter(
+          events = events.filter(
             (e) =>
               !("contact_id" in e) || e.contact_id === opts.contactId,
           );
+        }
+        if (sinceCutoffMs !== null) {
+          events = events.filter((e) => {
+            const ts = typeof e.ts === "string" ? Date.parse(e.ts) : NaN;
+            return Number.isFinite(ts) ? ts >= sinceCutoffMs : true;
+          });
         }
 
         // 3. Determine contacts to include
@@ -114,6 +126,7 @@ export function registerContextCommand(program: Command): void {
               if (threadIds.length > 0) {
                 channelMessages.email_threads = await readEmailThreads({
                   threadIds,
+                  sinceDays,
                 });
               } else {
                 const emailAddr = contact.email ?? null;
@@ -121,6 +134,7 @@ export function registerContextCommand(program: Command): void {
                   channelMessages.email_threads = await readEmailThreads({
                     address: emailAddr,
                     limit: 10,
+                    sinceDays,
                   });
                 }
               }

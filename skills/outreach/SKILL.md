@@ -3,42 +3,36 @@ name: outreach
 description: Omnichannel outreach — calls, SMS, email, and calendar (Google Calendar). Campaign lifecycle, contact management, and cross-channel context via the outreach CLI.
 ---
 
-Omnichannel outreach capability — voice calls (Twilio + Gemini Live), SMS (iMessage), email (Gmail), and calendar (Google Calendar) through a unified CLI. Covers both the tool (CLI commands for sending, monitoring, and querying) and the protocol (campaign lifecycle, contact management, outcome tracking, cross-channel context assembly).
+Run outreach campaigns across voice (Twilio + Gemini Live), SMS (iMessage), email (Gmail), and calendar (Google Calendar). This document covers the data model and cross-channel workflow. Per-channel commands live in separate docs — load only the one you need:
 
-**Channel-specific references** (load only the channel you need):
-- [call.md](./call.md) — voice calls via Twilio + Gemini Live
-- [sms.md](./sms.md) — SMS via iMessage
-- [email.md](./email.md) — email via Gmail
-- [calendar.md](./calendar.md) — calendar events via Google Calendar
+- [call.md](./call.md) — voice calls
+- [sms.md](./sms.md) — SMS
+- [email.md](./email.md) — email
+- [calendar.md](./calendar.md) — calendar events
 
 ## Prerequisites
 
-Before any outreach, check system health and initialize the data repo:
+Always start a session with `outreach health` (Part 2 §`outreach health`). Use its `data_repo.path` as `$DATA_REPO` for any direct file reads below.
 
-```bash
-outreach health        # validates data repo, shows readiness of all channels (call, sms, email, calendar)
-```
+---
 
-`health` returns `data_repo.path` in its JSON output — use this as `$DATA_REPO` for all file operations below. It validates the data repo exists and is in sync with remote, and ensures the directory structure is created.
+# Part 1 — Data schema
 
-## Data repo
-
-Outreach data (contacts, campaigns, transcripts) lives in an external git repo, not managed by this CLI. `outreach init` creates these directories automatically.
+Outreach state lives in an external git repo; this CLI does not manage that repo's lifecycle. You read and write these files directly with standard tools (`jq`, `grep`, `cat`, plain appends); the CLI does not wrap file I/O.
 
 ```
-<data-repo>/outreach/
-  contacts/        # one JSON file per contact (mutable)
-  campaigns/       # one JSONL file per campaign (append-only)
-  transcripts/     # call transcripts (JSONL, auto-saved by CLI)
+$DATA_REPO/outreach/
+  contacts/              # one JSON file per contact (mutable)
+  campaigns/             # one JSONL file per campaign (append-only)
+  transcripts/           # call transcripts (CLI-written)
 ```
 
-You manage these files directly with standard tools (`jq`, `grep`, `cat`, `echo`). The CLI does not wrap file I/O.
+(`cli-feedback.jsonl` also lives here — see Part 2.)
 
-### Contacts
+## Contacts
 
-One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in place as you learn more.
+One JSON file per contact, filename is `<id>.json` (e.g. `c_a1b2c3.json`). Mutable — rewrite in place as you learn more.
 
-**Schema:**
 ```json
 {
   "id": "c_a1b2c3",
@@ -53,224 +47,240 @@ One JSON file per contact in `outreach/contacts/`. Mutable — overwritten in pl
 }
 ```
 
-- **ID convention**: `c_` prefix + random hex (e.g., `c_a1b2c3`). Use this as the filename.
-- **`phone`**: primary phone number, used for calls.
-- **`sms_phone`**: optional SMS-specific phone number. When present, SMS commands use it instead of `phone`. Use this when a contact has a landline for calls and a mobile for texts.
-- **`email`**: email address for sending. Used as send target for new threads; `null` when unknown.
-- Contacts are built up progressively — an initial identifier (phone, email, or both) first, then name/notes after the first interaction.
-- Before creating a new contact, search existing contacts to avoid duplicates.
+- **`id`** — `c_` prefix + random hex (e.g. `c_a1b2c3`). Also the filename stem.
+- **`phone`** — primary number, used for calls.
+- **`sms_phone`** — optional SMS-specific number. When present, SMS uses it instead of `phone`.
+- **`email`** — send target for new email threads; `null` when unknown.
 
-### Campaigns
+Build contacts progressively — identifier first, then `name`, `tags`, `notes` after the first interaction. Search existing contacts before creating a new one to avoid duplicates.
 
-One JSONL file per campaign in `outreach/campaigns/`. Strictly append-only — never edit existing lines.
+## Campaigns
 
-**Naming convention**: `YYYY-MM-DD-<slug>` — date is campaign creation date, slug is a short kebab-case description. Examples: `2026-04-15-dental-cleaning`, `2026-04-20-hood-cleaning-quote`. The date prefix makes it easy to see campaign lifespan and avoids logging to the wrong file.
+One JSONL file per campaign in `campaigns/`. **Strictly append-only — never edit existing lines.**
+
+**Filename**: `YYYY-MM-DD-<slug>.jsonl`. The date is the campaign creation date; the slug is a short kebab-case description. Example: `2026-04-15-dental-cleaning.jsonl`. The date prefix makes lifespan obvious and avoids logging to the wrong file.
 
 **Line 1 — campaign header:**
 ```json
-{
-  "campaign_id": "2026-04-15-dental-cleaning",
-  "created": "2026-04-15T10:00:00Z",
-  "objective": "Schedule dental cleaning, ideally before end of April",
-  "contacts": ["c_a1b2c3", "c_d4e5f6"],
-  "status": "active"
-}
+{"type":"campaign_header","campaign_id":"2026-04-15-dental-cleaning","created":"2026-04-15T10:00:00Z","objective":"Schedule dental cleaning before end of April","contacts":["c_a1b2c3","c_d4e5f6"],"status":"active"}
 ```
 
-**Lines 2+ — append-only event log** with five entry types:
+The `status` field is informational only — this CLI never rewrites it. Infer effective campaign state from the latest un-amended `decision` / `amendment` entries, not from the header.
 
-**`attempt`** — procedural record of an outreach effort:
-```json
-{"ts":"2026-04-06T10:15:00Z","contact_id":"c_a1b2c3","type":"attempt","channel":"call","result":"connected","call_id":"call_abc123"}
-```
-Call `result` values: `connected`, `no_answer`, `busy`, `voicemail`, `failed`
+**Lines 2+ — events.** One JSON object per line.
 
-**`outcome`** — what was learned + orchestrator's judgment:
+| `type` | Author | Purpose |
+|---|---|---|
+| `attempt` | CLI (send commands) | Procedural record of a send |
+| `outcome` | Agent | Judgment + extracted info after an attempt |
+| `human_input` | Agent **or** external observer | Off-horizon info (callbacks, in-person, replies from another channel) |
+| `human_question` | CLI (`ask-human`) | The agent's question to the operator |
+| `decision` | Agent | Campaign objective resolved |
+| `amendment` | Agent | Post-decision change (cancel, reschedule, swap) |
+| `watch` | CLI (send commands) | Reply-watcher schedule registration |
+| `callback_run` | CLI (callback dispatcher) | Record per dispatch when the watcher fires a session |
+
+You write the four **Agent** rows (schemas below). CLI-authored rows are opaque — read their fields in `outreach context` output as needed, but never edit or hand-author them.
+
+### `outcome`
 ```json
 {"ts":"2026-04-06T11:05:00Z","contact_id":"c_d4e5f6","type":"outcome","outcome":"Available Apr 22 2pm, $180 cleaning","verdict":"viable","note":"Good availability and pricing"}
 ```
-`verdict` values:
+`verdict` enum:
 - `viable` — contact can fulfill the objective
 - `eliminated` — contact cannot (no availability, wrong service, declined)
 - `pending` — more info needed (follow-up required, callback expected)
 - `unreachable` — no conversation happened (voicemail, no answer after retries)
 
-**`human_input`** — information from outside the agent's observation horizon:
+### `human_input`
+Information from outside the agent's observation horizon.
 ```json
-{"ts":"2026-04-07T14:00:00Z","type":"human_input","contact_id":"c_g7h8i9","channel":"callback","content":"Vendor called back, quoted $350 for hood cleaning, available next Thursday","context":"Vendor seemed flexible on scheduling"}
+{"ts":"2026-04-07T14:00:00Z","type":"human_input","contact_id":"c_g7h8i9","channel":"callback","content":"Vendor called back, quoted $350, available next Thursday","context":"Vendor seemed flexible on scheduling"}
 ```
-`channel` values: `callback`, `email`, `text`, `in_person`, `research`, `other`
+`channel` enum: `callback`, `email`, `text`, `in_person`, `research`, `other`.
 
-The human provides raw information; the agent processes it. `contact_id` is optional (some inputs are campaign-level, e.g. "my schedule changed"). `context` is optional — human's interpretation or color beyond the facts. There is no `verdict` — the agent should ingest the `human_input` and produce a follow-up `outcome` with its own judgment if the input materially changes a contact's standing.
+- `contact_id` is optional (some inputs are campaign-level, e.g. "my schedule changed").
+- `context` is optional — the human's color/interpretation beyond raw facts.
+- There is no `verdict` on `human_input`. If the input materially changes a contact's standing, produce a follow-up `outcome` with your own judgment.
 
-**Email `human_input` with `thread_id`**: When recording inbound email activity, include `thread_id` so `outreach context` can discover and fetch the thread. The agent finds the thread_id via `outreach email search`, confirms with the user, then records:
+**External-observer entries.** A separate process may append `human_input` entries directly to the campaign JSONL when the operator replies via an external channel (independent of any agent session). These entries may carry the body under `text` instead of `content`, and may add an opaque `source` field identifying the external channel. Normalization rule: **always read `content ?? text`** — both forms carry the body. Treat `source` as an opaque string: its **presence** signals the entry came from outside, but specific values are passthrough — do not branch on them. Agent-authored and external-observer entries are otherwise consumed identically.
+
+For inbound email specifically, include `thread_id` so `outreach context` can fetch the thread:
 ```json
 {"ts":"2026-04-12T09:00:00Z","type":"human_input","contact_id":"c_a1b2c3","channel":"email","thread_id":"18f1a2b3c4d5e6f7","content":"Received reply confirming Thursday availability"}
 ```
-The `context` command extracts `thread_id` from any event with `channel === "email"` — no filter on event type.
 
-**`decision`** — campaign-level resolution:
+### `decision`
+Campaign-level resolution.
 ```json
 {"ts":"2026-04-06T12:00:00Z","type":"decision","chosen":"c_d4e5f6","reason":"Best price and availability","resolution":"Booked Apr 22 2pm with Dr. Smith, $180"}
 ```
+A `decision` is **not necessarily the final entry**. The operator may later cancel, reschedule, or change their mind — record those as `amendment`.
 
-A `decision` is **not necessarily the final entry**. The user may cancel, reschedule, or change their mind after a decision is recorded. Use `amendment` entries for post-decision changes:
-
-**`amendment`** — modifies a prior decision:
+### `amendment`
+Modifies a prior decision.
 ```json
-{"ts":"2026-04-10T09:00:00Z","type":"amendment","action":"cancelled","reason":"Schedule conflict, need to rebook","note":"User asked to cancel Apr 22 appointment"}
+{"ts":"2026-04-10T09:00:00Z","type":"amendment","action":"cancelled","reason":"Schedule conflict, need to rebook","note":"Operator asked to cancel Apr 22 appointment"}
 ```
-`action` values: `cancelled`, `rescheduled`, `changed_provider`
+`action` enum: `cancelled`, `rescheduled`, `changed_provider`.
 
-After an amendment, the campaign is effectively active again — further `attempt`, `outcome`, and `decision` entries may follow. The latest `decision` (if not amended) reflects the current state.
+After an amendment the campaign is effectively active again — more `attempt` / `outcome` / `decision` entries may follow. The latest un-amended `decision` reflects current state.
 
-**System-written events** — the CLI also appends two event types you should not author or edit manually:
-- `watch` — records the sundial schedule ID when a send registers a reply watcher.
-- `callback_run` — one entry per callback-dispatch invocation. Records `agent`, `exit_code`, `duration_ms`, whether it resumed a prior session (`resumed`, `prior_session_id`), whether a new session was captured (`session_captured`, `new_session_id`), and the per-run log path (`log_file`, relative to the data repo). The resume chain reads this — the last run with `session_captured: true` for a (contact, channel) is the session the next callback will `--resume`. Changing `watch.callback_agent` in `outreach.config.yaml` invalidates stored sessions and the next callback starts fresh. Full agent stdout/stderr for each run is captured under `outreach/callback-logs/`.
+---
 
-### Sync
+# Part 2 — CLI reference
 
-Sync the data repo with git directly.
+All commands emit JSON on stdout. Errors: `{ "error": "<code>", "message": "<details>" }`. Exit codes: 0 success, 1 input error, 2 infra error, 3 operation failed, 4 timeout.
 
-## Identifier model
+## Identifier model (send commands)
 
-All send commands (`call place`, `sms send`, `email send`) and calendar commands (`calendar add`, `calendar remove`) share a unified identifier pattern:
+Every send command — `call place`, `sms send`, `email send`, `calendar add`, `calendar remove` — shares a unified identifier pattern:
 
-- **`--campaign-id`** + **`--contact-id`** are required on every send command. The CLI resolves the channel-appropriate address from the contact record.
-- **`--to`** is an optional override for when the agent needs to reach a different address than what's on file.
+- **`--campaign-id`** (required) — campaign JSONL to append to.
+- **`--contact-id`** (required) — the person. The CLI resolves the channel-appropriate address: `phone` for calls, `sms_phone ?? phone` for SMS, `email` for email.
+- **`--to`** (optional, `call place` / `sms send` / `email send` only) — override the resolved address.
 
-All send commands auto-append an `attempt` entry to the campaign JSONL. You are responsible for writing `outcome`, `human_input`, `decision`, and `amendment` entries after reviewing transcripts or message threads.
+Every send **auto-appends an `attempt`** to the campaign JSONL. You are responsible for the downstream `outcome`, `human_input` (when relaying off-horizon info), `decision`, and `amendment` events.
 
-## Assembling context
+## Auto reply-watcher
 
-`outreach context` builds a JIT briefing from campaign data + recent channel messages. Use it before placing a call or sending an SMS to understand the full picture.
+`sms send` and `email send` register a background reply watcher by default. When an inbound reply arrives, the watcher spawns a follow-up agent session that can resume the prior session (context carries across replies). The CLI logs a `watch` event on registration and a `callback_run` event per dispatch.
+
+- **`--fire-and-forget`** — skip watcher registration (use for one-way notifications).
+- Watcher output-shape details are in the per-channel docs.
+
+**Watcher lifecycle is managed by the CLI — treat it as opaque.** You do not inspect, list, or cancel watchers. Your only visible signals are (a) the `human_input` / inbound reply arriving and (b) a `callback_run` entry appearing when the watcher fires a session. Timeouts, polling intervals, and retry policy are CLI-configured. Do not try to infer liveness from the JSONL.
+
+## `outreach health`
+
+Validates the data repo (existence, git sync), ensures required directories exist, and reports readiness of every channel (call, SMS, email, calendar). Run first in any session. The JSON output includes `data_repo.path` — use that as `$DATA_REPO` for direct file reads. Resolve any failure in a channel you intend to use; failures in unused channels are tolerable.
+
+## `outreach context`
+
+Builds a just-in-time briefing from campaign events + recent channel messages.
 
 ```bash
-# Full campaign overview — all contacts, all events
+# Full campaign — all contacts, all events
 outreach context --campaign-id "2026-04-15-dental-cleaning"
 
-# Focused on one contact — filtered events + recent messages
-outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3"
+# Focused on one contact
+outreach context --campaign-id "..." --contact-id "c_a1b2c3"
 
-# Wider message window (default is 7 days)
-outreach context --campaign-id "2026-04-15-dental-cleaning" --contact-id "c_a1b2c3" --since 30
+# Wider message history window — value is in days (default 7)
+outreach context --campaign-id "..." --contact-id "c_a1b2c3" --since 30
 ```
 
-Returns: `{ campaign: <header>, events: [...], recent_messages: { <contact_id>: { sms: [...], email_threads: [{ thread_id, subject, messages: [...] }, ...] } } }`
+Returns `{ campaign, events, recent_messages }`. `recent_messages` is keyed by `contact_id` and may contain `sms` (iMessage history) and/or `email_threads` (`{ thread_id, subject, messages }[]`).
 
-The command reads the campaign JSONL, optionally filters events by `--contact-id`, then for each included contact with SMS or email activity, fetches recent iMessage history and/or Gmail history. `--since` controls the SMS message history window (default 7 days) — it does not filter campaign events.
+The command reads the campaign JSONL, optionally filters events by `--contact-id`, then — for each included contact with SMS or email activity in the events — fetches recent iMessage history and/or Gmail threads.
 
-## Campaign lookup before creation
-
-A campaign may span multiple agent sessions — retries, follow-ups, and post-decision changes all belong in the same campaign. Before creating a new campaign, always check for an existing one:
-
-1. **Search** `$DATA_REPO/outreach/campaigns/` for campaigns with a related slug or objective (e.g., `ls` + `head -1` to read headers).
-2. **If found**: present the match to the user — confirm it's the right campaign before appending to it.
-3. **If not found**: confirm with the user that a new campaign should be created, agree on the name (`YYYY-MM-DD-<slug>`), then create the header line.
-
-Never silently create a new campaign when an existing one might apply — the user should always confirm the campaign choice.
-
-## Typical workflow
-
-Every outreach task starts the same way: search for an existing campaign before deciding what to do. An agent prompted with "schedule a dentist visit for X" does not know whether a campaign already exists — it must check first.
-
-### Step 1: Find or create a campaign
-
-```
-outreach health → search $DATA_REPO/outreach/campaigns/ for matching slug/objective
-```
-
-- **Found** → load it with `outreach context --campaign-id ...`, review events, resume where it left off.
-- **Not found** → confirm with user that a new campaign should be created, create contacts + campaign header.
-
-### Step 2: Gather context and execute outreach
-
-```
-outreach context --campaign-id ... [--contact-id ...] → decide channel and action → execute
-```
-
-Use `outreach context` to review campaign state and recent messages before deciding what to do. If context is insufficient, use channel-specific history commands (`call listen`, `sms history`, `email history`) for more detail. Then execute via the appropriate channel — see the channel-specific docs for command usage.
-
-## Post-action workflow
-
-After any outreach action (call, SMS, or email), the orchestrator is responsible for updating the campaign and contact records. The pattern is the same regardless of channel.
-
-### 1. Record the outcome
-
-Based on what happened, append an `outcome` entry to the campaign JSONL with your verdict:
-
-- **Got useful info** (availability, pricing, confirmation) → verdict `viable` or `eliminated`
-- **Incomplete info** (callback promised, follow-up needed) → verdict `pending`
-- **Voicemail / no answer** (calls only) → verdict `pending` or `unreachable`
-
-The `attempt` entry is already auto-logged by the CLI. You are writing the `outcome` — what was *learned*, not what was *tried*.
-
-### 2. Update the contact record
-
-If the interaction revealed new information about the contact (name, preferences, best times to reach, additional addresses), update the contact JSON.
-
-### 3. Record human-relayed updates
-
-Between sessions, the user may receive callbacks, emails, or have in-person conversations. When the user reports off-horizon information, record it as a `human_input` entry with the appropriate `channel` (`callback`, `email`, `text`, `in_person`, `research`, `other`). Then process it: if the input materially changes a contact's standing, append a follow-up `outcome` with your own verdict. This two-step pattern keeps provenance clear — a future session sees both the raw signal and the agent's judgment.
-
-### 4. Record a decision
-
-When the campaign objective is resolved, append a `decision` entry with `chosen` (contact ID), `reason`, and `resolution`. A decision does not close the campaign — if the user later cancels or changes plans, append an `amendment` entry (with `action`: `cancelled`, `rescheduled`, or `changed_provider`) and continue.
-
-### 5. Create a calendar event (when applicable)
-
-When a decision involves a scheduled appointment or meeting, create a calendar event:
+`--since <days>` is a unified window: it narrows campaign events, SMS history, and email threads to the last N days. Header is always returned in full, so campaign objective/contacts survive any window. For sub-day filtering (e.g. "last hour"), read the JSONL with `jq` — combine with the `content ?? text` normalization rule for `human_input`:
 
 ```bash
-outreach calendar add \
-  --summary "Dental cleaning" \
-  --start "2026-04-22T14:00:00" \
-  --end "2026-04-22T15:00:00" \
-  --campaign-id "2026-04-15-dental-cleaning" \
-  --contact-id "c_a1b2c3"
+for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
+  jq -r --arg t "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+    'select(.type=="human_input" and .ts > $t) | "\(input_filename): \(.content // .text)"' "$f"
+done
 ```
 
-The `event_id` is recorded in the campaign JSONL attempt entry and used for subsequent modifications.
+## `outreach ask-human`
 
-- **Rescheduling** (amendment with `action: "rescheduled"`): remove the old event, then add a new one with updated times. The old `event_id` is in the campaign attempt entry from the original `calendar add`.
-- **Cancelling** (amendment with `action: "cancelled"`): remove the event using the stored `event_id`.
+Writes a `human_question` event, registers a background watcher that resumes your work when the operator answers, then exits.
 
-See [calendar.md](./calendar.md) for full command reference.
+```bash
+outreach ask-human \
+  --campaign-id "2026-04-15-dental-cleaning" \
+  --question "Prioritize same-week availability or lowest price?" \
+  [--contact-id "c_a1b2c3"] \
+  [--context "Two viable options with tradeoffs"]
+```
 
-### 6. Sync the data repo
+A future agent session resumes automatically when **either** (a) **any** new `human_input` lands on that campaign, **or** (b) the watcher's configured timeout elapses. The timeout duration is set in the operator's CLI config; from the agent's POV it is opaque — treat a `callback_run` entry firing as the signal a resume has occurred. The watcher does not pair replies with questions — any `human_input` fires the resume, including one unrelated to the pending question (e.g. an external-observer reply about a different contact). On resume, read the latest `human_question` plus all `human_input` entries since it, decide which (if any) answers the question, and act accordingly — the agent does the pairing.
 
-After all updates are written, sync the data repo with git.
+Use `ask-human` only when a decision genuinely requires operator input — not for thoroughness. Ambiguity that can be resolved from campaign state and recent messages should be resolved from those instead.
 
-## Feedback and improvement
+## `cli-feedback.jsonl`
 
-Your primary role is executing outreach tasks. But you are also encouraged to surface feedback on the CLI itself — rough edges, missing capabilities, confusing behavior, or workflow friction you encounter while working. You are the primary user of this tool; your observations drive its improvement.
-
-### What to report
-
-- **Bugs**: commands that error unexpectedly, incorrect output, silent failures
-- **Friction**: workflows that take too many steps, flags that should have defaults, missing convenience commands
-- **Missing features**: capabilities you wished existed while executing a task
-- **Unclear behavior**: error messages that don't help, output that's hard to parse, ambiguous flag semantics
-
-### How to report
-
-Append feedback entries to `$DATA_REPO/outreach/cli-feedback.jsonl` (one JSON object per line, append-only):
+You (the agent) are the primary caller of this CLI; your observations drive its improvement. When you hit a rough edge, missing capability, confusing output, or workflow friction, append one JSON line to `$DATA_REPO/outreach/cli-feedback.jsonl`:
 
 ```json
-{"ts":"2026-04-13T15:30:00Z","category":"friction","command":"outreach context","description":"No way to filter context by channel — had to read full output and ignore irrelevant SMS data when only email mattered","suggestion":"Add --channel flag to context command"}
+{"ts":"2026-04-13T15:30:00Z","category":"friction","command":"outreach context","description":"No way to filter context by channel","suggestion":"Add --channel flag"}
 ```
 
-**Fields:**
-- `ts` — ISO 8601 timestamp
-- `category` — one of: `bug`, `friction`, `missing_feature`, `unclear_behavior`
-- `command` — the CLI command involved (if applicable)
-- `description` — what happened and why it was a problem
-- `suggestion` — optional, your proposed improvement
+- `category`: one of `bug`, `friction`, `missing_feature`, `unclear_behavior`.
+- `command` and `suggestion` are optional.
 
-### When to report
+Append at natural pauses (end of task or session), not mid-workflow. One-liners are fine.
 
-Don't interrupt your workflow to write feedback. Append entries after completing a task or at the end of a session when you have a natural pause. If you notice something minor, a one-liner is fine — not every entry needs a detailed suggestion.
+---
 
-## Output format
+# Part 3 — Workflow
 
-All commands output JSON. Errors: `{ "error": "<code>", "message": "<details>" }`. Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout.
+A campaign may span many sessions — initial outreach, follow-up, post-decision changes. The algorithm below is what to run for any outreach prompt.
+
+In this workflow, an **outreach action** means a send (`call place`, `sms send`, `email send`, `calendar add`). Appending `outcome`/`decision`/`amendment` is bookkeeping, not an action.
+
+## 1. Orient and find the campaign
+
+Run `outreach health` if you have not already. Then search `$DATA_REPO/outreach/campaigns/` for an existing campaign matching the operator's request (slug, objective, contacts). An agent prompted with "schedule a dentist visit for X" does not know whether a campaign already exists — it **must check first**.
+
+**Canonical discovery pattern** (a future CLI subcommand may replace it; the workflow stays the same):
+
+```bash
+for f in "$DATA_REPO/outreach/campaigns/"*.jsonl; do
+  head -n 1 "$f" | jq -c '{file: "'"$f"'", campaign_id, objective, contacts}'
+done
+```
+
+- **Clean single match** → load it with `outreach context --campaign-id <id>` and proceed to step 2. The orchestrator's delegation IS the confirmation — do not block on a redundant dialog.
+- **No match** → create a new campaign: agree on the name (`YYYY-MM-DD-<slug>`), then write the `campaign_header` line and any new contact files.
+- **Multiple plausible matches, or a weak single match** (e.g. slug overlaps but `objective` doesn't fit) → surface candidates to the operator and ask which applies. Treat a weak single match as ambiguous — do not assume.
+
+Never silently create a new campaign when an existing one might apply.
+
+## 2. Assemble context
+
+Use `outreach context` (optionally scoped to one contact) to review campaign state plus recent channel messages. Prefer `context` over per-channel history commands for campaign-aware work — fall back to `sms history` / `email history` / `call listen` only when you need raw data outside the campaign frame.
+
+## 3. Execute
+
+Pick a channel and run the appropriate send command (see per-channel docs for flags and output). Default heuristic: **reply on the channel the contact last used** (look at the most recent `attempt` or inbound `human_input` for that contact). Escalate to a different channel only after two consecutive `no_answer` / `voicemail` / `failed` results on the current one. For a contact with no prior `attempt`, prioritize email -> SMS -> call — the chosen channel is recorded implicitly via `attempt.channel`. Override with judgment when campaign state justifies it.
+
+**Multi-contact selection.** When a campaign has multiple active contacts, advance the one with the most recent `viable` or `pending` `outcome`. Skip `eliminated` contacts. If tied, pick the one with the oldest un-followed-up `human_input` or `attempt`.
+
+**Nothing outstanding.** If the ingested events show no outstanding work on a campaign (a standing un-amended `decision`, and no un-ingested `human_input` / unanswered `human_question`), report a no-op to the orchestrator — do not manufacture a confirmation or check-in send just to take an action.
+
+## 4. Close the loop
+
+After any send — and after any outside information arrives — update the JSONL and contact files:
+
+1. **Outcome** — append an `outcome` with your verdict:
+   - Useful info (availability, pricing, confirmation) → `viable` or `eliminated`.
+   - Incomplete (callback promised, follow-up needed) → `pending`.
+   - Voicemail / no answer → `pending` or `unreachable`.
+2. **Contact record** — if you learned something new (name, preferences, alternate address), rewrite the contact JSON in place.
+3. **Human-relayed info** — when the operator tells you something off-horizon (callback, in-person, forwarded email), append a `human_input` **and** a follow-up `outcome` if it changes a contact's standing. Keep provenance separate: the raw signal (`human_input`) from your judgment (`outcome`).
+4. **Decision** — when the objective is resolved, append a `decision` (`chosen`, `reason`, `resolution`). A decision does not close the campaign.
+5. **Calendar** — if the decision involves a scheduled event, run `outreach calendar add` (auto-logs an `attempt` with the `event_id`). For rescheduling (`amendment action: rescheduled`), use the stored `event_id` to `calendar remove`, then `calendar add` a new one. For cancellations (`amendment action: cancelled`), `calendar remove` with the stored `event_id`. See `calendar.md`.
+6. **Amendment** — for post-decision changes, append an `amendment`. Further `attempt` / `outcome` / `decision` entries may follow.
+
+## 5. Before any new outreach action
+
+Applies **whenever you enter an existing campaign**, regardless of entry reason (watcher fired, `ask-human` was answered, operator re-invoked you, etc.).
+
+1. Read the campaign JSONL (or run `outreach context`).
+2. Scan for new `human_input` entries since your anchor (rule below), plus any outstanding `human_question` entries without a matching answer.
+3. Ingest them — write `outcome` / `decision` / `amendment` as appropriate — *then* decide on the next outreach action.
+
+**Anchor rule** (defines "since your last action"):
+
+- **Campaign has prior agent-authored events** → anchor is the `ts` of the latest agent-authored `outcome` / `decision` / `amendment` on this campaign (any prior agent session counts — events carry no author identity, so "you" means "any earlier agent run"). `attempt`, `watch`, `callback_run`, `human_question` are CLI-authored — skip them. Scan for `human_input` with `ts > anchor`.
+- **No prior agent-authored events on this campaign** → no anchor. Scan the entire tail for `human_input` entries and treat any without a subsequent `outcome` / `decision` / `amendment` as un-ingested.
+
+## 6. When stuck — ask-human
+
+If campaign state and recent messages still don't give you enough to decide, run `outreach ask-human` (see Part 2 §`outreach ask-human`). Reserve it for genuine ambiguity.
+
+## 7. Sync
+
+After each batch of updates, sync the data repo with git directly. This CLI does not wrap git.
