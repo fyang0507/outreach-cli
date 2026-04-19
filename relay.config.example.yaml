@@ -27,6 +27,34 @@ sources:
     # ingesting the human_input IS mirrored, and carries the synthesis.
     inbound_types: [human_input]
 
+    # Optional: allowlist top-level keys to deliver (omit to deliver the full payload).
+    # Signal-bearing fields only. Drops internal IDs (message_id, thread_id,
+    # call_id, session IDs, schedule IDs, log_file), timestamps (Telegram
+    # shows them), `type` (shown in the message prefix), and campaign_id
+    # (scoped by topic). deliver_field_max_chars caps long free-text below.
+    deliver_fields:
+      - contact_id          # universal: who
+      - channel             # universal: which channel
+      - result              # attempt: sent | connected | no_answer | created | removed
+      - summary             # calendar attempt: event title
+      - start               # calendar attempt: event start
+      - end                 # calendar attempt: event end
+      - objective           # campaign_header
+      - question            # human_question
+      - context             # human_question
+      - text                # human_input body (agent- and relay-authored)
+      - outcome             # outcome event: short verdict text
+      - verdict             # outcome event
+      - note                # outcome, amendment
+      - chosen              # decision
+      - reason              # decision, amendment
+      - resolution          # decision
+      - action              # amendment: cancelled | rescheduled
+      - fields              # identity_access: which identity keys were pulled
+      # - resumed_reason      # callback_run: human_input | timeout
+      # - exit_code           # callback_run
+    deliver_field_max_chars: 500   # only valid alongside deliver_fields
+
     # Tier policy — silent / notify / ignore per event type.
     # Procedural records stay silent (reviewable but no phone buzz).
     # Judgment events (outcome, decision, amendment) notify the observer.
