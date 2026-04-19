@@ -12,6 +12,7 @@ import { registerReplyCheckCommand } from "./commands/replyCheck.js";
 import { registerCallbackDispatchCommand } from "./commands/callbackDispatch.js";
 import { registerAskHumanCommand } from "./commands/askHuman.js";
 import { registerAskHumanCheckCommand } from "./commands/askHumanCheck.js";
+import { registerWhoamiCommand } from "./commands/whoami.js";
 import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
 import { registerSendCommand as registerEmailSendCommand } from "./commands/email/send.js";
@@ -34,6 +35,7 @@ registerReplyCheckCommand(program);
 registerCallbackDispatchCommand(program);
 registerAskHumanCommand(program);
 registerAskHumanCheckCommand(program);
+registerWhoamiCommand(program);
 
 // --- sms subcommand group ---
 const sms = program.command("sms").description("SMS / iMessage commands");

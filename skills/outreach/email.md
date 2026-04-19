@@ -25,6 +25,8 @@ Returns: `{ "to": "...", "subject": "...", "message_id": "...", "thread_id": "..
 
 **Replying to a thread**: pass `--reply-to-id` with the Gmail message ID from a previous send or history lookup. The CLI auto-resolves threading headers (`In-Reply-To`, `References`), sets `Re:` subject prefix, and reply-all recipients (original sender → To, original To+Cc minus self → Cc). Use `--no-reply-all` to reply to sender only. Explicit `--to`/`--cc` override auto-resolved recipients.
 
+When signing off or referencing the user, use `outreach whoami --field <name>` (e.g. `first_name`, `email_signature`). See `SKILL.md § outreach whoami`.
+
 ## First-time auth
 
 If no Gmail token exists in the data repo (`<data_repo_path>/outreach/gmail-token.json`), the CLI triggers an interactive OAuth flow — opens the browser, spins up a local callback server on port 8089, and exchanges the code for tokens. Subsequent runs reuse the stored token (auto-refreshed). The token syncs across machines via git along with the rest of the data repo.

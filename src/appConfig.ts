@@ -4,9 +4,18 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 
+// Sealed interface — no index signature leaking into the rest of the codebase.
+// Freeform user keys land in `extraFields`, populated at load time from the
+// parsed YAML after stripping `user_name` and nulls.
+//
+// Promotion recipe for a new reserved identity key (e.g. pronouns, display_name):
+//   1. Widen this IdentityConfig interface with the new field.
+//   2. Pluck the field in the loader below (alongside user_name).
+//   3. Render it explicitly in src/audio/systemInstruction.ts (Layer 2).
+//   4. Wire it into src/commands/callbackDispatch.ts resolvePrompt + its call site.
 export interface IdentityConfig {
   user_name: string;
-  bio?: string;
+  extraFields: Record<string, string>;
 }
 
 export interface CallConfig {
@@ -113,13 +122,45 @@ export async function loadAppConfig(): Promise<AppConfig> {
     call.max_duration_seconds = 300;
   }
 
-  if (!config.identity || typeof config.identity !== "object") {
+  if (!config.identity || typeof config.identity !== "object" || Array.isArray(config.identity)) {
     throw new Error("outreach.config.yaml: missing required section 'identity'");
   }
   const identity = config.identity as Record<string, unknown>;
-  if (!identity.user_name || typeof identity.user_name !== "string") {
-    throw new Error("outreach.config.yaml: identity.user_name is required");
+  if (typeof identity.user_name !== "string" || identity.user_name.trim() === "") {
+    throw new Error("outreach.config.yaml: identity.user_name is required and must be a non-empty string");
   }
+
+  // `bio` was removed in favor of flat structured fields. Reject with a migration hint.
+  if ("bio" in identity) {
+    throw new Error(
+      "outreach.config.yaml: `identity.bio` is no longer supported. Split structured fields out as top-level keys under `identity` (first_name, legal_name, address, phone, email), and put any free-text remainder under `identity.other`.",
+    );
+  }
+
+  // Walk remaining keys: strings (kept) / null / empty-string (dropped) / anything else (reject).
+  const extraFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(identity)) {
+    if (key === "user_name") continue;
+    if (value === null || value === undefined) continue;
+    if (typeof value === "object") {
+      throw new Error(
+        `outreach.config.yaml: identity.${key} must be a string — nested objects are not allowed under 'identity'. Use a flat map.`,
+      );
+    }
+    if (typeof value !== "string") {
+      throw new Error(
+        `outreach.config.yaml: value for 'identity.${key}' must be a string (got ${typeof value}).`,
+      );
+    }
+    if (value === "") continue;
+    extraFields[key] = value;
+  }
+
+  // Overwrite identity with the sealed shape downstream code reads.
+  (config as Record<string, unknown>).identity = {
+    user_name: identity.user_name,
+    extraFields,
+  } satisfies IdentityConfig;
 
   if (!config.voice_agent || typeof config.voice_agent !== "object") {
     throw new Error("outreach.config.yaml: missing required section 'voice_agent'");

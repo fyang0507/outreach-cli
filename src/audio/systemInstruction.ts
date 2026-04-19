@@ -14,6 +14,18 @@ async function loadStaticPrompt(): Promise<string> {
   return _staticPrompt;
 }
 
+// Split on `_`, capitalize first word, lowercase the rest.
+// No acronym handling — users who want nicer rendering should pick nicer keys.
+// email_signature → "Email signature"; ssn_last_4 → "Ssn last 4".
+function humanizeKey(key: string): string {
+  const parts = key.split("_");
+  if (parts.length === 0) return key;
+  const [first, ...rest] = parts;
+  const head = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  const tail = rest.map((w) => w.toLowerCase()).join(" ");
+  return tail ? `${head} ${tail}` : head;
+}
+
 export interface SystemInstructionParams {
   identity: IdentityConfig;
   persona: string;
@@ -31,8 +43,21 @@ export async function buildSystemInstruction(params: SystemInstructionParams): P
   // Layer 2: Identity from config
   const userName = params.identity.user_name;
   let identityBlock = `## Identity\nYou are an AI phone assistant calling on behalf of ${userName}. Always identify yourself as '${userName}'s assistant' when asked. Never pretend to be human.`;
-  if (params.identity.bio) {
-    identityBlock += `\nAbout ${userName}: ${params.identity.bio}`;
+
+  // extraFields is already null-filtered at config load; iterate directly.
+  // The "other" key, if present, is pulled out and rendered as a free-text
+  // paragraph — it's the designated prose-escape for context that doesn't
+  // map to a specific key.
+  const { other, ...rest } = params.identity.extraFields;
+  const listItems = Object.entries(rest).map(
+    ([k, v]) => `- ${humanizeKey(k)}: ${v}`,
+  );
+
+  if (listItems.length > 0) {
+    identityBlock += `\n\nAbout ${userName}:\n${listItems.join("\n")}`;
+  }
+  if (other) {
+    identityBlock += `\n\nAdditional context about ${userName}: ${other}`;
   }
   parts.push(identityBlock);
 

@@ -35,14 +35,24 @@ function resolvePrompt(
     contactId: string;
     channel: string;
     contactName: string;
+    userName: string;
+    identityFields: Record<string, string>;
     question?: string;
   },
 ): string {
+  const keys = Object.keys(opts.identityFields);
+  const identityHint =
+    keys.length > 0
+      ? `Available identity fields you can pull for richer context: ${keys.join(", ")}. When you need one, call \`outreach whoami --field <name> --campaign-id ${opts.campaignId}\` — pull only what the next reply requires.`
+      : `No extra identity fields are configured; fall back to \`outreach ask-human\` if you need more context beyond the user's name.`;
+
   return template
     .replace(/\{contact_id\}/g, opts.contactId)
     .replace(/\{campaign_id\}/g, opts.campaignId)
     .replace(/\{channel\}/g, opts.channel)
     .replace(/\{contact_name\}/g, opts.contactName)
+    .replace(/\{user_name\}/g, opts.userName)
+    .replace(/\{identity_hint\}/g, identityHint)
     .replace(/\{question\}/g, opts.question ?? "");
 }
 
@@ -197,6 +207,8 @@ export function registerCallbackDispatchCommand(program: Command): void {
           contactId: opts.contactId,
           channel: opts.channel,
           contactName,
+          userName: config.identity.user_name,
+          identityFields: config.identity.extraFields,
           question: latestQuestion?.question,
         });
 
