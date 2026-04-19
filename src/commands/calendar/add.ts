@@ -3,6 +3,7 @@ import { addCalendarEvent } from "../../providers/gcalendar.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
+import { validateOnce } from "../../once.js";
 
 function withCalendarHint(msg: string): string {
   const lower = msg.toLowerCase();
@@ -20,22 +21,35 @@ export function registerAddCommand(parent: Command): void {
     .requiredOption("--summary <text>", "Event title")
     .requiredOption("--start <datetime>", "Start time (ISO 8601, e.g. 2026-04-22T14:00:00)")
     .requiredOption("--end <datetime>", "End time (ISO 8601, e.g. 2026-04-22T15:00:00)")
-    .requiredOption("--campaign-id <id>", "Campaign ID for tracking")
-    .requiredOption("--contact-id <id>", "Contact ID for tracking")
+    .option("--campaign-id <id>", "Campaign ID for tracking (required unless --once)")
+    .option("--contact-id <id>", "Contact ID for tracking (required unless --once)")
     .option("--description <text>", "Event description")
     .option("--location <text>", "Event location")
     .option("--attendees <emails...>", "Attendee email addresses")
+    .option("--once", "Fire-and-forget adhoc event creation — no campaign event.")
     .action(
       async (opts: {
         summary: string;
         start: string;
         end: string;
-        campaignId: string;
-        contactId: string;
+        campaignId?: string;
+        contactId?: string;
         description?: string;
         location?: string;
         attendees?: string[];
+        once?: boolean;
       }) => {
+        const mode = validateOnce("calendar-add", opts);
+
+        if (mode === "campaign" && (!opts.campaignId || !opts.contactId)) {
+          outputError(
+            INPUT_ERROR,
+            "Missing required --campaign-id and/or --contact-id. Either pass both to log this event against a campaign, or pass --once to create adhoc.",
+          );
+          process.exit(INPUT_ERROR);
+          return;
+        }
+
         // Validate dates
         const startDate = new Date(opts.start);
         const endDate = new Date(opts.end);
@@ -75,17 +89,19 @@ export function registerAddCommand(parent: Command): void {
           return;
         }
 
-        await appendCampaignEvent(opts.campaignId, {
-          ts: isoNow(),
-          contact_id: opts.contactId,
-          type: "attempt",
-          channel: "calendar",
-          result: "created",
-          event_id: result.event_id,
-          summary: result.summary,
-          start: result.start,
-          end: result.end,
-        });
+        if (mode === "campaign") {
+          await appendCampaignEvent(opts.campaignId!, {
+            ts: isoNow(),
+            contact_id: opts.contactId!,
+            type: "attempt",
+            channel: "calendar",
+            result: "created",
+            event_id: result.event_id,
+            summary: result.summary,
+            start: result.start,
+            end: result.end,
+          });
+        }
 
         outputJson({
           event_id: result.event_id,
@@ -94,6 +110,7 @@ export function registerAddCommand(parent: Command): void {
           start: result.start,
           end: result.end,
           status: "created",
+          ...(mode === "once" && { mode: "once" }),
         });
         process.exit(SUCCESS);
       },

@@ -18,6 +18,8 @@ The destination phone is resolved from the contact's `sms_phone` field (falling 
 
 Returns: `{ "to": "+15551234567", "status": "sent" }`
 
+**Ad-hoc test (`--once`):** `outreach sms send --once --to +15551234567 --body "ping"` — no campaign state, no reply watcher. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. Output: `{ "to": "...", "status": "sent", "watch": { "status": "skipped", "reason": "once" } }`.
+
 ## Reading SMS history
 
 ```bash

@@ -2,7 +2,8 @@ import { Command } from "commander";
 import { removeCalendarEvent } from "../../providers/gcalendar.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
-import { SUCCESS, OPERATION_FAILED } from "../../exitCodes.js";
+import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
+import { validateOnce } from "../../once.js";
 
 function withCalendarHint(msg: string): string {
   const lower = msg.toLowerCase();
@@ -18,14 +19,27 @@ export function registerRemoveCommand(parent: Command): void {
     .command("remove")
     .description("Remove a Google Calendar event and log campaign attempt")
     .requiredOption("--event-id <id>", "Google Calendar event ID")
-    .requiredOption("--campaign-id <id>", "Campaign ID for tracking")
-    .requiredOption("--contact-id <id>", "Contact ID for tracking")
+    .option("--campaign-id <id>", "Campaign ID for tracking (required unless --once)")
+    .option("--contact-id <id>", "Contact ID for tracking (required unless --once)")
+    .option("--once", "Fire-and-forget adhoc event removal — no campaign event.")
     .action(
       async (opts: {
         eventId: string;
-        campaignId: string;
-        contactId: string;
+        campaignId?: string;
+        contactId?: string;
+        once?: boolean;
       }) => {
+        const mode = validateOnce("calendar-remove", opts);
+
+        if (mode === "campaign" && (!opts.campaignId || !opts.contactId)) {
+          outputError(
+            INPUT_ERROR,
+            "Missing required --campaign-id and/or --contact-id. Either pass both to log this removal against a campaign, or pass --once to remove adhoc.",
+          );
+          process.exit(INPUT_ERROR);
+          return;
+        }
+
         let result;
         try {
           result = await removeCalendarEvent(opts.eventId);
@@ -38,18 +52,21 @@ export function registerRemoveCommand(parent: Command): void {
           return;
         }
 
-        await appendCampaignEvent(opts.campaignId, {
-          ts: isoNow(),
-          contact_id: opts.contactId,
-          type: "attempt",
-          channel: "calendar",
-          result: "removed",
-          event_id: result.event_id,
-        });
+        if (mode === "campaign") {
+          await appendCampaignEvent(opts.campaignId!, {
+            ts: isoNow(),
+            contact_id: opts.contactId!,
+            type: "attempt",
+            channel: "calendar",
+            result: "removed",
+            event_id: result.event_id,
+          });
+        }
 
         outputJson({
           event_id: result.event_id,
           status: "removed",
+          ...(mode === "once" && { mode: "once" }),
         });
         process.exit(SUCCESS);
       },

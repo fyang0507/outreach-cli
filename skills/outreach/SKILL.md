@@ -142,6 +142,8 @@ Every send command — `call place`, `sms send`, `email send`, `calendar add`, `
 
 Every send **auto-appends an `attempt`** to the campaign JSONL. You are responsible for the downstream `outcome`, `human_input` (when relaying off-horizon info), `decision`, and `amendment` events.
 
+**Ad-hoc sends (`--once`)** — every send command (`sms send`, `email send`, `call place`, `calendar add`, `calendar remove`) also accepts `--once` for fire-and-forget adhoc use (unit tests, demos, one-off notifications). Under `--once`: no campaign or contact ID is accepted, no campaign event is written, no reply watcher registered. Pass the destination explicitly (`--to` for sms/email/call; event fields or `--event-id` for calendar). `--once` is mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. **Do not use `--once` as a workaround for failing to find an existing campaign** — it's for tests and one-offs, not real outreach.
+
 ## Auto reply-watcher
 
 `sms send` and `email send` register a background reply watcher by default. When an inbound reply arrives, the watcher spawns a follow-up agent session that can resume the prior session (context carries across replies). The CLI logs a `watch` event on registration and a `callback_run` event per dispatch.
