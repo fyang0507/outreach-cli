@@ -22,17 +22,21 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
     return {
       ok: false,
       error: (err as Error).message,
-      hint: "Fix outreach.config.yaml — see the error above",
+      hint: "Run `outreach setup` to scaffold the data repo, or set OUTREACH_DATA_REPO for ad-hoc invocations.",
     };
   }
 
   const repoPath = config.data_repo_path;
+  const configPath = config.config_path;
+  const resolution = config.config_source;
 
   if (!existsSync(repoPath)) {
     return {
       ok: false,
       path: repoPath,
-      hint: `Data repo not found at ${repoPath}. Create it or update data_repo_path in outreach.config.yaml`,
+      config_path: configPath,
+      resolution,
+      hint: `Data repo not found at ${repoPath}. Run \`outreach setup --data-repo ${repoPath}\` or set OUTREACH_DATA_REPO.`,
     };
   }
 
@@ -42,6 +46,8 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
     return {
       ok: false,
       path: repoPath,
+      config_path: configPath,
+      resolution,
       hint: `${repoPath} is not a git repository`,
     };
   }
@@ -66,6 +72,8 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
     return {
       ok: false,
       path: repoPath,
+      config_path: configPath,
+      resolution,
       synced: false,
       hint: `Data repo is behind remote. Run: cd ${repoPath} && git pull`,
     };
@@ -74,7 +82,7 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
   // Ensure directory structure exists
   await ensureDataDirs();
 
-  return { ok: true, path: repoPath, synced };
+  return { ok: true, path: repoPath, config_path: configPath, resolution, synced };
 }
 
 // ---- Call channel checks ----

@@ -12,7 +12,11 @@ Run outreach campaigns across voice (Twilio + Gemini Live), SMS (iMessage), emai
 
 ## Prerequisites
 
-Always start a session with `outreach health` (Part 2 §`outreach health`). Use its `data_repo.path` as `$DATA_REPO` for any direct file reads below.
+Always start a session with `outreach health` (Part 2 §`outreach health`). Use its `data_repo.path` as `$DATA_REPO` for any direct file reads below; `config_path` in the same block tells you which config file was resolved.
+
+**Data repo resolution.** You normally run from inside the data repo, so the CLI locates it by walking up from cwd looking for `.agents/workspace.yaml`. For one-off invocations against a different repo, export `OUTREACH_DATA_REPO=/path` for that command (or session). If health errors with no data repo found, the operator needs to run `outreach setup` — flag it and stop.
+
+**Daemon lifecycle.** Outreach composes with two sibling daemons, **both required**: **sundial** (powers `reply-check`, `ask-human`, and auto-watchers) and **relay** (delivers human-in-the-loop traffic for `ask-human` — the agent writes a `human_question`, relay ships it to a messaging platform, the human replies, relay appends a `human_input` entry, and sundial fires the callback). Without relay, `ask-human` just times out. These daemons are operator-managed and persist across sessions — `outreach setup` runs a readiness check at install time (any sundial or relay gap is a hard failure) and surfaces any gaps. If watcher behavior seems off mid-session, re-running `outreach setup --skip-stack-check` is cheap and idempotent.
 
 ---
 
@@ -22,6 +26,7 @@ Outreach state lives in an external git repo; this CLI does not manage that repo
 
 ```
 $DATA_REPO/outreach/
+  config.yaml            # app config (identity, voice, watch) — operator-managed, do not edit
   contacts/              # one JSON file per contact (mutable)
   campaigns/             # one JSONL file per campaign (append-only)
   transcripts/           # call transcripts (CLI-written)

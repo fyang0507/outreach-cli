@@ -7,6 +7,7 @@ import { registerHangupCommand } from "./commands/call/hangup.js";
 import { registerInitCommand } from "./commands/call/init.js";
 import { registerTeardownCommand } from "./commands/call/teardown.js";
 import { registerHealthCommand } from "./commands/health.js";
+import { registerSetupCommand } from "./commands/setup.js";
 import { registerContextCommand } from "./commands/context.js";
 import { registerReplyCheckCommand } from "./commands/replyCheck.js";
 import { registerCallbackDispatchCommand } from "./commands/callbackDispatch.js";
@@ -30,6 +31,7 @@ program
 
 // --- top-level commands ---
 registerHealthCommand(program);
+registerSetupCommand(program);
 registerContextCommand(program);
 registerReplyCheckCommand(program);
 registerCallbackDispatchCommand(program);
