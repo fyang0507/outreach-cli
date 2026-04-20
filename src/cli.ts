@@ -27,7 +27,7 @@ const program = new Command();
 program
   .name("outreach")
   .description("Agent-native outreach CLI — calls, SMS, email, calendar")
-  .version("2.2.0");
+  .version("2.3.0");
 
 // --- top-level commands ---
 registerHealthCommand(program);
