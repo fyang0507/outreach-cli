@@ -37,9 +37,11 @@ All channels share the same `--campaign-id` + `--contact-id` pattern — the CLI
 git clone https://github.com/fyang0507/outreach-cli.git
 cd outreach-cli
 npm install
-npm run build          # compiles TS + syncs skills/ → data repo
+npm run build          # compiles TS, chmod +x dist/cli.js, syncs skills/ → data repo
 npm link               # makes `outreach` available globally
 ```
+
+`npm run build` sets `dist/cli.js` executable as part of its post-build hook. If `outreach <cmd>` ever fails with `permission denied: .../outreach`, the source tree is likely on a filesystem that doesn't preserve the exec bit (Google Drive FUSE, some network mounts); re-run `npm run build` or `chmod +x dist/cli.js` after each rebuild. `which outreach` follows the `npm link` symlink, so the failure shows up at execution, not resolution.
 
 ### 2. Configure secrets
 
