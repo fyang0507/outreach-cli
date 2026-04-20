@@ -335,21 +335,212 @@ export function readMessageHistory(
   }
 }
 
-// --- Send iMessage ---
+// --- Service picker ---
 
-export function sendIMessage(to: string, body: string): void {
+export type Service = "iMessage" | "SMS";
+
+/**
+ * Pick the service to use based on recent message history with this phone.
+ *   1. most recent successful outbound (is_sent=1 AND error=0) → its service
+ *   2. else most recent inbound → its service
+ *   3. else "iMessage"
+ */
+export function pickService(
+  phone: string,
+  dbPathOverride?: string,
+): Service {
+  const normalized = normalizePhone(phone);
+  const dbPath =
+    dbPathOverride ?? join(homedir(), "Library", "Messages", "chat.db");
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const outbound = db
+      .prepare(
+        `SELECT m.service FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE h.id = ? AND m.is_from_me = 1 AND m.is_sent = 1 AND m.error = 0
+         ORDER BY m.date DESC
+         LIMIT 1`,
+      )
+      .get(normalized) as { service: string | null } | undefined;
+    if (outbound?.service) return normalizeService(outbound.service);
+
+    const inbound = db
+      .prepare(
+        `SELECT m.service FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE h.id = ? AND m.is_from_me = 0
+         ORDER BY m.date DESC
+         LIMIT 1`,
+      )
+      .get(normalized) as { service: string | null } | undefined;
+    if (inbound?.service) return normalizeService(inbound.service);
+
+    return "iMessage";
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeService(raw: string): Service {
+  return raw.toLowerCase() === "sms" ? "SMS" : "iMessage";
+}
+
+// --- Send message (iMessage or SMS) ---
+
+export type SendStatus = "delivered" | "failed" | "timeout";
+
+export interface SendResult {
+  status: SendStatus;
+  service: Service;
+  error_code?: number;
+  message_date?: string; // ISO
+}
+
+export interface SendOptions {
+  service?: Service; // default "iMessage"
+  timeoutMs?: number; // default 90_000
+  pollIntervalMs?: number; // default 750
+  dbPath?: string; // test override
+}
+
+/**
+ * Send a message via Messages.app and synchronously probe chat.db for
+ * delivery confirmation. Returns terminal state: delivered / failed / timeout.
+ */
+export function sendIMessage(
+  to: string,
+  body: string,
+  options: SendOptions = {},
+): SendResult {
+  const normalized = normalizePhone(to);
+  const service = options.service ?? "iMessage";
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 750;
+  const dbPath =
+    options.dbPath ?? join(homedir(), "Library", "Messages", "chat.db");
+
+  // Capture the current max ROWID so we can identify the row we're about to create.
+  const preMaxRowId = readMaxMessageRowId(dbPath);
+
+  // Run AppleScript send with the chosen service.
+  const serviceClause =
+    service === "SMS"
+      ? `service 1 whose service type is SMS`
+      : `service 1 whose service type is iMessage`;
   const script = `on run argv
   set theRecipient to item 1 of argv
   set theMessage to item 2 of argv
   tell application "Messages"
-    set targetBuddy to buddy theRecipient of (service 1 whose service type is iMessage)
+    set targetBuddy to buddy theRecipient of (${serviceClause})
     send theMessage to targetBuddy
   end tell
 end run`;
 
-  execFileSync("osascript", ["-", normalizePhone(to), body], {
-    input: script,
-    timeout: 15_000,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  try {
+    execFileSync("osascript", ["-", normalized, body], {
+      input: script,
+      timeout: 15_000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? "";
+    const raw = (err as Error).message;
+    if (
+      service === "SMS" &&
+      /service type is SMS|Can.t get service|no such/i.test(stderr + raw)
+    ) {
+      throw new Error(
+        `AppleScript could not find an SMS service — enable Text Message Forwarding on a paired iPhone (iPhone Settings → Messages → Text Message Forwarding) and retry.`,
+      );
+    }
+    throw new Error(stderr.trim() || raw);
+  }
+
+  // Poll chat.db for terminal delivery state.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const row = readOutboundRowAfter(dbPath, preMaxRowId, normalized);
+    if (row) {
+      if (row.error !== 0) {
+        return {
+          status: "failed",
+          service: normalizeService(row.service ?? service),
+          error_code: row.error,
+          message_date: coreDataToIso(row.date),
+        };
+      }
+      if (row.is_delivered === 1) {
+        return {
+          status: "delivered",
+          service: normalizeService(row.service ?? service),
+          message_date: coreDataToIso(row.date),
+        };
+      }
+    }
+    sleepSync(pollIntervalMs);
+  }
+
+  // Timeout: return what we know.
+  const final = readOutboundRowAfter(dbPath, preMaxRowId, normalized);
+  return {
+    status: "timeout",
+    service: final?.service ? normalizeService(final.service) : service,
+    ...(final?.error && final.error !== 0 ? { error_code: final.error } : {}),
+    ...(final?.date ? { message_date: coreDataToIso(final.date) } : {}),
+  };
+}
+
+interface OutboundRow {
+  ROWID: number;
+  is_delivered: number;
+  is_sent: number;
+  error: number;
+  service: string | null;
+  date: number;
+}
+
+function readMaxMessageRowId(dbPath: string): number {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .prepare(`SELECT COALESCE(MAX(ROWID), 0) AS maxId FROM message`)
+      .get() as { maxId: number };
+    return row.maxId;
+  } finally {
+    db.close();
+  }
+}
+
+function readOutboundRowAfter(
+  dbPath: string,
+  afterRowId: number,
+  phone: string,
+): OutboundRow | null {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return (db
+      .prepare(
+        `SELECT m.ROWID, m.is_delivered, m.is_sent, m.error, m.service, m.date
+         FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE m.ROWID > ? AND m.is_from_me = 1 AND h.id = ?
+         ORDER BY m.ROWID DESC
+         LIMIT 1`,
+      )
+      .get(afterRowId, phone) as OutboundRow | undefined) ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+function sleepSync(ms: number): void {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // Use Atomics.wait on a throwaway buffer for a true sync sleep.
+    const sab = new SharedArrayBuffer(4);
+    const view = new Int32Array(sab);
+    Atomics.wait(view, 0, 0, Math.max(1, end - Date.now()));
+  }
 }

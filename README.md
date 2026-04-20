@@ -7,7 +7,7 @@ Four channels, one contact model:
 | Channel | Provider | How it works |
 |---|---|---|
 | **Call** | Twilio + Gemini Live API | Voice-native model handles STT, reasoning, and TTS autonomously with sub-1s latency |
-| **SMS** | iMessage (AppleScript + Messages DB) | Fire-and-forget send, local message history via `better-sqlite3` |
+| **SMS** | iMessage / SMS (AppleScript + Messages DB) | Auto-routes iMessage vs. SMS from chat history, synchronously probes delivery, local history via `better-sqlite3` |
 | **Email** | Gmail API (OAuth2 + nodemailer) | Send with threading/reply-all/attachments, search, thread-grouped history |
 | **Calendar** | Google Calendar API (OAuth2) | Add/remove events, shared auth with Gmail |
 
@@ -276,7 +276,7 @@ Each channel has its own provider. Calls are the most complex — they require a
 | Gemini client | `src/audio/geminiLive.ts` | `@google/genai` SDK wrapper for Gemini Live API |
 | IPC | `src/daemon/ipc.ts` | CLI <-> daemon over Unix socket |
 | **SMS** | | |
-| Messages | `src/providers/messages.ts` | iMessage DB reader (`better-sqlite3`) + AppleScript sender |
+| Messages | `src/providers/messages.ts` | iMessage DB reader (`better-sqlite3`) + AppleScript sender with service picker + delivery probe |
 | **Email** | | |
 | Gmail | `src/providers/gmail.ts` | Gmail API client (send, history, search) |
 | **Calendar** | | |
@@ -306,7 +306,7 @@ src/
     email/{send,history,search}.ts
     calendar/{add,remove}.ts
   providers/
-    messages.ts                  # iMessage DB reader + AppleScript sender
+    messages.ts                  # iMessage DB reader + AppleScript sender + service picker + delivery probe
     googleAuth.ts                # Shared Google OAuth2 (Gmail + Calendar)
     gmail.ts                     # Gmail API client
     gcalendar.ts                 # Google Calendar API client

@@ -14,9 +14,14 @@ outreach sms send \
 **Required**: `--body`, `--campaign-id`, `--contact-id`
 **Optional**: `--to <number>` — override the phone number resolved from the contact record.
 
-The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI sends via iMessage (AppleScript), then auto-appends an `attempt` entry with `channel: "sms"` to the campaign JSONL.
+The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI auto-picks iMessage vs. SMS based on recent history with that number (most recent successful outbound → its service; else most recent inbound; else iMessage), sends via AppleScript, then **synchronously probes chat.db for delivery** before returning. On confirmed delivery it appends an `attempt` entry with `channel: "sms"` to the campaign JSONL and registers the reply watcher. On failed/timeout delivery, neither the campaign event nor the watcher is written — the agent sees `OPERATION_FAILED` and should treat the send as not done.
 
-Returns: `{ "to": "+15551234567", "status": "sent" }`
+Returns (success): `{ "to": "+15551234567", "status": "sent", "service": "iMessage" | "SMS", "watch": ... }`
+
+Failure modes (exit 3, `OPERATION_FAILED`):
+- `"Message not delivered (error code N) over <service>"` — macOS reported a failure (e.g. iMessage service rejection, SMS relay error). Try a different channel or `ask_human`.
+- `"Delivery status unknown after 90s over <service>"` — probe timed out. Messages.app may still be retrying. Check the Messages UI or retry after confirming.
+- `"AppleScript could not find an SMS service"` — Text Message Forwarding is not enabled on a paired iPhone. Requires iPhone Settings → Messages → Text Message Forwarding to send SMS.
 
 **Ad-hoc test (`--once`):** `outreach sms send --once --to +15551234567 --body "ping"` — no campaign state, no reply watcher. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. Output: `{ "to": "...", "status": "sent", "watch": { "status": "skipped", "reason": "once" } }`.
 
