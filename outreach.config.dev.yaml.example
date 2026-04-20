@@ -1,12 +1,17 @@
 # Outreach CLI — Application Config
-# Copy to outreach.config.yaml and fill in your values.
-# See docs/done/tuning-reference.md for full parameter documentation.
+#
+# This file configures outreach agent behavior: identity, call tuning, watcher
+# settings. It lives at <data_repo>/outreach/config.yaml in a real deployment.
 # Secrets (API keys, creds) live in .env, not here.
 
-# Required — path to the external data repo where outreach data is stored.
-# Transcripts, contacts, and campaigns all live here.
-# Validated on `outreach init` — must exist and be a git repo.
+# --- DEV-ONLY BLOCK ---------------------------------------------------------
+# `data_repo_path` is only meaningful in outreach.config.dev.yaml (dev escape
+# hatch next to the CLI binary). It tells the dev CLI which data repo to point
+# at when neither OUTREACH_DATA_REPO nor `.agents/workspace.yaml` walk-up is
+# available. The actual data-repo config (at <data_repo>/outreach/config.yaml)
+# does not contain this line — the data repo can't self-reference.
 data_repo_path: ~/path/to/your-data-repo
+# --- END DEV-ONLY BLOCK -----------------------------------------------------
 
 identity:
   # Required — reserved, always injected into voice and callback prompts as {user_name}.

@@ -23,8 +23,8 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 ```
 
 **Shared:**
-- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {health,context,reply-check,ask-human,whoami}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id` by default; `--to` is optional (resolved from contact record). Pass `--once` on any send (sms/email/call/calendar add/calendar remove) to bypass campaign tracking — required for adhoc tests/demos; mutually exclusive with `--campaign-id`/`--contact-id`/`--fire-and-forget` and requires `--to` on sms/email/call.
-- **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo_path>/outreach/campaigns/`), contacts (`<data_repo_path>/outreach/contacts/`), and transcripts (`<data_repo_path>/outreach/transcripts/`). Path from `outreach.config.yaml`. Append-only for campaigns, file-system-native.
+- **CLI** (`src/cli.ts`): Commander.js entrypoint. Top-level: `outreach {setup,health,context,reply-check,ask-human,whoami}`. Subcommands: `outreach call {init,teardown,place,listen,status,hangup}`, `outreach sms {send,history}`, `outreach email {send,history,search}`, `outreach calendar {add,remove}`. All send commands require `--campaign-id` + `--contact-id` by default; `--to` is optional (resolved from contact record). Pass `--once` on any send (sms/email/call/calendar add/calendar remove) to bypass campaign tracking — required for adhoc tests/demos; mutually exclusive with `--campaign-id`/`--contact-id`/`--fire-and-forget` and requires `--to` on sms/email/call.
+- **Data I/O** (`src/logs/sessionLog.ts`): Reads/writes campaign JSONL (`<data_repo>/outreach/campaigns/`), contacts (`<data_repo>/outreach/contacts/`), and transcripts (`<data_repo>/outreach/transcripts/`). Data repo resolved via `src/dataRepo.ts`. Append-only for campaigns, file-system-native.
 
 **Call channel** (Twilio + Gemini Live):
 - **Daemon** (`src/daemon/server.ts`): Background Express + WebSocket server on port 3001. Manages Twilio Media Streams ↔ Gemini Live bridge, transcript buffers, call state. Started via `outreach call init`. Pre-connects Gemini session at call placement time (during PSTN dialing) to eliminate initial latency — the session idles with no-op callbacks until the media stream connects, then the bridge rebinds real callbacks. Supports concurrent calls — each `call.place` creates an independent session in a `Map<string, CallSession>`, with separate Gemini session, Twilio stream, transcript buffer, and guardrail timers.
@@ -58,9 +58,11 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/audio/transcode.ts` | mulaw↔PCM codec + sample rate resampling |
 | `src/audio/systemInstruction.ts` | Builds system instruction: static prompt (phone mechanics) + identity + persona + per-call params |
 | `src/runtime.ts` | Runtime state: read/write `~/.outreach/runtime.json` |
-| `src/appConfig.ts` | Loads `outreach.config.yaml` — data repo path, identity, voice agent defaults, Gemini tuning parameters |
+| `src/dataRepo.ts` | `resolveDataRepo()` — env var > dev config sticky > walk-up for `.agents/workspace.yaml`; single source of truth for data repo location |
+| `src/appConfig.ts` | Loads `<data_repo>/outreach/config.yaml` (identity, voice agent, Gemini tuning, watch). Dev fallback: reads `outreach.config.dev.yaml` directly when resolution source is `dev` and the data-repo config is absent. Exposes `config_path` + `config_source` on AppConfig |
 | `src/config.ts` | Loads `.env` — secrets and infrastructure only |
-| `src/commands/health.ts` | `outreach health` — omnichannel readiness check |
+| `src/commands/setup.ts` | `outreach setup` — scaffolds data repo (`.agents/workspace.yaml` marker, `outreach/{config.yaml,campaigns,contacts,transcripts}`), syncs skills, runs full-stack readiness check (sundial + relay on PATH, workspace.yaml registrations, daemon pings) |
+| `src/commands/health.ts` | `outreach health` — omnichannel readiness check (includes resolved `config_path` + resolution source) |
 | `src/commands/context.ts` | `outreach context` — cross-channel JIT briefing assembly |
 | `src/commands/replyCheck.ts` | `outreach reply-check` — sundial poll trigger, checks for inbound replies |
 | `src/commands/askHuman.ts` | `outreach ask-human` — write human_question + register watch |
@@ -84,7 +86,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/exitCodes.ts` | Exit code constants (0-4) |
 | `scripts/sync-skills.js` | Build hook — copies `skills/outreach/` → `<data_repo>/.agents/skills/outreach/` to keep agent workspace in sync |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
-| `outreach.config.yaml` | Application behavior config (data repo path, identity, model, voice, VAD, thinking, etc.) |
+| `outreach.config.dev.yaml` | Dev escape hatch (gitignored). Only `data_repo_path` is consumed by production path; ships as `.example` template. The real config is `<data_repo>/outreach/config.yaml` |
 | `skills/outreach/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
 | `skills/outreach/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
 | `skills/outreach/sms.md` | Agent reference — SMS channel (iMessage) |
@@ -95,12 +97,22 @@ Skills are the source of truth in this repo. `npm run build` copies them to `<da
 
 ## Configuration
 
-**Two config sources, no overlap:**
+**Config sources, no overlap:**
 
 | Source | Contains | Example |
 |---|---|---|
-| `.env` | Secrets + infrastructure | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` |
-| `outreach.config.yaml` | Application behavior | Data repo path, identity (`user_name` + optional flat map of pullable fields — first_name, address, email_signature, `other` catch-all, etc.), Gemini model, voice, VAD, thinking level, persona, watch (auto-reply watcher config). See `docs/done/tuning-reference.md` for full parameter documentation. |
+| `.env` (CLI repo) | Secrets + infrastructure (dev) | `TWILIO_ACCOUNT_SID`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` |
+| `<data_repo>/outreach/config.yaml` | Real app behavior | Identity (`user_name` + optional pullable fields — first_name, address, email_signature, `other` catch-all, etc.), Gemini model, voice, VAD, thinking level, persona, watch (auto-reply watcher config). No `data_repo_path` (self-evident from location). See `docs/done/tuning-reference.md` for full parameter documentation. |
+| `outreach.config.dev.yaml` (CLI repo, gitignored) | Dev escape hatch | Only `data_repo_path` is load-bearing — points a dev checkout at a data repo. Ship `.example` template; live file is gitignored. |
+
+**Data repo resolution order** (`src/dataRepo.ts` → `resolveDataRepo()`):
+
+1. `OUTREACH_DATA_REPO` env var — highest priority; CI and ad-hoc overrides.
+2. `outreach.config.dev.yaml` next to the CLI binary — dev sticky (wins over walk-up so a dev `cd`-ing into a real data repo doesn't silently hit prod).
+3. Walk up from cwd looking for `.agents/workspace.yaml` — normal agent path (agents run inside the data repo).
+4. Error with remediation pointing at `outreach setup` and `OUTREACH_DATA_REPO`.
+
+In dev mode (source 2), if `<data_repo>/outreach/config.yaml` doesn't exist yet, `loadAppConfig()` falls back to reading the dev file directly so `npm run dev` works before running `outreach setup`.
 
 ## Identifier model
 
@@ -125,10 +137,11 @@ Resolution lives in `src/contacts.ts` → `resolveContactAddress(contactId, chan
 
 ```bash
 npm run build
+outreach setup --data-repo ~/my-data   # one-time: scaffold data repo + run stack readiness check
 outreach health                        # check data repo + all channel readiness
 
 # --- Call ---
-outreach call init                     # start ngrok + daemon
+outreach call init                     # start ngrok + daemon (on demand, voice only)
 outreach call place \
   --campaign-id "2026-04-15-dental" \
   --contact-id "c_a1b2c3" \
@@ -185,7 +198,7 @@ The voice agent handles calls autonomously. Use `call listen` to monitor progres
 - All CLI output via `outputJson()` / `outputError()` — never `console.log`
 - Exit codes: 0=success, 1=input error, 2=infra error, 3=operation failed, 4=timeout
 - Daemon writes to stdout/stderr for logging (not visible to CLI users)
-- Secrets in `.env`, behavior in `outreach.config.yaml` — never mix
+- Secrets in `.env`, behavior in `<data_repo>/outreach/config.yaml` — never mix
 
 ## V1 legacy
 

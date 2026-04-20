@@ -63,14 +63,28 @@ Twilio also supports API key auth (`TWILIO_API_KEY_SID` + `TWILIO_API_KEY_SECRET
 
 ### 3. Configure application behavior
 
+The real app config lives at `<data_repo>/outreach/config.yaml`. You have two ways to get there:
+
+**Recommended — `outreach setup` scaffolds it for you:**
+
 ```bash
-cp outreach.config.example.yaml outreach.config.yaml
+outreach setup --data-repo ~/path/to/your-data-repo
 ```
 
-At minimum, set these two fields:
+This creates `<data_repo>/.agents/workspace.yaml` (the shared stack marker), scaffolds `outreach/{config.yaml,campaigns,contacts,transcripts}/` from the template, syncs the agent skills, and runs a full-stack readiness check. Then edit the generated `<data_repo>/outreach/config.yaml` to set your identity and any Gemini tuning.
+
+**Dev — copy the local escape hatch:**
+
+```bash
+cp outreach.config.dev.yaml.example outreach.config.dev.yaml
+# edit outreach.config.dev.yaml and set data_repo_path
+```
+
+The dev file is gitignored and only load-bearing for `data_repo_path` — it points a dev checkout at a data repo so `npm run dev` works before you've run `outreach setup`. Everything else (identity, Gemini, watch) comes from `<data_repo>/outreach/config.yaml` once that exists.
+
+At minimum, `<data_repo>/outreach/config.yaml` needs:
 
 ```yaml
-data_repo_path: ~/path/to/your-data-repo   # where contacts, campaigns, transcripts live
 identity:
   user_name: "Your Name"                    # who the agent represents (used across all channels)
   # Optional pullable fields — agents fetch these via `outreach whoami --field <name>`
@@ -82,6 +96,31 @@ identity:
 
 The rest (Gemini model/voice/VAD for calls, default persona, thinking level) ships with sensible defaults. See `docs/done/tuning-reference.md` for call tuning parameters. SMS and email require no additional configuration beyond the secrets in `.env`.
 
+#### Data repo resolution
+
+The CLI locates the data repo via (1) `OUTREACH_DATA_REPO` env var, (2) `outreach.config.dev.yaml` next to the CLI (dev sticky — wins over walk-up), (3) walk-up from cwd for `.agents/workspace.yaml`. The dev file beats walk-up by design so a developer `cd`-ing into a real data repo doesn't silently run a dev binary against prod data.
+
+### 3b. Full-stack daemons
+
+Outreach composes with two sibling CLIs that share the same data repo: [sundial](https://github.com/fyang0507/sundial) (polling + watchers — powers `reply-check` and reply auto-watch) and [relay](https://github.com/fyang0507/relay) (human-in-the-loop reply integration — powers `ask-human`). Each tool registers itself under `tools.<name>` in `<data_repo>/.agents/workspace.yaml`. Outreach is the top of the stack — `outreach setup`'s readiness check verifies that sundial and relay are installed, registered, and responding.
+
+```bash
+# One-time per data repo — each tool registers itself in .agents/workspace.yaml and syncs skills
+outreach setup --data-repo ~/my-data
+sundial setup  --data-repo ~/my-data     # see sundial repo for exact flags
+relay setup    --data-repo ~/my-data     # see relay repo for exact flags
+
+# Per-session daemons (run in background)
+sundial daemon &                         # polling watchers
+relay init &                             # human-reply listener
+outreach call init                       # only when placing voice calls
+
+# Per-source (agent-driven — register relay watches on specific JSONL dirs)
+relay add --config <path-to-relay-config>
+```
+
+See the sundial and relay repos for their install and run instructions. If `outreach setup`'s readiness check fails, it prints a numbered remediation list pointing at the missing piece.
+
 ### 4. Verify
 
 ```bash
@@ -89,7 +128,7 @@ outreach --version
 outreach health    # checks data repo + readiness of all channels (call, sms, email, calendar)
 ```
 
-`health` validates the data repo exists, creates the directory structure if needed, and reports per-channel readiness. Fix any errors it reports before proceeding.
+`health` validates the data repo exists, creates the directory structure if needed, and reports per-channel readiness. The `data_repo` block in the output includes the resolved `config_path` and the resolution source (`env` / `dev` / `walk-up`) — useful for confirming you're pointing at the right repo. Fix any errors it reports before proceeding.
 
 ### 5. Google first-time auth
 
@@ -193,7 +232,7 @@ The CLI produces raw data (transcripts, campaign attempt entries). An external *
   transcripts/     # call transcripts (auto-saved by CLI)
 ```
 
-The data repo path is configured in `outreach.config.yaml` (`data_repo_path`). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/outreach/SKILL.md` for schemas and conventions.
+The data repo is located via `OUTREACH_DATA_REPO`, `outreach.config.dev.yaml` (dev), or walk-up from cwd for `.agents/workspace.yaml` (see §3 above). The orchestrator agent manages this data directly — the CLI does not wrap file I/O. See `skills/outreach/SKILL.md` for schemas and conventions.
 
 ## Design philosophy
 
@@ -250,11 +289,13 @@ src/
   cli.ts                         # CLI entrypoint
   contacts.ts                    # Contact interface + address resolution
   config.ts                      # .env secrets loader
-  appConfig.ts                   # outreach.config.yaml loader
+  dataRepo.ts                    # resolveDataRepo() — env > dev sticky > walk-up
+  appConfig.ts                   # loads <data_repo>/outreach/config.yaml (dev fallback: outreach.config.dev.yaml)
   runtime.ts                     # ~/.outreach/runtime.json state
   output.ts                      # JSON output helpers
   exitCodes.ts                   # Exit code constants (0-4)
   commands/
+    setup.ts                     # outreach setup (scaffold data repo + stack readiness)
     health.ts                    # outreach health
     context.ts                   # outreach context
     whoami.ts                    # outreach whoami (identity pull for callback agents)
