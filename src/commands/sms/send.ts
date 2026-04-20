@@ -1,5 +1,9 @@
 import { Command } from "commander";
-import { sendIMessage, normalizePhone } from "../../providers/messages.js";
+import {
+  sendIMessage,
+  normalizePhone,
+  pickService,
+} from "../../providers/messages.js";
 import { resolveContactAddress } from "../../contacts.js";
 import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
@@ -11,6 +15,12 @@ function withSmsHint(msg: string): string {
   const lower = msg.toLowerCase();
   if (lower.includes("not allowed") || lower.includes("not permitted"))
     return `${msg}. Grant Accessibility access to your terminal app in System Settings → Privacy & Security.`;
+  if (lower.includes("text message forwarding"))
+    return `${msg}`;
+  if (lower.includes("not delivered") || lower.includes("error code"))
+    return `${msg}. The message reached Messages.app but delivery failed — the number may not accept this service. Try a different channel or ask_human.`;
+  if (lower.includes("delivery status unknown"))
+    return `${msg}. Messages.app may still be retrying — check the Messages app UI directly, or retry after confirming.`;
   return `${msg}. Check that Messages.app is signed in. Run 'outreach health' to check SMS readiness.`;
 }
 
@@ -58,12 +68,46 @@ export function registerSendCommand(parent: Command): void {
           }
         }
 
+        // Pick service from history; fall back to iMessage on any lookup error.
+        let service: "iMessage" | "SMS";
         try {
-          sendIMessage(normalized, opts.body);
+          service = pickService(normalized);
+        } catch {
+          service = "iMessage";
+        }
+
+        let sendResult;
+        try {
+          sendResult = sendIMessage(normalized, opts.body, { service });
         } catch (err) {
           outputError(
             OPERATION_FAILED,
-            withSmsHint(`Failed to send iMessage: ${(err as Error).message}`),
+            withSmsHint(`Failed to send message: ${(err as Error).message}`),
+          );
+          process.exit(OPERATION_FAILED);
+          return;
+        }
+
+        if (sendResult.status === "failed") {
+          const codeStr = sendResult.error_code !== undefined
+            ? ` (error code ${sendResult.error_code})`
+            : "";
+          outputError(
+            OPERATION_FAILED,
+            withSmsHint(
+              `Message not delivered${codeStr} over ${sendResult.service}`,
+            ),
+          );
+          process.exit(OPERATION_FAILED);
+          return;
+        }
+
+        if (sendResult.status === "timeout") {
+          outputError(
+            OPERATION_FAILED,
+            withSmsHint(
+              `Delivery status unknown after 90s over ${sendResult.service}`,
+            ),
           );
           process.exit(OPERATION_FAILED);
           return;
@@ -116,6 +160,7 @@ export function registerSendCommand(parent: Command): void {
         outputJson({
           to: normalized,
           status: "sent",
+          service: sendResult.service,
           watch,
         });
         process.exit(SUCCESS);

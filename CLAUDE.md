@@ -33,8 +33,8 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 - **Gemini client** (`src/audio/geminiLive.ts`): `@google/genai` SDK wrapper for Gemini Live API. Handles audio streaming, function calling (`send_dtmf`, `end_call`), transcript extraction, and `rebindCallbacks()` for pre-connect support.
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
 
-**SMS channel** (iMessage):
-- **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound.
+**SMS channel** (iMessage or SMS):
+- **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound. `pickService()` chooses iMessage vs. SMS from recent chat.db history (last successful outbound → last inbound → iMessage default). `sendIMessage()` synchronously probes chat.db after send and returns `delivered` / `failed` / `timeout` (90s cap); SMS send requires iPhone Text Message Forwarding.
 
 **Email channel** (Gmail):
 - **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), search (query → thread-grouped metadata), health check. Uses shared Google OAuth2 auth from `googleAuth.ts`.
@@ -77,7 +77,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `src/commands/email/search.ts` | `outreach email search` — Gmail query search, returns thread-grouped metadata |
 | `src/commands/calendar/add.ts` | `outreach calendar add` — create Google Calendar event + log campaign attempt |
 | `src/commands/calendar/remove.ts` | `outreach calendar remove` — delete Google Calendar event + log campaign attempt |
-| `src/providers/messages.ts` | Messages DB reader + AppleScript sender + phone normalization |
+| `src/providers/messages.ts` | Messages DB reader + AppleScript sender + phone normalization + service picker + delivery probe |
 | `src/providers/googleAuth.ts` | Shared Google OAuth2 auth — token management, interactive flow, cached client |
 | `src/providers/gmail.ts` | Gmail API client: send, history, search, health check |
 | `src/providers/gcalendar.ts` | Google Calendar API client: add event, remove event, health check |
