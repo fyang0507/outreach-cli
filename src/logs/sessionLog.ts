@@ -119,6 +119,40 @@ export async function buildCallbackLogPath(opts: {
   return join(callbackLogsDir, filename);
 }
 
+// Per-process cache for contact name lookups during hydration.
+// A single CLI invocation typically writes a handful of events for the same
+// contact (attempt + watch, question + watch, etc.); caching avoids re-reading
+// the same contact JSON for each append.
+const contactNameCache = new Map<string, string | null>();
+
+async function lookupContactName(contactId: string): Promise<string | null> {
+  if (contactNameCache.has(contactId)) return contactNameCache.get(contactId)!;
+  try {
+    const contact = await readContact(contactId);
+    const name = contact.name ?? null;
+    contactNameCache.set(contactId, name);
+    return name;
+  } catch {
+    // Contact not found or unreadable — skip hydration silently. Adhoc flows
+    // and campaign-level events (contact_id: null) land here and are fine.
+    contactNameCache.set(contactId, null);
+    return null;
+  }
+}
+
+// If the event references a contact_id, attach the contact's name so that
+// downstream consumers (relay → Telegram) can show a human-readable label
+// next to the opaque id. No-op when contact_id is absent/null or the contact
+// has no name on file.
+async function hydrateContactName(event: object): Promise<object> {
+  const e = event as Record<string, unknown>;
+  if (typeof e.contact_id !== "string" || e.contact_id.length === 0) return event;
+  if ("contact_name" in e) return event;
+  const name = await lookupContactName(e.contact_id);
+  if (!name) return event;
+  return { ...e, contact_name: name };
+}
+
 export async function appendCampaignEvent(
   campaignId: string,
   event: object,
@@ -126,7 +160,8 @@ export async function appendCampaignEvent(
   const { campaignsDir } = await getDataDirs();
   await mkdir(campaignsDir, { recursive: true });
   const filePath = join(campaignsDir, `${campaignId}.jsonl`);
-  await appendFile(filePath, JSON.stringify(event) + "\n", "utf-8");
+  const hydrated = await hydrateContactName(event);
+  await appendFile(filePath, JSON.stringify(hydrated) + "\n", "utf-8");
 }
 
 export async function writeTranscript(
