@@ -17,6 +17,8 @@ If your task is "update the campaign record for X" or "mark Y resolved" — **yo
 
 ## Per-channel references
 
+**Channel preference: email > sms > phone.** The agent cannot receive inbound calls, so phone is outbound-only and replies can only land via email or SMS. Default to email unless the contact is SMS-native or the task genuinely requires voice.
+
 Flag details and output shapes for each channel — load only the one you need:
 
 - [call.md](./call.md) — voice calls (Twilio + Gemini Live)
