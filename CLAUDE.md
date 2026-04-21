@@ -87,7 +87,9 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 | `scripts/sync-skills.js` | Build hook — copies `skills/outreach/` → `<data_repo>/.agents/skills/outreach/` to keep agent workspace in sync |
 | `prompts/voice-agent.md` | Static system prompt — phone mechanics only (IVR, screening, ending calls) |
 | `outreach.config.dev.yaml` | Dev escape hatch (gitignored). Only `data_repo_path` is consumed by production path; ships as `.example` template. The real config is `<data_repo>/outreach/config.yaml` |
-| `skills/outreach/SKILL.md` | Agent onboarding — campaign framework + data model (synced to data repo on build) |
+| `skills/outreach/SKILL.md` | Agent onboarding — catalog/router + shared prerequisites (synced to data repo on build) |
+| `skills/outreach/once.md` | Agent reference — one-off send path (`--once`, utility mode) |
+| `skills/outreach/campaign.md` | Agent reference — campaign management SOP (data schema, CLI reference, workflow) |
 | `skills/outreach/call.md` | Agent reference — call channel (Twilio + Gemini Live) |
 | `skills/outreach/sms.md` | Agent reference — SMS channel (iMessage) |
 | `skills/outreach/email.md` | Agent reference — email channel (Gmail) |
@@ -218,7 +220,9 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
-| `skills/outreach/SKILL.md` | Agent-facing user guide — campaign framework |
+| `skills/outreach/SKILL.md` | Agent-facing user guide — catalog/router + shared prerequisites |
+| `skills/outreach/once.md` | Agent-facing user guide — one-off send (`--once`) |
+| `skills/outreach/campaign.md` | Agent-facing user guide — campaign management SOP |
 | `skills/outreach/call.md` | Agent-facing user guide — call channel |
 | `skills/outreach/sms.md` | Agent-facing user guide — SMS channel |
 | `skills/outreach/email.md` | Agent-facing user guide — email channel |
