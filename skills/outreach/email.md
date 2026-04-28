@@ -63,7 +63,7 @@ Returns thread-grouped results with metadata and snippets (no body). Use `email 
 
 By default, `email send` registers a background reply watcher that monitors for inbound replies and fires a callback when one arrives. This is automatic — no extra flags needed.
 
-- **`--fire-and-forget`**: Skip watcher registration. Use when no reply is expected (e.g., one-way notifications).
+- **`--fire-and-forget`**: Skip watcher registration. Use when no further reply is expected — one-way notifications **and closing replies** (the final "thanks, all set" / acknowledgement sent after a `decision` is already recorded). Without this flag the CLI schedules a fresh watcher behind your closer, so a polite "you're welcome" from the contact spuriously resumes an agent session for a campaign that's effectively done. See `campaign.md § 4 — Close the loop` for the full closing-reply rule.
 - **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
 - **Session resume**: Each callback spawns the configured agent. First callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Each run appends a `callback_run` event to the campaign JSONL.
 - **Reply detection**: Any non-self message in the thread after the watermark counts — including CC'd recipients, auto-replies, etc. The agent reads the full thread in the callback and decides what's actionable.

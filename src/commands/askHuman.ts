@@ -2,6 +2,8 @@ import { Command } from "commander";
 import { loadAppConfig } from "../appConfig.js";
 import {
   appendCampaignEvent,
+  assertCampaignHeader,
+  CampaignHeaderError,
   isoNow,
   readContact,
 } from "../logs/sessionLog.js";
@@ -51,6 +53,20 @@ export function registerAskHumanCommand(program: Command): void {
           );
           process.exit(INFRA_ERROR);
           return;
+        }
+
+        // Refuse to register a question/watcher if the campaign file/header
+        // is missing — otherwise the question append would create a headerless
+        // JSONL (issue #78).
+        try {
+          await assertCampaignHeader(opts.campaignId);
+        } catch (err) {
+          if (err instanceof CampaignHeaderError) {
+            outputError(INPUT_ERROR, err.message);
+            process.exit(INPUT_ERROR);
+            return;
+          }
+          throw err;
         }
 
         if (opts.contactId) {

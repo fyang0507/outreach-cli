@@ -1,6 +1,11 @@
 import { Command } from "commander";
 import { removeCalendarEvent } from "../../providers/gcalendar.js";
-import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
+import {
+  appendCampaignEvent,
+  assertCampaignHeader,
+  CampaignHeaderError,
+  isoNow,
+} from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 import { validateOnce } from "../../once.js";
@@ -38,6 +43,22 @@ export function registerRemoveCommand(parent: Command): void {
           );
           process.exit(INPUT_ERROR);
           return;
+        }
+
+        // Refuse to remove the event if the campaign file/header is missing —
+        // otherwise the post-remove audit append would create a headerless
+        // JSONL while the calendar event was already deleted (issue #78).
+        if (mode === "campaign") {
+          try {
+            await assertCampaignHeader(opts.campaignId!);
+          } catch (err) {
+            if (err instanceof CampaignHeaderError) {
+              outputError(INPUT_ERROR, err.message);
+              process.exit(INPUT_ERROR);
+              return;
+            }
+            throw err;
+          }
         }
 
         let result;

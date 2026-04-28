@@ -189,18 +189,27 @@ async function finalizeCall(session: CallSession): Promise<void> {
 
   await writeTranscript(session.id, session.fullTranscript);
 
-  // Auto-append attempt entry to campaign JSONL if campaign was specified
+  // Auto-append attempt entry to campaign JSONL if campaign was specified.
+  // `call.place` validates the header before dispatching to the daemon, so
+  // this should always succeed — but if the campaign file disappeared
+  // mid-call, log instead of crashing the daemon (transcript is preserved).
   if (session.campaignId) {
     const hasRemoteSpeech = session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
     const result = hasRemoteSpeech ? "connected" : "no_answer";
-    await appendCampaignEvent(session.campaignId, {
-      ts: isoNow(),
-      contact_id: session.contactId ?? null,
-      type: "attempt",
-      channel: "call",
-      result,
-      call_id: session.id,
-    });
+    try {
+      await appendCampaignEvent(session.campaignId, {
+        ts: isoNow(),
+        contact_id: session.contactId ?? null,
+        type: "attempt",
+        channel: "call",
+        result,
+        call_id: session.id,
+      });
+    } catch (err) {
+      console.error(
+        `[daemon] Failed to log call attempt for campaign '${session.campaignId}': ${(err as Error).message}`,
+      );
+    }
   }
 }
 

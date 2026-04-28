@@ -1,6 +1,11 @@
 import { Command, InvalidArgumentError } from "commander";
 import { loadAppConfig } from "../appConfig.js";
-import { appendCampaignEvent, isoNow } from "../logs/sessionLog.js";
+import {
+  appendCampaignEvent,
+  assertCampaignHeader,
+  CampaignHeaderError,
+  isoNow,
+} from "../logs/sessionLog.js";
 import { outputJson, outputError } from "../output.js";
 import { SUCCESS, INPUT_ERROR } from "../exitCodes.js";
 
@@ -67,6 +72,21 @@ export function registerWhoamiCommand(program: Command): void {
           );
           process.exit(INPUT_ERROR);
           return;
+        }
+
+        // Validate campaign header before doing any work — refuses to create
+        // a headerless campaign JSONL via the audit append (issue #78).
+        if (opts.campaignId) {
+          try {
+            await assertCampaignHeader(opts.campaignId);
+          } catch (err) {
+            if (err instanceof CampaignHeaderError) {
+              outputError(INPUT_ERROR, err.message);
+              process.exit(INPUT_ERROR);
+              return;
+            }
+            throw err;
+          }
         }
 
         const config = await loadAppConfig();

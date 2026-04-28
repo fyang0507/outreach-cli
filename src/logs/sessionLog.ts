@@ -153,12 +153,82 @@ async function hydrateContactName(event: object): Promise<object> {
   return { ...e, contact_name: name };
 }
 
+// Thrown when a campaign-scoped append targets a file that doesn't exist or
+// doesn't begin with a `campaign_header` for the matching campaign_id. Lets
+// callers distinguish this validation failure from other I/O errors so they
+// can surface a clean INPUT_ERROR instead of leaking a stack trace.
+export class CampaignHeaderError extends Error {
+  readonly code = "CAMPAIGN_HEADER_MISSING";
+  readonly campaignId: string;
+  constructor(campaignId: string, reason: string) {
+    super(reason);
+    this.name = "CampaignHeaderError";
+    this.campaignId = campaignId;
+  }
+}
+
+// Verify the campaign JSONL exists and starts with a valid `campaign_header`
+// for `campaignId`. Protects the invariant that every campaign file begins
+// with a header — without it, audit/event appends could silently create a
+// headerless JSONL that looks like a campaign but isn't.
+export async function assertCampaignHeader(campaignId: string): Promise<void> {
+  const { campaignsDir } = await getDataDirs();
+  const filePath = join(campaignsDir, `${campaignId}.jsonl`);
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new CampaignHeaderError(
+        campaignId,
+        `Campaign file ${filePath} does not exist. Write a campaign_header line first (see skills/outreach/campaign.md § Campaigns) before running any campaign-scoped command for '${campaignId}'.`,
+      );
+    }
+    throw err;
+  }
+  const firstLine = content.split("\n", 1)[0] ?? "";
+  if (firstLine.length === 0) {
+    throw new CampaignHeaderError(
+      campaignId,
+      `Campaign file ${filePath} is empty. The first line must be a campaign_header for '${campaignId}'.`,
+    );
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(firstLine) as Record<string, unknown>;
+  } catch {
+    throw new CampaignHeaderError(
+      campaignId,
+      `Campaign file ${filePath} first line is not valid JSON. The first line must be a campaign_header for '${campaignId}'.`,
+    );
+  }
+  // Backward-compat: older campaign headers were authored without an explicit
+  // `type` field — they're identified by carrying `campaign_id` + `objective`
+  // and lacking the `ts` that every audit/event row has. Accept both forms;
+  // reject only when `type` is set to anything other than `campaign_header`
+  // (i.e. the first line is an audit/event row, not a header).
+  const hasType = "type" in parsed;
+  if (hasType && parsed.type !== "campaign_header") {
+    throw new CampaignHeaderError(
+      campaignId,
+      `Campaign file ${filePath} first line has type=${JSON.stringify(parsed.type)}, expected 'campaign_header'. The first line of every campaign JSONL must be a campaign_header.`,
+    );
+  }
+  if (parsed.campaign_id !== campaignId) {
+    throw new CampaignHeaderError(
+      campaignId,
+      `Campaign header campaign_id=${JSON.stringify(parsed.campaign_id)} in ${filePath} does not match requested campaign_id='${campaignId}'.`,
+    );
+  }
+}
+
 export async function appendCampaignEvent(
   campaignId: string,
   event: object,
 ): Promise<void> {
   const { campaignsDir } = await getDataDirs();
   await mkdir(campaignsDir, { recursive: true });
+  await assertCampaignHeader(campaignId);
   const filePath = join(campaignsDir, `${campaignId}.jsonl`);
   const hydrated = await hydrateContactName(event);
   await appendFile(filePath, JSON.stringify(hydrated) + "\n", "utf-8");
