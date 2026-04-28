@@ -265,22 +265,31 @@ export function registerCallbackDispatchCommand(program: Command): void {
         // portable across machines that share the data repo.
         const logFileRel = relative(config.data_repo_path, logPath);
 
-        await appendCampaignEvent(opts.campaignId, {
-          ts: isoNow(),
-          contact_id: isCampaignSentinel ? null : opts.contactId,
-          type: "callback_run",
-          channel: opts.channel,
-          agent: callback_agent,
-          resumed: resumed && !fellBackToFresh,
-          prior_session_id: priorSessionId ?? null,
-          fell_back_to_fresh: fellBackToFresh,
-          exit_code: result.code,
-          duration_ms: durationMs,
-          session_captured: newSessionId !== undefined,
-          new_session_id: newSessionId ?? null,
-          log_file: logFileRel,
-          resumed_reason: resumedReason ?? null,
-        });
+        // Watcher fired against an existing campaign — header should always
+        // be present. If it isn't, surface to stderr (sundial logs) instead
+        // of crashing the dispatch and producing an unkillable retry loop.
+        try {
+          await appendCampaignEvent(opts.campaignId, {
+            ts: isoNow(),
+            contact_id: isCampaignSentinel ? null : opts.contactId,
+            type: "callback_run",
+            channel: opts.channel,
+            agent: callback_agent,
+            resumed: resumed && !fellBackToFresh,
+            prior_session_id: priorSessionId ?? null,
+            fell_back_to_fresh: fellBackToFresh,
+            exit_code: result.code,
+            duration_ms: durationMs,
+            session_captured: newSessionId !== undefined,
+            new_session_id: newSessionId ?? null,
+            log_file: logFileRel,
+            resumed_reason: resumedReason ?? null,
+          });
+        } catch (err) {
+          process.stderr.write(
+            `warn: failed to log callback_run for campaign '${opts.campaignId}': ${(err as Error).message}\n`,
+          );
+        }
 
         process.exit(result.code);
       },

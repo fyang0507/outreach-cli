@@ -1,6 +1,11 @@
 import { Command } from "commander";
 import { addCalendarEvent } from "../../providers/gcalendar.js";
-import { appendCampaignEvent, isoNow } from "../../logs/sessionLog.js";
+import {
+  appendCampaignEvent,
+  assertCampaignHeader,
+  CampaignHeaderError,
+  isoNow,
+} from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
 import { validateOnce } from "../../once.js";
@@ -68,6 +73,22 @@ export function registerAddCommand(parent: Command): void {
           outputError(INPUT_ERROR, "End time must be after start time");
           process.exit(INPUT_ERROR);
           return;
+        }
+
+        // Refuse to create the event if the campaign file/header is missing —
+        // otherwise the post-create audit append would produce a headerless
+        // JSONL while the calendar event already exists (issue #78).
+        if (mode === "campaign") {
+          try {
+            await assertCampaignHeader(opts.campaignId!);
+          } catch (err) {
+            if (err instanceof CampaignHeaderError) {
+              outputError(INPUT_ERROR, err.message);
+              process.exit(INPUT_ERROR);
+              return;
+            }
+            throw err;
+          }
         }
 
         let result;

@@ -145,7 +145,7 @@ Every send **auto-appends an `attempt`** to the campaign JSONL. You are responsi
 
 `sms send` and `email send` register a background reply watcher by default. When an inbound reply arrives, the watcher spawns a follow-up agent session that can resume the prior session (context carries across replies). The CLI logs a `watch` event on registration and a `callback_run` event per dispatch.
 
-- **`--fire-and-forget`** — skip watcher registration (use for one-way notifications).
+- **`--fire-and-forget`** — skip watcher registration. Use whenever no further reply is expected. For example **Closing replies** — the final "thanks, all set" / "great, see you then" / confirmation after the conversation is already concluded. Without `--fire-and-forget`, the CLI registers a fresh watcher after the closer, and a future polite "you're welcome" from the contact will spuriously resume an agent session for a campaign that's effectively done.
 - Watcher output-shape details are in the per-channel docs.
 
 **Watcher lifecycle is managed by the CLI — treat it as opaque.** You do not inspect, list, or cancel watchers. Your only visible signals are (a) the `human_input` / inbound reply arriving and (b) a `callback_run` entry appearing when the watcher fires a session. Timeouts, polling intervals, and retry policy are CLI-configured. Do not try to infer liveness from the JSONL.
@@ -192,6 +192,8 @@ outreach whoami --field first_name,email_signature # pull specific fields (comma
 ```
 
 Pull only what the next reply actually uses. If a needed field isn't in `--list`, use `outreach ask-human` instead of guessing.
+
+Only pass `--campaign-id` after confirming the campaign file already exists and begins with a `campaign_header`. Do not use `--campaign-id` during pre-campaign discovery or before creating the campaign header — the CLI will reject the audit append with `INPUT_ERROR` rather than create a stray headerless JSONL.
 
 ## `outreach ask-human`
 
@@ -248,6 +250,8 @@ done
 
 Never silently create a new campaign when an existing one might apply.
 
+> **Important:** write the `campaign_header` line **before** running any campaign-scoped CLI command, including `outreach whoami --campaign-id`, `outreach ask-human`, and any send (`call place`, `sms send`, `email send`, `calendar add`, `calendar remove`). These commands append audit/event rows to the named campaign file; the CLI now refuses to append when the file is missing or its first line isn't a `campaign_header`, so an out-of-order call exits with `INPUT_ERROR` instead of producing a stray headerless JSONL. A valid campaign file must always start with `campaign_header`.
+
 ## 2. Assemble context
 
 Use `outreach context` (optionally scoped to one contact) to review campaign state plus recent channel messages. Prefer `context` over per-channel history commands for campaign-aware work — fall back to `sms history` / `email history` / `call listen` only when you need raw data outside the campaign frame.
@@ -281,6 +285,7 @@ After any send — and after any outside information arrives — update the JSON
 4. **Decision** — when the objective is resolved, append a `decision` (`chosen`, `reason`, `resolution`). A decision does not close the campaign.
 5. **Calendar** — if the decision involves a scheduled event, run `outreach calendar add` (auto-logs an `attempt` with the `event_id`). For rescheduling (`amendment action: rescheduled`), use the stored `event_id` to `calendar remove`, then `calendar add` a new one. For cancellations (`amendment action: cancelled`), `calendar remove` with the stored `event_id`. See `calendar.md`.
 6. **Amendment** — for post-decision changes, append an `amendment`. Further `attempt` / `outcome` / `decision` entries may follow.
+7. **Closing reply** — when the next send is a sign-off / "thanks, all set" / acknowledgement after the conversation is already resolved (typically after a `decision` is recorded and you're just being polite), pass `--fire-and-forget` on the send. 
 
 ## 5. Before any new outreach action
 

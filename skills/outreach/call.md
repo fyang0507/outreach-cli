@@ -99,6 +99,8 @@ Returns:
 When you want to monitor the call continuously, call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates.
 However, if you only want to read transcript after the call ends, `call status` is available for lightweight metadata checks (call status, duration, from/to).
 
+**Pace your polls.** `listen` is incremental — back-to-back calls almost always return an empty `transcript` because there hasn't been a new turn yet. Always pair each `listen` with an explicit wait so the transcript has time to accumulate. A 30s-2min sleep between polls is a reasonable default for human-paced phone conversations.
+
 The voice agent is fire-and-forget: once `call place` is issued, there is no way to inject new instructions during the call. You are monitoring, not steering. To force-end a call early: `outreach call hangup --id <callId>`.
 
 ## Concurrent calls

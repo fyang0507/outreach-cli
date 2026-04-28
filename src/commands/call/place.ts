@@ -3,6 +3,10 @@ import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outreachConfig } from "../../config.js";
 import { resolveContactAddress } from "../../contacts.js";
+import {
+  assertCampaignHeader,
+  CampaignHeaderError,
+} from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 import { validateOnce } from "../../once.js";
@@ -42,6 +46,22 @@ export function registerPlaceCommand(parent: Command): void {
         );
         process.exit(INPUT_ERROR);
         return;
+      }
+
+      // Refuse to place the call if the campaign file/header is missing —
+      // otherwise the daemon's end-of-call audit append would create a
+      // headerless JSONL after the call already happened (issue #78).
+      if (mode === "campaign") {
+        try {
+          await assertCampaignHeader(opts.campaignId!);
+        } catch (err) {
+          if (err instanceof CampaignHeaderError) {
+            outputError(INPUT_ERROR, err.message);
+            process.exit(INPUT_ERROR);
+            return;
+          }
+          throw err;
+        }
       }
 
       // Resolve destination phone
