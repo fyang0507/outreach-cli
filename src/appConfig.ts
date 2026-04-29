@@ -135,11 +135,11 @@ export async function loadAppConfig(): Promise<AppConfig> {
 
   // Default call config if not present
   if (!config.call || typeof config.call !== "object") {
-    (config as Record<string, unknown>).call = { max_duration_seconds: 300 };
+    (config as Record<string, unknown>).call = { max_duration_seconds: 600 };
   }
   const call = config.call as Record<string, unknown>;
   if (call.max_duration_seconds == null || typeof call.max_duration_seconds !== "number") {
-    call.max_duration_seconds = 300;
+    call.max_duration_seconds = 600;
   }
 
   if (!config.identity || typeof config.identity !== "object" || Array.isArray(config.identity)) {

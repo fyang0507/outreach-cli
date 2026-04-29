@@ -35,7 +35,7 @@ identity:
 
 call:
   # Hard max call duration in seconds. Overridable per call via --max-duration flag.
-  max_duration_seconds: 300
+  max_duration_seconds: 600
 
 voice_agent:
   # Default persona used when --persona flag is not provided on call place.

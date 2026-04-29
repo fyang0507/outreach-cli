@@ -76,8 +76,8 @@ async function authorizeInteractive(client: OAuth2Client): Promise<void> {
   const code = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
       server.close();
-      reject(new Error("OAuth callback timed out after 60s"));
-    }, 60_000);
+      reject(new Error("OAuth callback timed out after 120s"));
+    }, 120_000);
 
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${REDIRECT_PORT}`);

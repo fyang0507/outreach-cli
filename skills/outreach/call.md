@@ -68,7 +68,7 @@ outreach call place \
 
 **Required**: `--campaign-id`, `--contact-id`, `--objective`
 **Recommended**: `--persona`, `--hangup-when`
-**Optional**: `--to <number>` — override the phone number resolved from the contact record. `--max-duration <seconds>` — override the default 300s max call duration.
+**Optional**: `--to <number>` — override the phone number resolved from the contact record. `--max-duration <seconds>` — override the default 600s max call duration.
 
 The destination phone number is resolved from the contact's `phone` field. Pass `--to` only to override (e.g., try a different number than what's on file).
 

@@ -34,7 +34,7 @@ export function registerPlaceCommand(parent: Command): void {
     .requiredOption("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
-    .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 300s)")
+    .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 600s)")
     .option("--once", "Fire-and-forget adhoc call — no campaign event. Transcript still written. Requires --to.")
     .action(async (opts: PlaceOptions) => {
       const mode = validateOnce("call", opts);

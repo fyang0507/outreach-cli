@@ -220,6 +220,7 @@ V1 used Twilio ConversationRelay (text-in/text-out, sub-agent as brain) with ~2.
 | `docs/done/lifecycle-commands.md` | Init/teardown/status design |
 | `docs/done/call-cost-guardrails.md` | Call duration and cost guardrails |
 | `docs/done/integration-test-ivr.md` | IVR integration test plan |
+| `docs/spec/timeouts.md` | Reference spec — every timeout/interval in the codebase, defaults, and rationale |
 | `skills/outreach/SKILL.md` | Agent-facing user guide — catalog/router + shared prerequisites |
 | `skills/outreach/once.md` | Agent-facing user guide — one-off send (`--once`) |
 | `skills/outreach/campaign.md` | Agent-facing user guide — campaign management SOP |
