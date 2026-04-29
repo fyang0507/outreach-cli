@@ -16,7 +16,7 @@ When done with calls:
 outreach call teardown # stop daemon + tunnel, clean up
 ```
 
-Note: `call teardown` stops call infrastructure only. You may still need to process transcripts and update campaign outcomes afterward — do that before syncing the data repo.
+Note: `call teardown` stops call infrastructure only. You still need to process transcripts and update campaign outcomes afterward — do that before syncing the data repo.
 
 ## Voice agent behavior layers
 
@@ -74,7 +74,7 @@ The destination phone number is resolved from the contact's `phone` field. Pass 
 
 Returns JSON: `{ "id": "<callId>", "status": "ringing" }`
 
-**Ad-hoc test (`--once`):** `outreach call place --once --to +15551234567 --objective "Say hello and hang up" --300` — no campaign event. Output includes `"mode": "once"`. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id` and `--contact-id`. Note: `--once` still writes the per-call transcript at `$DATA_REPO/outreach/transcripts/<call_id>.jsonl` — the daemon needs it for `call listen`/`status`/`hangup`. There is no campaign JSONL event linking to it, so these transcripts are not discoverable via `outreach context`.
+**Ad-hoc `--once`:** `outreach call place --once --to +15551234567 --objective "Say hello and hang up" --300` — no campaign event. Output includes `"mode": "once"`. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id` and `--contact-id`. Note: `--once` still writes the per-call transcript at `$DATA_REPO/outreach/transcripts/<call_id>.jsonl` — the daemon needs it for `call listen`/`status`/`hangup`. There is no campaign JSONL event linking to it, so these transcripts are not discoverable via `outreach context`.
 
 The voice agent handles the entire call — IVR navigation, conversation, and hangup — based on the objective and persona you provide. You can't to send messages during the call.
 
@@ -96,10 +96,9 @@ Returns:
 }
 ```
 
-When you want to monitor the call continuously, call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates.
-However, if you only want to read transcript after the call ends, `call status` is available for lightweight metadata checks (call status, duration, from/to).
+When you want to monitor the call continuously, call `listen` in a loop until `status` is `"ended"`. Each call returns only new entries since the last listen, so you build up the full conversation incrementally without duplicates. **Pace your polls.** Always pair each `listen` with an explicit wait so the transcript has time to accumulate. A 30s-2min sleep between polls is a reasonable default for human-paced phone conversations.
 
-**Pace your polls.** `listen` is incremental — back-to-back calls almost always return an empty `transcript` because there hasn't been a new turn yet. Always pair each `listen` with an explicit wait so the transcript has time to accumulate. A 30s-2min sleep between polls is a reasonable default for human-paced phone conversations.
+However, if you only want to read transcript after the call ends, `call status` is available for lightweight metadata checks (call status, duration, from/to).
 
 The voice agent is fire-and-forget: once `call place` is issued, there is no way to inject new instructions during the call. You are monitoring, not steering. To force-end a call early: `outreach call hangup --id <callId>`.
 
