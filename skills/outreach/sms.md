@@ -14,13 +14,15 @@ outreach sms send \
 **Required**: `--body`, `--campaign-id`, `--contact-id`
 **Optional**: `--to <number>` — override the phone number resolved from the contact record.
 
+**Body quoting (host shell).** Always single-quote `--body`. Double quotes let the shell expand `$VAR`, backticks, and `!`, so `"Cap is $60/hr"` arrives at the contact as `"Cap is /hr"` because `$60` expands to empty. Use `--body 'Cap is $60/hr'`. For a literal single quote inside a single-quoted string, use the close-escape idiom: `'don'\''t'`. There is no `--body-file` — the body must come through the flag, so quoting is the only knob.
+
 The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI auto-picks iMessage vs. SMS based on recent history with that number (any iMessage in the last 5 inbound → iMessage; else most recent successful outbound → its service; else most recent inbound; else SMS for unknowns), sends via AppleScript, then **synchronously probes chat.db for delivery** before returning. On confirmed delivery it appends an `attempt` entry with `channel: "sms"` to the campaign JSONL and registers the reply watcher. On failed/timeout delivery, neither the campaign event nor the watcher is written — the agent sees `OPERATION_FAILED` and should treat the send as not done.
 
 Returns (success): `{ "to": "+15551234567", "status": "sent", "service": "iMessage" | "SMS", "watch": ... }`
 
 Failure modes (exit 3, `OPERATION_FAILED`):
 - `"Message not delivered (error code N) over <service>"` — macOS reported a failure (e.g. iMessage service rejection, SMS relay error). Try a different channel or `ask_human`.
-- `"Delivery status unknown after 90s over <service>"` — probe timed out. Messages.app may still be retrying. Check the Messages UI or retry after confirming.
+- `"Delivery status unknown after 90s over <service>"` — probe timed out. Messages.app may still be retrying or queueing, and the chat.db thread may show a partial outbound fragment even though no `attempt` was written. Report it back to the operator and let them decide whether to retry.
 - `"AppleScript could not find an SMS service"` — Text Message Forwarding is not enabled on a paired iPhone. Requires iPhone Settings → Messages → Text Message Forwarding to send SMS.
 
 **Ad-hoc test (`--once`):** `outreach sms send --once --to +15551234567 --body "ping"` — no campaign state, no reply watcher. Use only for smoke-tests or demos; real outreach belongs in a campaign. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. Output: `{ "to": "...", "status": "sent", "watch": { "status": "skipped", "reason": "once" } }`.
@@ -47,6 +49,7 @@ By default, `sms send` registers a background reply watcher that monitors for in
 - **Dedup**: Sending again to the same contact on the same campaign reuses the existing watcher. The watermark advances to the latest send — earlier unreplied messages don't trigger the callback.
 - **Session resume**: Each callback spawns the configured agent. First callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Each run appends a `callback_run` event to the campaign JSONL.
 - **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (watcher unavailable), or `{ schedule_id, status }` where `status` is the watcher's status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
+- **Send succeeded, watcher failed (`watch: { status: "failed", error }`).** The message landed (campaign `attempt` is written) but no auto-reply session was registered. This is an infrastructure bug — likely in sundial. **Append a `cli-feedback` entry with the verbatim error string** so the operator can investigate. Do nothing else: write the normal `outcome` for the send itself, other agent-side workarounds aren't expected.
 
 ## SMS-specific notes
 

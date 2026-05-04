@@ -70,11 +70,7 @@ export async function registerReplyWatch(opts: {
       status: result.status as string,
     };
   } catch (err) {
-    const error = err as NodeJS.ErrnoException;
-    if (error.code === "ENOENT") {
-      return { status: "failed", error: "sundial not installed" };
-    }
-    return { status: "failed", error: error.message };
+    return { status: "failed", error: formatSundialError(err) };
   }
 }
 
@@ -129,10 +125,39 @@ export async function registerAskHumanWatch(opts: {
       status: result.status as string,
     };
   } catch (err) {
-    const error = err as NodeJS.ErrnoException;
-    if (error.code === "ENOENT") {
-      return { status: "failed", error: "sundial not installed" };
-    }
-    return { status: "failed", error: error.message };
+    return { status: "failed", error: formatSundialError(err) };
   }
+}
+
+// sundial CLI emits structured JSON on stdout for both success and failure
+// (e.g. {"error":"duplicate schedule exists","hint":"..."}). Node's execFile
+// rejects on non-zero exit but attaches stdout/stderr to the error object —
+// which the previous catch dropped, leaving callers with just "Command failed
+// with exit code 1." Surface the structured error instead so future watcher
+// failures are debuggable (issue #82).
+function formatSundialError(err: unknown): string {
+  const error = err as NodeJS.ErrnoException & {
+    stdout?: string | Buffer;
+    stderr?: string | Buffer;
+    killed?: boolean;
+    signal?: string | null;
+  };
+  if (error.code === "ENOENT") return "sundial not installed";
+  if (error.killed && error.signal === "SIGTERM") {
+    return "sundial add poll timed out (>10s) — daemon may be stuck";
+  }
+  const stdout = (error.stdout?.toString() ?? "").trim();
+  const stderr = (error.stderr?.toString() ?? "").trim();
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout) as Record<string, unknown>;
+      const parts = [parsed.error, parsed.hint].filter(Boolean);
+      if (parts.length > 0) return `sundial: ${parts.join(" — ")}`;
+    } catch {
+      // Not JSON — fall through to raw output.
+    }
+    return `sundial: ${stdout}`;
+  }
+  if (stderr) return `sundial: ${stderr}`;
+  return error.message;
 }

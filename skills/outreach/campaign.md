@@ -262,6 +262,7 @@ Pick a channel and run the appropriate send command (see per-channel docs for fl
 
 **Channel selection heuristic:**
 
+- **Operator preference wins.** If the operator stated a channel order in their prompt (e.g. "try call first, then SMS, then email"), follow that order. The bullets below are fallbacks for when no preference was given — don't override an explicit instruction with the default heuristic.
 - **If the contact has prior activity** — reply on the channel the contact last used (most recent `attempt` or inbound `human_input` for that contact). Escalate to a different channel only after two consecutive `no_answer` / `voicemail` / `failed` results on the current one.
 - **If the contact has no prior `attempt`** — prioritize **email → SMS → call**. This ordering reflects agent capability, not contact preference: **the agent can only place outbound calls, not receive inbound ones**, so voice is the least recoverable channel if the first try misses (callbacks land on the operator's phone, not the agent). Email and SMS allow async replies that auto-watchers catch and resume a session on. Use voice only when email/SMS aren't available or the operator explicitly asks.
 - **Override with judgment** when campaign state justifies it (e.g. time-sensitive and the contact has only a phone number).

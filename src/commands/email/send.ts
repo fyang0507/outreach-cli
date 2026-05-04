@@ -79,11 +79,14 @@ export function registerSendCommand(parent: Command): void {
           }
         }
 
-        // Resolve destination email
-        let to: string;
+        // Resolve destination email. With --reply-to-id, defer to gmail.ts
+        // so it derives the destination from the thread — pre-resolving from
+        // the contact record causes the recipient to be double-addressed when
+        // the agent threads onto its own outbound (issue #82).
+        let to: string | undefined;
         if (opts.to) {
           to = opts.to;
-        } else {
+        } else if (!opts.replyToId) {
           try {
             to = await resolveContactAddress(opts.contactId!, "email");
           } catch (err) {
