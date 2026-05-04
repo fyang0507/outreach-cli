@@ -5,7 +5,10 @@ import { getAuthClient, checkGoogleAuth, getTokenPath } from "./googleAuth.js";
 // --- Types ---
 
 export interface SendEmailOptions {
-  to: string;
+  // Optional when replyToId is set — gmail.ts derives the destination from the
+  // original message in that case (origFrom for replies to others, origTo for
+  // replies to your own outbound). When replyToId is not set, this is required.
+  to?: string;
   subject: string;
   body: string;
   cc?: string;
@@ -129,6 +132,14 @@ function parseAddressList(value: string): string[] {
     .filter(Boolean);
 }
 
+// Extract the bare email from an address string, which may be in
+// "Name <email>" or plain "email" form. Used for case-insensitive identity
+// comparisons (self-detection, dedup).
+function extractEmail(addr: string): string {
+  const match = addr.match(/<([^>]+)>/);
+  return (match ? match[1] : addr).trim().toLowerCase();
+}
+
 function extractPlainText(
   payload: gmail_v1.Schema$MessagePart | undefined,
 ): string | null {
@@ -178,11 +189,18 @@ function extractAttachmentMetadata(
 export async function sendEmail(
   opts: SendEmailOptions,
 ): Promise<SendEmailResult> {
+  if (!opts.to && !opts.replyToId) {
+    throw new Error(
+      "sendEmail requires either 'to' or 'replyToId' (so destination can be derived from the thread)",
+    );
+  }
+
   const gmail = await getGmailClient();
   const selfEmail = await getSelfEmail(gmail);
+  const selfEmailLower = selfEmail.toLowerCase();
 
   let subject = opts.subject;
-  let toAddr = opts.to;
+  let toAddr = opts.to ?? "";
   let ccAddrs: string[] = opts.cc ? parseAddressList(opts.cc) : [];
   const threadId: string | undefined = undefined;
   let inReplyTo = "";
@@ -226,24 +244,28 @@ export async function sendEmail(
         : `Re: ${origSubject}`;
     }
 
-    // Reply-all (default when replyToId is set)
     const replyAll = opts.replyAll !== false;
-    if (replyAll) {
-      // To = original sender
-      if (!opts.to) toAddr = origFrom;
-      // Cc = original To + Cc minus self
-      if (!opts.cc) {
-        const allRecipients = [
-          ...parseAddressList(origTo),
-          ...parseAddressList(origCc),
-        ];
-        ccAddrs = allRecipients.filter(
-          (a) => !a.toLowerCase().includes(selfEmail.toLowerCase()),
-        );
-      }
-    } else {
-      // Reply to sender only
-      if (!opts.to) toAddr = origFrom;
+    // Self-reply = the message we're threading onto was sent by us. The "reply
+    // back to the sender" default would mail ourselves, so route to origTo
+    // (the original recipients) instead — semantically a follow-up addendum.
+    const isSelfReply = extractEmail(origFrom) === selfEmailLower;
+
+    if (!opts.to) {
+      toAddr = isSelfReply ? origTo : origFrom;
+    }
+
+    if (replyAll && !opts.cc) {
+      const toAddrEmail = extractEmail(toAddr);
+      const allRecipients = [
+        ...parseAddressList(origTo),
+        ...parseAddressList(origCc),
+      ];
+      // Exclude self AND anyone already in toAddr — without the toAddr
+      // dedup, the recipient ends up double-addressed (issue #82).
+      ccAddrs = allRecipients.filter((a) => {
+        const aEmail = extractEmail(a);
+        return aEmail !== selfEmailLower && aEmail !== toAddrEmail;
+      });
     }
   }
 

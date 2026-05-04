@@ -15,6 +15,8 @@ outreach email send \
 **Required**: `--subject`, `--body`, `--campaign-id`, `--contact-id`
 **Optional**: `--to <address>` — override the email address resolved from the contact record. `--cc <addresses>`, `--bcc <addresses>`, `--reply-to-id <gmail-message-id>` (enables threading), `--no-reply-all` (reply to sender only; default is reply-all when replying), `--attach <path...>` (file attachments)
 
+**Body and subject quoting (host shell).** Always single-quote `--body` and `--subject`. Double quotes let the shell expand `$VAR`, backticks, and `!` history, so `"Cap is $60/hour"` ships as `"Cap is /hour"` because `$60` expands to empty — the contact sees the broken text. Use `--body 'Cap is $60/hour all-in'`. For a literal single quote inside, use the close-escape idiom: `'don'\''t'`. There is no `--body-file` — the body must come through the flag.
+
 The destination email is resolved from the contact's `email` field. Pass `--to` only to override.
 
 The CLI sends via Gmail API (OAuth2), then auto-appends an `attempt` entry with `channel: "email"`, `message_id`, and `thread_id` to the campaign JSONL.
@@ -23,7 +25,7 @@ Returns: `{ "to": "...", "subject": "...", "message_id": "...", "thread_id": "..
 
 **Ad-hoc test (`--once`):** `outreach email send --once --to test@example.com --subject "ping" --body "ping"` — no campaign state, no reply watcher. Use only for smoke-tests or demos; real outreach belongs in a campaign. `--reply-to-id`, `--cc`/`--bcc`, and `--attach` still work. Mutually exclusive with `--campaign-id`, `--contact-id`, and `--fire-and-forget`. Output includes `watch: { "status": "skipped", "reason": "once" }`.
 
-**Replying to a thread**: pass `--reply-to-id` with the Gmail message ID from a previous send or history lookup. The CLI auto-resolves threading headers (`In-Reply-To`, `References`), sets `Re:` subject prefix, and reply-all recipients (original sender → To, original To+Cc minus self → Cc). Use `--no-reply-all` to reply to sender only. Explicit `--to`/`--cc` override auto-resolved recipients.
+**Replying to a thread**: pass `--reply-to-id` with the Gmail message ID from a previous send or history lookup. The CLI auto-resolves threading headers (`In-Reply-To`, `References`), sets `Re:` subject prefix, and reply-all recipients (original sender → To, original To+Cc minus self → Cc). Use `--no-reply-all` to reply to sender only. Explicit `--to`/`--cc` override auto-resolved recipients. When threading onto your own outbound (corrections, addenda), the CLI routes to the original recipients and dedupes them out of Cc — no special flags needed.
 
 When signing off or referencing the user, use `outreach whoami --field <name>` (e.g. `first_name`, `email_signature`). See `campaign.md § outreach whoami`.
 
@@ -68,6 +70,7 @@ By default, `email send` registers a background reply watcher that monitors for 
 - **Session resume**: Each callback spawns the configured agent. First callback is a cold start; subsequent callbacks for the same (contact, channel) resume the prior session so context carries across replies. Each run appends a `callback_run` event to the campaign JSONL.
 - **Reply detection**: Any non-self message in the thread after the watermark counts — including CC'd recipients, auto-replies, etc. The agent reads the full thread in the callback and decides what's actionable.
 - **Output**: The `watch` field in send output is one of: `null` (fire-and-forget), `{ status: "skipped" }` (no watch config), `{ status: "failed", error }` (watcher unavailable), or `{ schedule_id, status }` where `status` is the watcher's status (e.g. `active` for a fresh schedule, `refreshed` when an existing one was updated).
+- **Send succeeded, watcher failed (`watch: { status: "failed", error }`).** The message landed (campaign `attempt` is written) but no auto-reply session was registered. This is an infrastructure bug — likely in sundial. **Append a `cli-feedback` entry with the verbatim error string** so the operator can investigate. Do nothing else: write the normal `outcome` for the send itself, other agent-side workarounds aren't expected.
 
 ## Email-specific notes
 
