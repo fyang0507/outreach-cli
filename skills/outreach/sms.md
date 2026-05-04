@@ -14,7 +14,7 @@ outreach sms send \
 **Required**: `--body`, `--campaign-id`, `--contact-id`
 **Optional**: `--to <number>` — override the phone number resolved from the contact record.
 
-The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI auto-picks iMessage vs. SMS based on recent history with that number (most recent successful outbound → its service; else most recent inbound; else iMessage), sends via AppleScript, then **synchronously probes chat.db for delivery** before returning. On confirmed delivery it appends an `attempt` entry with `channel: "sms"` to the campaign JSONL and registers the reply watcher. On failed/timeout delivery, neither the campaign event nor the watcher is written — the agent sees `OPERATION_FAILED` and should treat the send as not done.
+The destination phone is resolved from the contact's `sms_phone` field (falling back to `phone`). Pass `--to` only to override. The CLI auto-picks iMessage vs. SMS based on recent history with that number (any iMessage in the last 5 inbound → iMessage; else most recent successful outbound → its service; else most recent inbound; else SMS for unknowns), sends via AppleScript, then **synchronously probes chat.db for delivery** before returning. On confirmed delivery it appends an `attempt` entry with `channel: "sms"` to the campaign JSONL and registers the reply watcher. On failed/timeout delivery, neither the campaign event nor the watcher is written — the agent sees `OPERATION_FAILED` and should treat the send as not done.
 
 Returns (success): `{ "to": "+15551234567", "status": "sent", "service": "iMessage" | "SMS", "watch": ... }`
 

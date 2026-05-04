@@ -34,7 +34,7 @@ Orchestrator Agent → CLI  ────┼─ iMessage provider (AppleScript + 
 - **IPC**: CLI ↔ daemon communicate over Unix socket at `/tmp/outreach-daemon.sock`. JSON-RPC style (method + params).
 
 **SMS channel** (iMessage or SMS):
-- **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound. `pickService()` chooses iMessage vs. SMS from recent chat.db history (last successful outbound → last inbound → iMessage default). `sendIMessage()` synchronously probes chat.db after send and returns `delivered` / `failed` / `timeout` (90s cap); SMS send requires iPhone Text Message Forwarding.
+- **Messages provider** (`src/providers/messages.ts`): iMessage DB reader (`better-sqlite3`, readonly) + AppleScript sender. Phone normalization to E.164. Reads `~/Library/Messages/chat.db` for history, sends via `osascript` for outbound. `pickService()` chooses iMessage vs. SMS from recent chat.db history (any iMessage in last 5 inbound → iMessage; else last successful outbound → its service; else last inbound; else SMS default for unknowns). `sendIMessage()` synchronously probes chat.db after send and returns `delivered` / `failed` / `timeout` (90s cap); SMS send requires iPhone Text Message Forwarding.
 
 **Email channel** (Gmail):
 - **Gmail provider** (`src/providers/gmail.ts`): Gmail API client — send (with threading/reply-all/attachments via nodemailer MailComposer), history (by address or thread), search (query → thread-grouped metadata), health check. Uses shared Google OAuth2 auth from `googleAuth.ts`.

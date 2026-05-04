@@ -1,6 +1,6 @@
 {
   "name": "outreach-cli",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "type": "module",
   "bin": {
     "outreach": "dist/cli.js"

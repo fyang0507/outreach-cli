@@ -341,9 +341,11 @@ export type Service = "iMessage" | "SMS";
 
 /**
  * Pick the service to use based on recent message history with this phone.
- *   1. most recent successful outbound (is_sent=1 AND error=0) → its service
- *   2. else most recent inbound → its service
- *   3. else "iMessage"
+ *   1. if any of the last 5 inbound messages was iMessage → "iMessage"
+ *      (lets a reply via iMessage auto-correct after a one-off SMS outbound)
+ *   2. else most recent successful outbound (is_sent=1 AND error=0) → its service
+ *   3. else most recent inbound → its service
+ *   4. else "SMS" (universally deliverable for first-touch; requires Text Message Forwarding)
  */
 export function pickService(
   phone: string,
@@ -355,6 +357,23 @@ export function pickService(
 
   const db = new Database(dbPath, { readonly: true });
   try {
+    const recentInbound = db
+      .prepare(
+        `SELECT m.service FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE h.id = ? AND m.is_from_me = 0
+         ORDER BY m.date DESC
+         LIMIT 5`,
+      )
+      .all(normalized) as Array<{ service: string | null }>;
+    if (
+      recentInbound.some(
+        (row) => row.service && normalizeService(row.service) === "iMessage",
+      )
+    ) {
+      return "iMessage";
+    }
+
     const outbound = db
       .prepare(
         `SELECT m.service FROM message m
@@ -366,18 +385,9 @@ export function pickService(
       .get(normalized) as { service: string | null } | undefined;
     if (outbound?.service) return normalizeService(outbound.service);
 
-    const inbound = db
-      .prepare(
-        `SELECT m.service FROM message m
-         JOIN handle h ON h.ROWID = m.handle_id
-         WHERE h.id = ? AND m.is_from_me = 0
-         ORDER BY m.date DESC
-         LIMIT 1`,
-      )
-      .get(normalized) as { service: string | null } | undefined;
-    if (inbound?.service) return normalizeService(inbound.service);
+    if (recentInbound[0]?.service) return normalizeService(recentInbound[0].service);
 
-    return "iMessage";
+    return "SMS";
   } finally {
     db.close();
   }
