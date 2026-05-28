@@ -12,7 +12,6 @@ import { loadAppConfig } from "../appConfig.js";
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/calendar.events",
 ];
 const REDIRECT_PORT = 8089;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth2callback`;

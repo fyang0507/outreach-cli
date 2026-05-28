@@ -1,14 +1,13 @@
 import { Command } from "commander";
+import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { access, constants } from "node:fs/promises";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
-import { ensureDataDirs } from "../logs/sessionLog.js";
 import { readRuntime, checkDaemonHealth, isProcessRunning } from "../runtime.js";
 import { checkGmailAuth } from "../providers/gmail.js";
-import { checkCalendarAuth } from "../providers/gcalendar.js";
 import { outputJson } from "../output.js";
 import { SUCCESS } from "../exitCodes.js";
 
@@ -22,7 +21,7 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
     return {
       ok: false,
       error: (err as Error).message,
-      hint: "Run `outreach setup` to scaffold the data repo, or set OUTREACH_DATA_REPO for ad-hoc invocations.",
+      hint: "Set OUTREACH_DATA_REPO, create outreach.config.dev.yaml with data_repo_path, or run from a workspace containing .agents/workspace.yaml.",
     };
   }
 
@@ -36,53 +35,11 @@ async function checkDataRepo(): Promise<Record<string, unknown>> {
       path: repoPath,
       config_path: configPath,
       resolution,
-      hint: `Data repo not found at ${repoPath}. Run \`outreach setup --data-repo ${repoPath}\` or set OUTREACH_DATA_REPO.`,
+      hint: `Data repo not found at ${repoPath}. Create it outside the CLI or point OUTREACH_DATA_REPO at an existing workspace.`,
     };
   }
 
-  try {
-    execSync("git rev-parse --git-dir", { cwd: repoPath, stdio: "pipe", timeout: 3000 });
-  } catch {
-    return {
-      ok: false,
-      path: repoPath,
-      config_path: configPath,
-      resolution,
-      hint: `${repoPath} is not a git repository`,
-    };
-  }
-
-  // Check sync with remote
-  let synced: boolean | null = null;
-  try {
-    execSync("git fetch origin --quiet", { cwd: repoPath, stdio: "pipe", timeout: 10_000 });
-    const behind = execSync("git rev-list HEAD..@{u} --count", {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: 3000,
-    }).trim();
-    synced = behind === "0";
-  } catch {
-    // No remote, no upstream, or network issue — sync unknown
-    synced = null;
-  }
-
-  if (synced === false) {
-    return {
-      ok: false,
-      path: repoPath,
-      config_path: configPath,
-      resolution,
-      synced: false,
-      hint: `Data repo is behind remote. Run: cd ${repoPath} && git pull`,
-    };
-  }
-
-  // Ensure directory structure exists
-  await ensureDataDirs();
-
-  return { ok: true, path: repoPath, config_path: configPath, resolution, synced };
+  return { ok: true, path: repoPath, config_path: configPath, resolution };
 }
 
 // ---- Call channel checks ----
@@ -132,23 +89,14 @@ async function checkCall(): Promise<Record<string, unknown>> {
 async function checkSms(): Promise<Record<string, unknown>> {
   const messagesDb = join(homedir(), "Library", "Messages", "chat.db");
 
-  let dbAccessible = false;
+  let dbExists = false;
   try {
     await access(messagesDb, constants.R_OK);
-    dbAccessible = true;
+    dbExists = true;
   } catch {
     // not accessible
   }
 
-  if (!dbAccessible) {
-    return {
-      ok: false,
-      messages_db: "not_found",
-      hint: `iMessage database not accessible at ${messagesDb}`,
-    };
-  }
-
-  // Check osascript availability
   let osascriptAvailable = false;
   try {
     execSync("which osascript", { stdio: "pipe", timeout: 2000 });
@@ -160,12 +108,38 @@ async function checkSms(): Promise<Record<string, unknown>> {
   if (!osascriptAvailable) {
     return {
       ok: false,
-      messages_db: "accessible",
-      hint: "osascript not found — required for sending iMessages",
+      send: { ok: false, hint: "osascript not found — required for Messages.app sends" },
+      history: { ok: false, messages_db: dbExists ? "present" : "not_found" },
     };
   }
 
-  return { ok: true, messages_db: "accessible" };
+  let history: Record<string, unknown>;
+  if (!dbExists) {
+    history = {
+      ok: false,
+      messages_db: "not_found",
+      hint: `Messages database not accessible at ${messagesDb}`,
+    };
+  } else {
+    try {
+      const db = new Database(messagesDb, { readonly: true });
+      db.prepare("SELECT 1").get();
+      db.close();
+      history = { ok: true, messages_db: "accessible" };
+    } catch (err) {
+      history = {
+        ok: false,
+        messages_db: "authorization_denied",
+        hint: `Messages database exists but cannot be opened: ${(err as Error).message}. Grant Full Disk Access to the terminal/Codex app for sms history.`,
+      };
+    }
+  }
+
+  return {
+    ok: osascriptAvailable,
+    send: { ok: true, service_default: "iMessage" },
+    history,
+  };
 }
 
 // ---- Health command ----
@@ -175,12 +149,11 @@ export function registerHealthCommand(program: Command): void {
     .command("health")
     .description("Check readiness of all channels")
     .action(async () => {
-      const [dataRepo, call, sms, email, calendar] = await Promise.all([
+      const [dataRepo, call, sms, email] = await Promise.all([
         checkDataRepo(),
         checkCall(),
         checkSms(),
         checkGmailAuth(),
-        checkCalendarAuth(),
       ]);
 
       outputJson({
@@ -188,7 +161,6 @@ export function registerHealthCommand(program: Command): void {
         call,
         sms,
         email,
-        calendar,
       });
       process.exit(SUCCESS);
     });

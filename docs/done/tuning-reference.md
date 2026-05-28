@@ -9,9 +9,9 @@ Two config sources, no overlap:
 | Source | What it holds | How it's set |
 |---|---|---|
 | `.env` → `src/config.ts` | Secrets: Twilio creds, API keys, phone numbers, webhook URL | Per-environment, gitignored |
-| `outreach.config.json` → `src/appConfig.ts` | All behavior: Gemini model/voice/VAD/thinking, system prompt template | Checked in, shared across environments |
+| `<data_repo>/outreach/config.yaml` → `src/appConfig.ts` | Behavior: identity, Gemini model/voice/VAD/thinking, default persona | Created outside this CLI from `outreach.config.dev.yaml.example` |
 
-If `outreach.config.json` is missing or any required field is absent, the CLI fails immediately with a clear error.
+If the config file is missing or any required field is absent, the CLI fails immediately with a clear error.
 
 ## 1. CLI flags (per-call, passed by orchestrator)
 
@@ -22,20 +22,24 @@ These override or supplement the config for a specific call.
 | `--to <number>` | Yes | Destination phone number |
 | `--from <number>` | No | Caller ID (defaults to `OUTREACH_DEFAULT_FROM` from .env) |
 | `--objective <text>` | No | What this call should accomplish |
-| `--persona <text>` | No | Overrides `voice_agent.system_prompt_template.persona` from config |
+| `--persona <text>` | No | Overrides `voice_agent.default_persona` from config |
 | `--hangup-when <text>` | No | Condition for the model to invoke `end_call` tool |
-| `--campaign <id>` | No | Campaign ID for session log grouping |
+| `--no-amd` | No | Disables Twilio answering-machine detection for lowest-latency pickup tests |
+| `--wait-for-user` | No | Test mode: suppresses proactive greeting until remote speech |
+| `--experimental-local-vad` | No | Test mode: bridge-side endpointing with Gemini manual activity signals |
 
 **Tuning tips:**
 - `--persona`: shorter, more specific produces more natural behavior. "You are Fredy's assistant, calling to schedule a plumber" > "You are a helpful AI assistant..."
 - `--hangup-when`: be specific. "After getting the quote amount and availability" > "When done"
 - `--objective`: include context the model needs. "Get a quote for kitchen sink repair. Budget is under $300. Prefer weekend appointments."
+- `--no-amd`: use for controlled human-answer latency tests only. Normal calls keep AMD enabled for voicemail classification.
+- Default calls proactively greet. Use `--wait-for-user --experimental-local-vad` only for turn-taking latency experiments until the UX is validated for production.
 
 ## 2. System instruction composition
 
 Builder: `src/audio/systemInstruction.ts`
 Static prompt: `prompts/voice-agent.md`
-Default persona: `outreach.config.json` → `voice_agent.default_persona`
+Default persona: `<data_repo>/outreach/config.yaml` → `voice_agent.default_persona`
 
 The system instruction sent to Gemini is composed from **CLI flags (dynamic, per-call)** + **static prompt file**:
 
@@ -67,7 +71,7 @@ The system instruction sent to Gemini is composed from **CLI flags (dynamic, per
 
 ## 3. Voice selection
 
-Config: `outreach.config.json` → `gemini.speech.voice_name` (required)
+Config: `<data_repo>/outreach/config.yaml` → `gemini.speech.voice_name` (required)
 
 | Voice name | Character |
 |---|---|
@@ -84,7 +88,7 @@ Config: `outreach.config.json` → `gemini.speech.voice_name` (required)
 
 ## 4. VAD (Voice Activity Detection) — turn-taking speed
 
-Config: `outreach.config.json` → `gemini.vad`
+Config: `<data_repo>/outreach/config.yaml` → `gemini.vad`
 
 **Most impactful parameters for natural conversation feel.**
 
@@ -105,7 +109,7 @@ All are `null` by default in config, meaning "use Gemini API default."
 
 ## 5. Barge-in / interruption handling
 
-Config: `outreach.config.json` → `gemini.turn_taking.activity_handling` (required)
+Config: `<data_repo>/outreach/config.yaml` → `gemini.turn_taking.activity_handling` (required)
 
 | Value | Effect |
 |---|---|
@@ -114,7 +118,7 @@ Config: `outreach.config.json` → `gemini.turn_taking.activity_handling` (requi
 
 ## 6. Thinking config — reasoning depth
 
-Config: `outreach.config.json` → `gemini.thinking`
+Config: `<data_repo>/outreach/config.yaml` → `gemini.thinking`
 
 | Config field | Type | Default | Effect |
 |---|---|---|---|
@@ -127,7 +131,7 @@ Config: `outreach.config.json` → `gemini.thinking`
 
 ## 7. Temperature and sampling
 
-Config: `outreach.config.json` → `gemini.generation`
+Config: `<data_repo>/outreach/config.yaml` → `gemini.generation`
 
 | Config field | Type | Default | Effect |
 |---|---|---|---|
@@ -145,7 +149,7 @@ All are `null` by default, meaning "use API default."
 
 ## 8. Language and transcription
 
-Config: `outreach.config.json` → `gemini.speech.language_code` and `gemini.transcription`
+Config: `<data_repo>/outreach/config.yaml` → `gemini.speech.language_code` and `gemini.transcription`
 
 | Config field | Type | Default | Effect |
 |---|---|---|---|
@@ -182,7 +186,7 @@ These are hardcoded in `src/audio/geminiLive.ts`. To add more tools (e.g., `look
 
 For immediate UX improvement, iterate in this order:
 
-1. **System instruction** (`outreach.config.json` → `voice_agent`) — biggest naturalness impact, easiest to change
+1. **System instruction** (`<data_repo>/outreach/config.yaml` → `voice_agent`) — biggest naturalness impact, easiest to change
 2. **VAD parameters** (`gemini.vad`) — biggest latency impact for turn-taking speed
 3. **Voice selection** (`gemini.speech.voice_name`) — personality/brand fit
 4. **Thinking level** (`gemini.thinking.thinking_level`) — for complex call scenarios

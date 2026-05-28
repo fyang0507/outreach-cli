@@ -7,7 +7,8 @@ config({ path: resolve(__dirname, "..", ".env"), quiet: true });
 
 /**
  * Environment config — secrets and infrastructure only.
- * Application behavior config lives in outreach.config.json (loaded by appConfig.ts).
+ * Application behavior config lives in <data_repo>/outreach/config.yaml
+ * (loaded by appConfig.ts).
  */
 export interface OutreachConfig {
   TWILIO_ACCOUNT_SID: string;

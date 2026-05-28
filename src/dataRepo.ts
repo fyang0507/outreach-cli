@@ -106,8 +106,9 @@ export function resolveDataRepo(cwd: string = process.cwd()): ResolvedDataRepo {
       `  3. Walk-up from cwd for ${WORKSPACE_MARKER} — no marker found`,
       "",
       "Fix one of:",
-      "  • Run `outreach setup --data-repo <path>` to scaffold a data repo.",
       "  • Set OUTREACH_DATA_REPO=/path/to/data/repo for ad-hoc invocations.",
+      `  • Create ${DEV_CONFIG_FILENAME} next to the CLI with data_repo_path: /path/to/data/repo.`,
+      `  • Run from a workspace that already contains ${WORKSPACE_MARKER}.`,
     ].join("\n"),
   );
 }

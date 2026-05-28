@@ -5,9 +5,13 @@ export interface GeminiLiveSessionOptions {
   apiKey: string;
   geminiConfig: GeminiConfig;
   systemInstruction: string;
+  manualActivityDetection?: boolean;
   onAudio: (base64Pcm: string) => void;
   onTranscript: (speaker: "remote" | "local", text: string) => void;
   onToolCall: (name: string, args: Record<string, unknown>, id: string) => void;
+  onGenerationComplete?: () => void;
+  onTurnComplete?: () => void;
+  onInterrupted?: () => void;
   onEnd: () => void;
 }
 
@@ -57,10 +61,14 @@ export class GeminiLiveSession {
 
     // Build VAD config — only include non-null values
     const vadConfig: Record<string, unknown> = {};
-    if (gc.vad.start_of_speech_sensitivity !== null) vadConfig.startOfSpeechSensitivity = gc.vad.start_of_speech_sensitivity;
-    if (gc.vad.end_of_speech_sensitivity !== null) vadConfig.endOfSpeechSensitivity = gc.vad.end_of_speech_sensitivity;
-    if (gc.vad.prefix_padding_ms !== null) vadConfig.prefixPaddingMs = gc.vad.prefix_padding_ms;
-    if (gc.vad.silence_duration_ms !== null) vadConfig.silenceDurationMs = gc.vad.silence_duration_ms;
+    if (this.opts.manualActivityDetection) {
+      vadConfig.disabled = true;
+    } else {
+      if (gc.vad.start_of_speech_sensitivity !== null) vadConfig.startOfSpeechSensitivity = gc.vad.start_of_speech_sensitivity;
+      if (gc.vad.end_of_speech_sensitivity !== null) vadConfig.endOfSpeechSensitivity = gc.vad.end_of_speech_sensitivity;
+      if (gc.vad.prefix_padding_ms !== null) vadConfig.prefixPaddingMs = gc.vad.prefix_padding_ms;
+      if (gc.vad.silence_duration_ms !== null) vadConfig.silenceDurationMs = gc.vad.silence_duration_ms;
+    }
 
     // Build transcription config
     const inputTranscription: Record<string, unknown> = {};
@@ -143,6 +151,18 @@ export class GeminiLiveSession {
       this.opts.onTranscript("local", msg.serverContent.outputTranscription.text);
     }
 
+    if (msg.serverContent?.interrupted) {
+      this.opts.onInterrupted?.();
+    }
+
+    if (msg.serverContent?.generationComplete) {
+      this.opts.onGenerationComplete?.();
+    }
+
+    if (msg.serverContent?.turnComplete) {
+      this.opts.onTurnComplete?.();
+    }
+
     if (msg.toolCall?.functionCalls) {
       for (const fc of msg.toolCall.functionCalls) {
         if (fc.name && fc.id) {
@@ -162,6 +182,24 @@ export class GeminiLiveSession {
     });
   }
 
+  sendActivityStart(): void {
+    if (!this.session || this.closed) return;
+    this.session.sendRealtimeInput({ activityStart: {} });
+  }
+
+  sendActivityEnd(): void {
+    if (!this.session || this.closed) return;
+    this.session.sendRealtimeInput({ activityEnd: {} });
+  }
+
+  sendTextTurn(text: string): void {
+    if (!this.session || this.closed) return;
+    this.session.sendClientContent({
+      turns: [{ role: "user", parts: [{ text }] }],
+      turnComplete: true,
+    });
+  }
+
   sendToolResponse(functionCallId: string, name: string, result: Record<string, unknown>): void {
     if (!this.session || this.closed) return;
     this.session.sendToolResponse({
@@ -177,11 +215,17 @@ export class GeminiLiveSession {
     onAudio: GeminiLiveSessionOptions["onAudio"];
     onTranscript: GeminiLiveSessionOptions["onTranscript"];
     onToolCall: GeminiLiveSessionOptions["onToolCall"];
+    onGenerationComplete?: GeminiLiveSessionOptions["onGenerationComplete"];
+    onTurnComplete?: GeminiLiveSessionOptions["onTurnComplete"];
+    onInterrupted?: GeminiLiveSessionOptions["onInterrupted"];
     onEnd: GeminiLiveSessionOptions["onEnd"];
   }): void {
     this.opts.onAudio = cbs.onAudio;
     this.opts.onTranscript = cbs.onTranscript;
     this.opts.onToolCall = cbs.onToolCall;
+    this.opts.onGenerationComplete = cbs.onGenerationComplete;
+    this.opts.onTurnComplete = cbs.onTurnComplete;
+    this.opts.onInterrupted = cbs.onInterrupted;
     this.opts.onEnd = cbs.onEnd;
   }
 

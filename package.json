@@ -1,12 +1,22 @@
 {
   "name": "outreach-cli",
-  "version": "2.5.2",
+  "version": "3.0.0",
   "type": "module",
   "bin": {
     "outreach": "dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "skills/outreach/",
+    "prompts/",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".env.example",
+    "outreach.config.dev.yaml.example"
+  ],
   "scripts": {
-    "build": "tsc && node scripts/sync-skills.js"
+    "build": "rm -rf dist && tsc && node scripts/sync-skills.js"
   },
   "dependencies": {
     "@google/genai": "^1.48.0",
