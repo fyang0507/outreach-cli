@@ -2,82 +2,35 @@ import { Command } from "commander";
 import { requireRuntime } from "../../runtime.js";
 import { sendToDaemon } from "../../daemon/ipc.js";
 import { outreachConfig } from "../../config.js";
-import { resolveContactAddress } from "../../contacts.js";
-import {
-  assertCampaignHeader,
-  CampaignHeaderError,
-} from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
-import { validateOnce } from "../../once.js";
 
 interface PlaceOptions {
-  to?: string;
+  to: string;
   from?: string;
-  campaignId?: string;
-  contactId?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
   maxDuration?: string;
-  once?: boolean;
+  amd?: boolean;
+  waitForUser?: boolean;
+  experimentalLocalVad?: boolean;
 }
 
 export function registerPlaceCommand(parent: Command): void {
   parent
     .command("place")
     .description("Place an outbound call")
-    .option("--to <number>", "Destination phone number (resolved from contact if omitted; required with --once)")
+    .requiredOption("--to <number>", "Destination phone number")
     .option("--from <number>", "Caller ID phone number")
-    .option("--campaign-id <id>", "Campaign ID — auto-logs attempt to campaign JSONL (required unless --once)")
-    .option("--contact-id <id>", "Contact ID — used for address resolution and campaign tracking (required unless --once)")
     .requiredOption("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
     .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 600s)")
-    .option("--once", "Fire-and-forget adhoc call — no campaign event. Transcript still written. Requires --to.")
+    .option("--no-amd", "Disable Twilio answering-machine detection for lowest-latency experiments")
+    .option("--wait-for-user", "Do not proactively greet; wait for remote speech before responding")
+    .option("--experimental-local-vad", "Use experimental bridge-side endpointing for wait-for-user tests")
     .action(async (opts: PlaceOptions) => {
-      const mode = validateOnce("call", opts);
-
-      if (mode === "campaign" && (!opts.campaignId || !opts.contactId)) {
-        outputError(
-          INPUT_ERROR,
-          "Missing required --campaign-id and/or --contact-id. Either pass both to log this call against a campaign, or pass --once (with --to) to place adhoc.",
-        );
-        process.exit(INPUT_ERROR);
-        return;
-      }
-
-      // Refuse to place the call if the campaign file/header is missing —
-      // otherwise the daemon's end-of-call audit append would create a
-      // headerless JSONL after the call already happened (issue #78).
-      if (mode === "campaign") {
-        try {
-          await assertCampaignHeader(opts.campaignId!);
-        } catch (err) {
-          if (err instanceof CampaignHeaderError) {
-            outputError(INPUT_ERROR, err.message);
-            process.exit(INPUT_ERROR);
-            return;
-          }
-          throw err;
-        }
-      }
-
-      // Resolve destination phone
-      let to: string;
-      if (opts.to) {
-        to = opts.to;
-      } else {
-        try {
-          to = await resolveContactAddress(opts.contactId!, "call");
-        } catch (err) {
-          outputError(INPUT_ERROR, (err as Error).message);
-          process.exit(INPUT_ERROR);
-          return;
-        }
-      }
-
       const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
       if (!from) {
         outputError(INPUT_ERROR, "No --from number provided and OUTREACH_DEFAULT_FROM is not set");
@@ -105,14 +58,15 @@ export function registerPlaceCommand(parent: Command): void {
 
       try {
         const result = await sendToDaemon("call.place", {
-          to,
+          to: opts.to,
           from,
-          campaignId: mode === "once" ? undefined : opts.campaignId,
-          contactId: mode === "once" ? undefined : opts.contactId,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
           maxDuration: maxDuration,
+          amd: opts.amd,
+          waitForUserBeforeGreeting: opts.waitForUser,
+          experimentalLocalVad: opts.experimentalLocalVad,
         });
 
         const res = result as { error?: string; message?: string };
@@ -122,7 +76,7 @@ export function registerPlaceCommand(parent: Command): void {
           return;
         }
 
-        outputJson(mode === "once" ? { ...(result as object), mode: "once" } : result);
+        outputJson(result);
         process.exit(SUCCESS);
       } catch (err) {
         outputError(INFRA_ERROR, (err as Error).message);

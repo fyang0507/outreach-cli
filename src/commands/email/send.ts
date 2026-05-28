@@ -1,100 +1,49 @@
 import { Command } from "commander";
 import { sendEmail } from "../../providers/gmail.js";
-import { resolveContactAddress } from "../../contacts.js";
-import {
-  appendCampaignEvent,
-  assertCampaignHeader,
-  CampaignHeaderError,
-  isoNow,
-} from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, OPERATION_FAILED } from "../../exitCodes.js";
-import { registerReplyWatch, type WatchResult } from "../../watch.js";
-import { validateOnce } from "../../once.js";
 
 function withEmailHint(msg: string): string {
   const lower = msg.toLowerCase();
   if (lower.includes("invalid_grant") || lower.includes("401"))
     return `${msg}. Gmail token may be expired. Run 'outreach health' to check, then re-authorize if needed.`;
   if (lower.includes("recipient") || lower.includes("address"))
-    return `${msg}. Check the --to address or contact email field.`;
+    return `${msg}. Check the --to address.`;
   return `${msg}. Run 'outreach health' to check email channel readiness.`;
 }
 
 export function registerSendCommand(parent: Command): void {
   parent
     .command("send")
-    .description("Send an email via Gmail and log campaign attempt")
-    .option("--to <address>", "Recipient email address (resolved from contact if omitted; required with --once)")
+    .description("Send an email via Gmail")
+    .option("--to <address>", "Recipient email address (optional with --reply-to-id)")
     .requiredOption("--subject <text>", "Email subject")
     .requiredOption("--body <text>", "Email body (plain text)")
-    .option("--campaign-id <id>", "Campaign ID for tracking (required unless --once)")
-    .option("--contact-id <id>", "Contact ID for tracking (required unless --once)")
     .option("--cc <addresses>", "CC recipients (comma-separated)")
     .option("--bcc <addresses>", "BCC recipients (comma-separated)")
     .option("--reply-to-id <id>", "Gmail message ID to reply to (enables threading)")
     .option("--no-reply-all", "Reply to sender only (default is reply-all when --reply-to-id is set)")
     .option("--attach <paths...>", "File paths to attach")
-    .option("--fire-and-forget", "Skip reply watcher registration")
-    .option("--once", "Fire-and-forget adhoc send — no campaign state, no watcher. Requires --to.")
     .action(
       async (opts: {
         to?: string;
         subject: string;
         body: string;
-        campaignId?: string;
-        contactId?: string;
         cc?: string;
         bcc?: string;
         replyToId?: string;
         replyAll: boolean;
         attach?: string[];
-        fireAndForget?: boolean;
-        once?: boolean;
       }) => {
-        const mode = validateOnce("email", opts);
-
-        if (mode === "campaign" && (!opts.campaignId || !opts.contactId)) {
-          outputError(
-            INPUT_ERROR,
-            "Missing required --campaign-id and/or --contact-id. Either pass both to log this send against a campaign, or pass --once (with --to) to send adhoc.",
-          );
+        if (!opts.to && !opts.replyToId) {
+          outputError(INPUT_ERROR, "Either --to or --reply-to-id is required");
           process.exit(INPUT_ERROR);
           return;
         }
 
-        // Refuse to send if the campaign file/header is missing — otherwise
-        // the post-send audit append would create a headerless JSONL while
-        // the email was already on the wire (issue #78).
-        if (mode === "campaign") {
-          try {
-            await assertCampaignHeader(opts.campaignId!);
-          } catch (err) {
-            if (err instanceof CampaignHeaderError) {
-              outputError(INPUT_ERROR, err.message);
-              process.exit(INPUT_ERROR);
-              return;
-            }
-            throw err;
-          }
-        }
-
-        // Resolve destination email. With --reply-to-id, defer to gmail.ts
-        // so it derives the destination from the thread — pre-resolving from
-        // the contact record causes the recipient to be double-addressed when
-        // the agent threads onto its own outbound (issue #82).
-        let to: string | undefined;
-        if (opts.to) {
-          to = opts.to;
-        } else if (!opts.replyToId) {
-          try {
-            to = await resolveContactAddress(opts.contactId!, "email");
-          } catch (err) {
-            outputError(INPUT_ERROR, (err as Error).message);
-            process.exit(INPUT_ERROR);
-            return;
-          }
-        }
+        // With --reply-to-id, defer to gmail.ts so it derives the destination
+        // from the thread.
+        const to = opts.to;
 
         let result;
         try {
@@ -117,52 +66,6 @@ export function registerSendCommand(parent: Command): void {
           return;
         }
 
-        if (mode === "campaign") {
-          await appendCampaignEvent(opts.campaignId!, {
-            ts: isoNow(),
-            contact_id: opts.contactId!,
-            type: "attempt",
-            channel: "email",
-            result: "sent",
-            message_id: result.messageId,
-            thread_id: result.threadId,
-            await_reply: !opts.fireAndForget,
-          });
-        }
-
-        // Register reply watcher (never blocks send)
-        let watchResult: WatchResult | null = null;
-        if (mode === "campaign" && !opts.fireAndForget) {
-          try {
-            watchResult = await registerReplyWatch({
-              campaignId: opts.campaignId!,
-              contactId: opts.contactId!,
-              channel: "email",
-            });
-            if (watchResult.schedule_id) {
-              await appendCampaignEvent(opts.campaignId!, {
-                ts: isoNow(),
-                contact_id: opts.contactId!,
-                type: "watch",
-                channel: "email",
-                watch_schedule_id: watchResult.schedule_id,
-                watch_status: watchResult.status,
-              });
-            }
-          } catch {
-            watchResult = { status: "failed", error: "sundial unavailable" };
-          }
-        }
-
-        let watch: WatchResult | { status: "skipped"; reason?: string } | null;
-        if (mode === "once") {
-          watch = { status: "skipped", reason: "once" };
-        } else if (opts.fireAndForget) {
-          watch = null;
-        } else {
-          watch = watchResult ?? { status: "skipped" };
-        }
-
         outputJson({
           to: result.to,
           cc: result.cc,
@@ -170,7 +73,6 @@ export function registerSendCommand(parent: Command): void {
           message_id: result.messageId,
           thread_id: result.threadId,
           status: "sent",
-          watch,
         });
         process.exit(SUCCESS);
       },

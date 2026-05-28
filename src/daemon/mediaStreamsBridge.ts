@@ -1,13 +1,36 @@
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import twilio from "twilio";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
-import { twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
+import { mulawToPcm16, twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
 import { appendEvent, type CallSession } from "./sessions.js";
 import { isoNow } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
 
 const SILENCE_TIMEOUT_MS = 800;
+const INITIAL_GREETING_DELAY_MS = 350;
+const FIRST_OUTBOUND_AUDIO_MARK = "first_outbound_audio";
+const REMOTE_AUDIO_RMS_THRESHOLD = 500;
+const LOCAL_VAD_PREROLL_MS = 250;
+const LOCAL_VAD_START_MS = 60;
+const LOCAL_VAD_END_SILENCE_MS = 650;
+const LOCAL_VAD_MIN_ACTIVITY_MS = 180;
+const HANGUP_DRAIN_GRACE_MS = 200;
+const HANGUP_DRAIN_TIMEOUT_MS = 7000;
+
+interface OutboundTurn {
+  id: string;
+  markName: string;
+  audioChunks: number;
+  generated: boolean;
+  played: boolean;
+  cleared: boolean;
+}
+
+interface VadChunk {
+  payload: string;
+  durationMs: number;
+}
 
 /**
  * Batches per-word transcript fragments into turn-level entries.
@@ -75,6 +98,7 @@ export interface MediaStreamsBridgeOptions {
   geminiConfig: GeminiConfig;
   systemInstruction: string;
   preConnectedGemini?: GeminiLiveSession;
+  initialTwilioMessages?: RawData[];
   onCleanup?: () => void;
 }
 
@@ -86,6 +110,19 @@ export class MediaStreamsBridge {
   private cleaned = false;
   private batcher: TranscriptBatcher;
   private onCleanup?: () => void;
+  private initialGreetingSent = false;
+  private initialGreetingTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoHangupScheduled = false;
+  private outboundTurnSeq = 0;
+  private activeOutboundTurn: OutboundTurn | null = null;
+  private outboundTurnsByMark = new Map<string, OutboundTurn>();
+  private pendingHangup: { reason: string; source: string; timeout: ReturnType<typeof setTimeout> } | null = null;
+  private hangupGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private localVadPreRoll: VadChunk[] = [];
+  private localVadActive = false;
+  private localVadAboveThresholdMs = 0;
+  private localVadSilenceMs = 0;
+  private localVadActivityMs = 0;
 
   constructor(opts: MediaStreamsBridgeOptions) {
     this.twilioWs = opts.twilioWs;
@@ -99,17 +136,7 @@ export class MediaStreamsBridge {
       this.gemini = opts.preConnectedGemini;
       this.gemini.rebindCallbacks({
         onAudio: (base64Pcm24k: string) => {
-          if (this.cleaned || !this.session.streamSid) return;
-          const mulawPayload = geminiToTwilio(base64Pcm24k);
-          try {
-            this.twilioWs.send(JSON.stringify({
-              event: "media",
-              streamSid: this.session.streamSid,
-              media: { payload: mulawPayload },
-            }));
-          } catch {
-            // Twilio WS may have closed
-          }
+          this.sendOutboundAudio(base64Pcm24k);
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
@@ -118,9 +145,17 @@ export class MediaStreamsBridge {
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
         },
+        onGenerationComplete: () => {
+          this.handleGenerationComplete();
+        },
+        onTurnComplete: () => {
+          this.handleTurnComplete();
+        },
+        onInterrupted: () => {
+          this.handleInterrupted();
+        },
         onEnd: () => {
-          console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
-          this.cleanup();
+          this.handleGeminiEnd();
         },
       });
     } else {
@@ -128,18 +163,9 @@ export class MediaStreamsBridge {
         apiKey: opts.apiKey,
         geminiConfig: opts.geminiConfig,
         systemInstruction: opts.systemInstruction,
+        manualActivityDetection: Boolean(opts.session.experimentalLocalVad),
         onAudio: (base64Pcm24k: string) => {
-          if (this.cleaned || !this.session.streamSid) return;
-          const mulawPayload = geminiToTwilio(base64Pcm24k);
-          try {
-            this.twilioWs.send(JSON.stringify({
-              event: "media",
-              streamSid: this.session.streamSid,
-              media: { payload: mulawPayload },
-            }));
-          } catch {
-            // Twilio WS may have closed
-          }
+          this.sendOutboundAudio(base64Pcm24k);
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
           if (this.cleaned) return;
@@ -148,27 +174,29 @@ export class MediaStreamsBridge {
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
         },
+        onGenerationComplete: () => {
+          this.handleGenerationComplete();
+        },
+        onTurnComplete: () => {
+          this.handleTurnComplete();
+        },
+        onInterrupted: () => {
+          this.handleInterrupted();
+        },
         onEnd: () => {
-          console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
-          this.cleanup();
+          this.handleGeminiEnd();
         },
       });
     }
 
     // Wire up Twilio WS messages
-    this.twilioWs.on("message", (data: Buffer | string) => {
-      try {
-        const msg = JSON.parse(data.toString()) as {
-          event: string;
-          start?: { streamSid: string; callSid: string };
-          media?: { payload: string };
-          [key: string]: unknown;
-        };
-        this.handleTwilioMessage(msg);
-      } catch {
-        console.log("[media-bridge] non-JSON message from Twilio");
-      }
+    this.twilioWs.on("message", (data) => {
+      this.handleRawTwilioMessage(data);
     });
+
+    for (const data of opts.initialTwilioMessages ?? []) {
+      this.handleRawTwilioMessage(data);
+    }
 
     this.twilioWs.on("close", () => {
       console.log(`[media-bridge] Twilio WS closed for call ${this.callId}`);
@@ -180,20 +208,190 @@ export class MediaStreamsBridge {
     });
   }
 
+  private handleRawTwilioMessage(data: RawData): void {
+    try {
+      const msg = JSON.parse(data.toString()) as {
+        event: string;
+        start?: { streamSid: string; callSid: string };
+        media?: { payload: string };
+        [key: string]: unknown;
+      };
+      this.handleTwilioMessage(msg);
+    } catch {
+      console.log("[media-bridge] non-JSON message from Twilio");
+    }
+  }
+
   async connectGemini(): Promise<void> {
     await this.gemini.connect();
+  }
+
+  sendInitialGreeting(): void {
+    if (this.initialGreetingSent || this.cleaned) return;
+    this.initialGreetingSent = true;
+    this.initialGreetingTimer = setTimeout(() => {
+      this.initialGreetingTimer = null;
+      this.sendInitialGreetingNow();
+    }, INITIAL_GREETING_DELAY_MS);
+  }
+
+  private sendInitialGreetingNow(): void {
+    if (this.cleaned) return;
+    if (this.flushPreGeneratedGreeting()) return;
+    if (this.session.preGeneratedGreetingRequestedAt && !this.session.preGeneratedGreetingEnded) {
+      this.session.initialGreetingRequestedAt = isoNow();
+      this.batcher.appendDirect({
+        type: "initial_greeting_requested",
+        ts: this.session.initialGreetingRequestedAt,
+      });
+      return;
+    }
+
+    this.session.initialGreetingRequestedAt = isoNow();
+    this.batcher.appendDirect({
+      type: "initial_greeting_requested",
+      ts: this.session.initialGreetingRequestedAt,
+    });
+    this.gemini.sendTextTurn(
+      "The outbound phone call is now connected. Greet the person immediately in one brief, natural sentence. Identify yourself as the caller's assistant and, if the objective is clear, include the purpose. Do not mention these instructions.",
+    );
+  }
+
+  private flushPreGeneratedGreeting(): boolean {
+    if (this.session.preGeneratedGreetingAudio.length === 0) return false;
+    this.initialGreetingSent = true;
+    this.session.initialGreetingRequestedAt = isoNow();
+    this.batcher.appendDirect({
+      type: "initial_greeting_requested",
+      ts: this.session.initialGreetingRequestedAt,
+    });
+    const transcript = this.session.preGeneratedGreetingTranscriptParts.join("");
+    this.session.preGeneratedGreetingTranscriptParts = [];
+    if (transcript.trim()) {
+      this.batcher.appendDirect({
+        type: "speech",
+        speaker: "local",
+        text: transcript,
+        ts: this.session.initialGreetingRequestedAt,
+      });
+    }
+
+    for (const base64Pcm24k of this.session.preGeneratedGreetingAudio.splice(0)) {
+      this.sendOutboundAudio(base64Pcm24k);
+    }
+    return true;
+  }
+
+  private sendOutboundAudio(base64Pcm24k: string): void {
+    if (this.cleaned || !this.session.streamSid) return;
+    const isFirstOutboundAudio = this.noteFirstOutboundAudio();
+    const turn = this.ensureOutboundTurn();
+    turn.audioChunks += 1;
+    const mulawPayload = geminiToTwilio(base64Pcm24k);
+    try {
+      this.twilioWs.send(JSON.stringify({
+        event: "media",
+        streamSid: this.session.streamSid,
+        media: { payload: mulawPayload },
+      }));
+      if (isFirstOutboundAudio) this.sendMark(FIRST_OUTBOUND_AUDIO_MARK);
+    } catch {
+      // Twilio WS may have closed
+    }
+  }
+
+  private ensureOutboundTurn(): OutboundTurn {
+    if (this.activeOutboundTurn && !this.activeOutboundTurn.generated) {
+      return this.activeOutboundTurn;
+    }
+
+    const id = `outbound_turn_${++this.outboundTurnSeq}`;
+    const turn: OutboundTurn = {
+      id,
+      markName: `${id}_played`,
+      audioChunks: 0,
+      generated: false,
+      played: false,
+      cleared: false,
+    };
+    this.activeOutboundTurn = turn;
+    this.outboundTurnsByMark.set(turn.markName, turn);
+    return turn;
+  }
+
+  private handleGenerationComplete(): void {
+    this.finalizeActiveOutboundTurn("generation_complete");
+  }
+
+  private handleTurnComplete(): void {
+    this.finalizeActiveOutboundTurn("turn_complete");
+  }
+
+  private handleInterrupted(): void {
+    this.clearBufferedOutboundAudio("gemini_interrupted");
+    this.finalizeActiveOutboundTurn("interrupted");
+  }
+
+  private handleGeminiEnd(): void {
+    console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
+    if (this.pendingHangup || this.pendingOutboundTurn()) {
+      this.tryDrainPendingHangup();
+      return;
+    }
+    this.cleanup();
+  }
+
+  private finalizeActiveOutboundTurn(reason: string): void {
+    const turn = this.activeOutboundTurn;
+    if (!turn || turn.generated || turn.audioChunks === 0) return;
+
+    turn.generated = true;
+    this.batcher.appendDirect({
+      type: "outbound_turn_generated",
+      ts: isoNow(),
+      turn_id: turn.id,
+      reason,
+    });
+    this.sendMark(turn.markName);
+    this.tryDrainPendingHangup();
+  }
+
+  private noteFirstOutboundAudio(): boolean {
+    if (this.session.firstOutboundAudioAt) return false;
+    this.session.firstOutboundAudioAt = isoNow();
+    this.batcher.appendDirect({ type: "first_outbound_audio", ts: this.session.firstOutboundAudioAt });
+    return true;
+  }
+
+  private sendMark(name: string): void {
+    if (this.cleaned || !this.session.streamSid) return;
+    this.twilioWs.send(JSON.stringify({
+      event: "mark",
+      streamSid: this.session.streamSid,
+      mark: { name },
+    }));
   }
 
   private handleTwilioMessage(msg: {
     event: string;
     start?: { streamSid: string; callSid: string };
     media?: { payload: string };
+    mark?: { name?: string };
     [key: string]: unknown;
   }): void {
     switch (msg.event) {
       case "start": {
         if (msg.start) {
           this.session.streamSid = msg.start.streamSid;
+          if (!this.session.mediaStreamStartedAt) {
+            this.session.mediaStreamStartedAt = isoNow();
+            this.batcher.appendDirect({
+              type: "media_stream_started",
+              ts: this.session.mediaStreamStartedAt,
+              stream_sid: msg.start.streamSid,
+              ...(msg.start.callSid ? { call_sid: msg.start.callSid } : {}),
+            });
+          }
           if (msg.start.callSid) {
             this.session.callSid = msg.start.callSid;
           }
@@ -206,8 +404,13 @@ export class MediaStreamsBridge {
       case "media": {
         if (msg.media?.payload) {
           this.session.lastActivityTime = Date.now();
-          const pcm16k = twilioToGemini(msg.media.payload);
-          this.gemini.sendAudio(pcm16k);
+          if (this.session.experimentalLocalVad) {
+            this.handleLocalVadMedia(msg.media.payload);
+          } else {
+            this.noteRemoteAudioActivity(msg.media.payload);
+            const pcm16k = twilioToGemini(msg.media.payload);
+            this.gemini.sendAudio(pcm16k);
+          }
         }
         break;
       }
@@ -216,10 +419,175 @@ export class MediaStreamsBridge {
         this.cleanup();
         break;
       }
+      case "mark": {
+        if (msg.mark?.name === FIRST_OUTBOUND_AUDIO_MARK && !this.session.firstOutboundAudioPlayedAt) {
+          this.session.firstOutboundAudioPlayedAt = isoNow();
+          this.batcher.appendDirect({
+            type: "first_outbound_audio_played",
+            ts: this.session.firstOutboundAudioPlayedAt,
+          });
+          this.scheduleAutoHangupAfterGreeting();
+        }
+        if (msg.mark?.name) {
+          this.handleOutboundTurnMark(msg.mark.name);
+        }
+        break;
+      }
       default:
         // connected, mark, etc. — ignore
         break;
     }
+  }
+
+  private noteRemoteAudioActivity(base64Mulaw8k: string): void {
+    const rms = this.rmsForMulaw(base64Mulaw8k);
+    if (rms < REMOTE_AUDIO_RMS_THRESHOLD) return;
+
+    const ts = isoNow();
+    if (!this.session.firstRemoteAudioActivityAt) {
+      this.session.firstRemoteAudioActivityAt = ts;
+    }
+    this.session.lastRemoteAudioActivityAt = ts;
+  }
+
+  private handleLocalVadMedia(base64Mulaw8k: string): void {
+    const durationMs = this.durationMsForMulaw(base64Mulaw8k);
+    const speechLike = this.rmsForMulaw(base64Mulaw8k) >= REMOTE_AUDIO_RMS_THRESHOLD;
+
+    this.localVadPreRoll.push({ payload: base64Mulaw8k, durationMs });
+    this.trimLocalVadPreRoll();
+
+    if (this.localVadActive) {
+      this.localVadActivityMs += durationMs;
+      if (speechLike) {
+        this.localVadSilenceMs = 0;
+        this.noteRemoteAudioActivity(base64Mulaw8k);
+        this.gemini.sendAudio(twilioToGemini(base64Mulaw8k));
+      } else {
+        this.localVadSilenceMs += durationMs;
+      }
+
+      if (
+        this.localVadActivityMs >= LOCAL_VAD_MIN_ACTIVITY_MS &&
+        this.localVadSilenceMs >= LOCAL_VAD_END_SILENCE_MS
+      ) {
+        this.endLocalVadActivity();
+      }
+      return;
+    }
+
+    if (!speechLike) {
+      this.localVadAboveThresholdMs = 0;
+      return;
+    }
+
+    this.localVadAboveThresholdMs += durationMs;
+    this.noteRemoteAudioActivity(base64Mulaw8k);
+    if (this.localVadAboveThresholdMs >= LOCAL_VAD_START_MS) {
+      this.startLocalVadActivity();
+    }
+  }
+
+  private startLocalVadActivity(): void {
+    if (this.localVadActive) return;
+    const ts = isoNow();
+    this.localVadActive = true;
+    this.localVadSilenceMs = 0;
+    this.localVadActivityMs = this.localVadPreRoll.reduce((sum, chunk) => sum + chunk.durationMs, 0);
+    if (!this.session.firstRemoteAudioActivityAt) {
+      this.session.firstRemoteAudioActivityAt = ts;
+    }
+    this.session.lastRemoteAudioActivityAt = ts;
+    this.batcher.appendDirect({ type: "remote_activity_start", ts });
+    this.clearBufferedOutboundAudio("remote_activity_start");
+    this.gemini.sendActivityStart();
+    for (const chunk of this.localVadPreRoll) {
+      this.gemini.sendAudio(twilioToGemini(chunk.payload));
+    }
+    this.localVadPreRoll = [];
+    this.localVadAboveThresholdMs = 0;
+  }
+
+  private endLocalVadActivity(): void {
+    if (!this.localVadActive) return;
+    const ts = isoNow();
+    if (!this.session.firstRemoteAudioActivityEndedAt) {
+      this.session.firstRemoteAudioActivityEndedAt = ts;
+    }
+    this.batcher.appendDirect({ type: "remote_activity_end", ts });
+    this.gemini.sendActivityEnd();
+    this.localVadActive = false;
+    this.localVadAboveThresholdMs = 0;
+    this.localVadSilenceMs = 0;
+    this.localVadActivityMs = 0;
+    this.localVadPreRoll = [];
+  }
+
+  private trimLocalVadPreRoll(): void {
+    let totalMs = this.localVadPreRoll.reduce((sum, chunk) => sum + chunk.durationMs, 0);
+    while (totalMs > LOCAL_VAD_PREROLL_MS && this.localVadPreRoll.length > 1) {
+      const removed = this.localVadPreRoll.shift();
+      totalMs -= removed?.durationMs ?? 0;
+    }
+  }
+
+  private rmsForMulaw(base64Mulaw8k: string): number {
+    const mulawBuf = Buffer.from(base64Mulaw8k, "base64");
+    const mulawBytes = new Uint8Array(
+      mulawBuf.buffer,
+      mulawBuf.byteOffset,
+      mulawBuf.byteLength,
+    );
+    const pcm8k = mulawToPcm16(mulawBytes);
+    let sumSquares = 0;
+    for (const sample of pcm8k) {
+      sumSquares += sample * sample;
+    }
+    return Math.sqrt(sumSquares / Math.max(1, pcm8k.length));
+  }
+
+  private durationMsForMulaw(base64Mulaw8k: string): number {
+    const bytes = Buffer.byteLength(base64Mulaw8k, "base64");
+    return (bytes / 8000) * 1000;
+  }
+
+  private clearBufferedOutboundAudio(reason: string): void {
+    if (this.cleaned || !this.session.streamSid || this.outboundTurnsByMark.size === 0) return;
+    let turnId: string | undefined;
+    for (const turn of this.outboundTurnsByMark.values()) {
+      if (!turn.played) {
+        turn.cleared = true;
+        turnId ??= turn.id;
+      }
+    }
+    this.twilioWs.send(JSON.stringify({
+      event: "clear",
+      streamSid: this.session.streamSid,
+    }));
+    this.batcher.appendDirect({
+      type: "audio_cleared",
+      ts: isoNow(),
+      reason,
+      ...(turnId ? { turn_id: turnId } : {}),
+    });
+  }
+
+  private handleOutboundTurnMark(name: string): void {
+    const turn = this.outboundTurnsByMark.get(name);
+    if (!turn || turn.played) return;
+
+    turn.played = true;
+    this.outboundTurnsByMark.delete(name);
+    if (this.activeOutboundTurn === turn) {
+      this.activeOutboundTurn = null;
+    }
+
+    this.batcher.appendDirect({
+      type: "outbound_turn_played",
+      ts: isoNow(),
+      turn_id: turn.id,
+    });
+    this.tryDrainPendingHangup();
   }
 
   private handleToolCall(name: string, args: Record<string, unknown>, id: string): void {
@@ -274,19 +642,107 @@ export class MediaStreamsBridge {
       });
   }
 
+  private scheduleAutoHangupAfterGreeting(): void {
+    const delayMs = this.session.autoHangupAfterFirstOutboundAudioPlayedMs;
+    if (!delayMs || this.autoHangupScheduled) return;
+
+    this.autoHangupScheduled = true;
+    setTimeout(() => {
+      if (!this.cleaned && this.session.status !== "ended") {
+        this.requestDeferredHangup("latency test completed after first audible greeting", "auto_hangup");
+      }
+    }, delayMs);
+  }
+
   private handleEndCall(args: Record<string, unknown>, id: string): void {
     const reason = (args.reason as string) || "Call ended by assistant";
     console.log(`[media-bridge] end_call tool invoked: ${reason}`);
 
     this.batcher.appendDirect({
-      type: "call_ended",
+      type: "end_call_requested",
       ts: isoNow(),
-      reason: `end_call tool: ${reason}`,
-      duration_ms: Date.now() - this.session.startTime,
+      reason,
+      source: "end_call_tool",
     });
 
     // Respond to Gemini before closing
     this.gemini.sendToolResponse(id, "end_call", { success: true, reason });
+
+    this.requestDeferredHangup(reason, "end_call_tool");
+  }
+
+  private requestDeferredHangup(reason: string, source: string): void {
+    if (this.pendingHangup || this.cleaned || this.session.status === "ended") return;
+
+    const timeout = setTimeout(() => {
+      if (!this.pendingHangup || this.cleaned || this.session.status === "ended") return;
+      this.batcher.appendDirect({
+        type: "hangup_timeout",
+        ts: isoNow(),
+        reason: `${source}: waited ${HANGUP_DRAIN_TIMEOUT_MS}ms for outbound audio to drain`,
+      });
+      this.endTwilioCall(`${reason} (audio drain timeout)`);
+    }, HANGUP_DRAIN_TIMEOUT_MS);
+
+    this.pendingHangup = { reason, source, timeout };
+    const pendingTurn = this.pendingOutboundTurn();
+    this.batcher.appendDirect({
+      type: "deferred_hangup",
+      ts: isoNow(),
+      reason,
+      source,
+      ...(pendingTurn ? { pending_turn_id: pendingTurn.id } : {}),
+    });
+    this.tryDrainPendingHangup();
+  }
+
+  private pendingOutboundTurn(): OutboundTurn | undefined {
+    if (this.activeOutboundTurn && !this.activeOutboundTurn.played) return this.activeOutboundTurn;
+    for (const turn of this.outboundTurnsByMark.values()) {
+      if (!turn.played) return turn;
+    }
+    return undefined;
+  }
+
+  private tryDrainPendingHangup(): void {
+    if (!this.pendingHangup || this.cleaned || this.session.status === "ended") return;
+    const pendingTurn = this.pendingOutboundTurn();
+    if (pendingTurn) {
+      if (pendingTurn.audioChunks > 0 && !pendingTurn.generated) {
+        this.finalizeActiveOutboundTurn("hangup_drain");
+      }
+      if (this.pendingOutboundTurn()) return;
+    }
+
+    if (this.hangupGraceTimer) return;
+    this.hangupGraceTimer = setTimeout(() => {
+      this.hangupGraceTimer = null;
+      const pending = this.pendingHangup;
+      if (!pending || this.cleaned || this.session.status === "ended") return;
+      clearTimeout(pending.timeout);
+      this.pendingHangup = null;
+      this.endTwilioCall(pending.reason);
+    }, HANGUP_DRAIN_GRACE_MS);
+  }
+
+  private endTwilioCall(reason: string): void {
+    if (this.pendingHangup) {
+      clearTimeout(this.pendingHangup.timeout);
+      this.pendingHangup = null;
+    }
+    if (this.hangupGraceTimer) {
+      clearTimeout(this.hangupGraceTimer);
+      this.hangupGraceTimer = null;
+    }
+
+    if (!this.session.fullTranscript.some((event) => event.type === "call_ended")) {
+      this.batcher.appendDirect({
+        type: "call_ended",
+        ts: isoNow(),
+        reason,
+        duration_ms: Date.now() - this.session.startTime,
+      });
+    }
 
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -296,7 +752,7 @@ export class MediaStreamsBridge {
       const client = twilio(accountSid, authToken);
       client.calls(callSid).update({ status: "completed" })
         .then(() => {
-          console.log(`[media-bridge] Call ${this.callId} hung up via Twilio`);
+          console.log(`[media-bridge] Call ${this.callId} hung up via Twilio: ${reason}`);
         })
         .catch((err) => {
           console.error(`[media-bridge] Failed to hangup call:`, (err as Error).message);
@@ -314,6 +770,19 @@ export class MediaStreamsBridge {
     this.cleaned = true;
 
     console.log(`[media-bridge] Cleaning up call ${this.callId}`);
+
+    if (this.initialGreetingTimer) {
+      clearTimeout(this.initialGreetingTimer);
+      this.initialGreetingTimer = null;
+    }
+    if (this.pendingHangup) {
+      clearTimeout(this.pendingHangup.timeout);
+      this.pendingHangup = null;
+    }
+    if (this.hangupGraceTimer) {
+      clearTimeout(this.hangupGraceTimer);
+      this.hangupGraceTimer = null;
+    }
 
     // Flush any pending transcript fragments
     this.batcher.cleanup();
@@ -333,7 +802,7 @@ export class MediaStreamsBridge {
     this.session.ws = undefined;
     this.session.bridge = undefined;
 
-    // Notify server to finalize (write transcript + campaign attempt)
+    // Notify server to finalize the transcript.
     if (this.onCleanup) {
       this.onCleanup();
     }

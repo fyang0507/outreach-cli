@@ -13,7 +13,6 @@ import { resolveDataRepo, locateDevConfig, type ResolutionSource } from "./dataR
 //   1. Widen this IdentityConfig interface with the new field.
 //   2. Pluck the field in the loader below (alongside user_name).
 //   3. Render it explicitly in src/audio/systemInstruction.ts (Layer 2).
-//   4. Wire it into src/commands/callbackDispatch.ts resolvePrompt + its call site.
 export interface IdentityConfig {
   user_name: string;
   extraFields: Record<string, string>;
@@ -58,16 +57,6 @@ export interface GeminiConfig {
   };
 }
 
-export interface WatchConfig {
-  enabled: boolean;
-  callback_agent: string;
-  callback_prompt: string;
-  callback_prompt_human_input?: string;
-  callback_prompt_human_input_timeout?: string;
-  default_timeout_hours: number;
-  poll_interval_minutes: number;
-}
-
 export interface AppConfig {
   data_repo_path: string;
   config_path: string;
@@ -76,7 +65,6 @@ export interface AppConfig {
   call: CallConfig;
   voice_agent: VoiceAgentConfig;
   gemini: GeminiConfig;
-  watch?: WatchConfig;
 }
 
 let _cached: AppConfig | null = null;
@@ -96,21 +84,21 @@ export async function loadAppConfig(): Promise<AppConfig> {
     raw = await readFile(configPath, "utf-8");
   } else if (resolved.source === "dev") {
     // Dev fallback: the dev pointer lives beside the CLI. Read the dev file
-    // itself as the config source so devs who haven't run `outreach setup`
-    // keep working off their .dev.yaml.
+    // itself as the config source so dev checkouts can run from their local
+    // .dev.yaml even when a data-repo config has not been created yet.
     const dev = locateDevConfig();
     if (!dev) {
       // Shouldn't happen — resolveDataRepo returned "dev" which means the
       // dev file was found. Guard anyway.
       throw new Error(
-        `outreach: resolveDataRepo() returned source=dev but outreach.config.dev.yaml could not be located. Run \`outreach setup\` to scaffold ${primaryPath}.`,
+        `outreach: resolveDataRepo() returned source=dev but outreach.config.dev.yaml could not be located. Create ${primaryPath} or restore outreach.config.dev.yaml.`,
       );
     }
     configPath = dev.path;
     raw = await readFile(configPath, "utf-8");
   } else {
     throw new Error(
-      `outreach: config file not found at ${primaryPath}. Run \`outreach setup\` to scaffold it in the data repo.`,
+      `outreach: config file not found at ${primaryPath}. Create it from outreach.config.dev.yaml.example or point OUTREACH_DATA_REPO at a configured workspace.`,
     );
   }
 
@@ -222,29 +210,6 @@ export async function loadAppConfig(): Promise<AppConfig> {
   const turnTaking = gemini.turn_taking as Record<string, unknown>;
   if (!turnTaking.activity_handling || typeof turnTaking.activity_handling !== "string") {
     throw new Error(`outreach: ${configPath} — gemini.turn_taking.activity_handling is required`);
-  }
-
-  // Validate watch config (optional section)
-  if (config.watch != null) {
-    if (typeof config.watch !== "object") {
-      throw new Error(`outreach: ${configPath} — watch must be an object`);
-    }
-    const watch = config.watch as Record<string, unknown>;
-    if (watch.enabled == null || typeof watch.enabled !== "boolean") {
-      watch.enabled = false;
-    }
-    if (!watch.callback_agent || typeof watch.callback_agent !== "string") {
-      throw new Error(`outreach: ${configPath} — watch.callback_agent is required when watch section is present`);
-    }
-    if (!watch.callback_prompt || typeof watch.callback_prompt !== "string") {
-      throw new Error(`outreach: ${configPath} — watch.callback_prompt is required when watch section is present`);
-    }
-    if (watch.default_timeout_hours == null || typeof watch.default_timeout_hours !== "number") {
-      watch.default_timeout_hours = 72;
-    }
-    if (watch.poll_interval_minutes == null || typeof watch.poll_interval_minutes !== "number") {
-      watch.poll_interval_minutes = 2;
-    }
   }
 
   // Attach resolution metadata for health/debug surfaces.

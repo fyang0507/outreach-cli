@@ -18,18 +18,37 @@ export interface CallSession {
   lastActivityTime: number;
   lastTranscriptTime: number;
   maxDurationMs?: number;
+  autoHangupAfterFirstOutboundAudioPlayedMs?: number;
+  waitForUserBeforeGreeting?: boolean;
+  experimentalLocalVad?: boolean;
   streamSid?: string;
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
+  preConnectingGemini?: Promise<GeminiLiveSession | null>;
+  preGeneratedGreetingAudio: string[];
+  preGeneratedGreetingAudioChunks: number;
+  preGeneratedGreetingTranscriptParts: string[];
+  preGeneratedGreetingEnded: boolean;
+  preGeneratedGreetingEndedAt?: string;
   finalized: boolean; // Whether finalizeCall() has already run (idempotency guard)
-  campaignId?: string;  // Campaign ID for auto-logging attempts
-  contactId?: string; // Contact ID for campaign attempt entry
 
   // Milestone timestamps (ISO 8601) for call lifecycle metrics
+  callCreateStartedAt?: string;
   callPlacedAt?: string;
+  geminiPreconnectStartedAt?: string;
+  geminiPreconnectConnectedAt?: string;
   ringingAt?: string;
   answeredAt?: string;
+  mediaStreamStartedAt?: string;
+  preGeneratedGreetingRequestedAt?: string;
+  firstPreGeneratedGreetingAudioAt?: string;
+  initialGreetingRequestedAt?: string;
+  firstOutboundAudioAt?: string;
+  firstOutboundAudioPlayedAt?: string;
+  firstRemoteAudioActivityAt?: string;
+  lastRemoteAudioActivityAt?: string;
+  firstRemoteAudioActivityEndedAt?: string;
   firstRemoteSpeechAt?: string;
   firstLocalResponseAt?: string;
   answeredBy?: string; // Twilio AMD result
@@ -82,6 +101,10 @@ export function createSession(params: {
     startTime: now,
     transcriptBuffer: [],
     fullTranscript: [],
+    preGeneratedGreetingAudio: [],
+    preGeneratedGreetingAudioChunks: 0,
+    preGeneratedGreetingTranscriptParts: [],
+    preGeneratedGreetingEnded: false,
     lastListenIndex: 0,
     lastSpeechTime: now,
     lastActivityTime: now,

@@ -335,89 +335,21 @@ export function readMessageHistory(
   }
 }
 
-// --- Service picker ---
-
 export type Service = "iMessage" | "SMS";
-
-/**
- * Pick the service to use based on recent message history with this phone.
- *   1. if any of the last 5 inbound messages was iMessage → "iMessage"
- *      (lets a reply via iMessage auto-correct after a one-off SMS outbound)
- *   2. else most recent successful outbound (is_sent=1 AND error=0) → its service
- *   3. else most recent inbound → its service
- *   4. else "SMS" (universally deliverable for first-touch; requires Text Message Forwarding)
- */
-export function pickService(
-  phone: string,
-  dbPathOverride?: string,
-): Service {
-  const normalized = normalizePhone(phone);
-  const dbPath =
-    dbPathOverride ?? join(homedir(), "Library", "Messages", "chat.db");
-
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    const recentInbound = db
-      .prepare(
-        `SELECT m.service FROM message m
-         JOIN handle h ON h.ROWID = m.handle_id
-         WHERE h.id = ? AND m.is_from_me = 0
-         ORDER BY m.date DESC
-         LIMIT 5`,
-      )
-      .all(normalized) as Array<{ service: string | null }>;
-    if (
-      recentInbound.some(
-        (row) => row.service && normalizeService(row.service) === "iMessage",
-      )
-    ) {
-      return "iMessage";
-    }
-
-    const outbound = db
-      .prepare(
-        `SELECT m.service FROM message m
-         JOIN handle h ON h.ROWID = m.handle_id
-         WHERE h.id = ? AND m.is_from_me = 1 AND m.is_sent = 1 AND m.error = 0
-         ORDER BY m.date DESC
-         LIMIT 1`,
-      )
-      .get(normalized) as { service: string | null } | undefined;
-    if (outbound?.service) return normalizeService(outbound.service);
-
-    if (recentInbound[0]?.service) return normalizeService(recentInbound[0].service);
-
-    return "SMS";
-  } finally {
-    db.close();
-  }
-}
-
-function normalizeService(raw: string): Service {
-  return raw.toLowerCase() === "sms" ? "SMS" : "iMessage";
-}
 
 // --- Send message (iMessage or SMS) ---
 
-export type SendStatus = "delivered" | "failed" | "timeout";
-
 export interface SendResult {
-  status: SendStatus;
+  status: "submitted";
   service: Service;
-  error_code?: number;
-  message_date?: string; // ISO
 }
 
 export interface SendOptions {
-  service?: Service; // default "iMessage"
-  timeoutMs?: number; // default 90_000
-  pollIntervalMs?: number; // default 750
-  dbPath?: string; // test override
+  service?: Service;
 }
 
 /**
- * Send a message via Messages.app and synchronously probe chat.db for
- * delivery confirmation. Returns terminal state: delivered / failed / timeout.
+ * Send a message via Messages.app and return once Messages.app accepts it.
  */
 export function sendIMessage(
   to: string,
@@ -426,13 +358,6 @@ export function sendIMessage(
 ): SendResult {
   const normalized = normalizePhone(to);
   const service = options.service ?? "iMessage";
-  const timeoutMs = options.timeoutMs ?? 90_000;
-  const pollIntervalMs = options.pollIntervalMs ?? 750;
-  const dbPath =
-    options.dbPath ?? join(homedir(), "Library", "Messages", "chat.db");
-
-  // Capture the current max ROWID so we can identify the row we're about to create.
-  const preMaxRowId = readMaxMessageRowId(dbPath);
 
   // Run AppleScript send with the chosen service.
   const serviceClause =
@@ -451,7 +376,7 @@ end run`;
   try {
     execFileSync("osascript", ["-", normalized, body], {
       input: script,
-      timeout: 15_000,
+      timeout: 60_000,
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (err) {
@@ -468,89 +393,5 @@ end run`;
     throw new Error(stderr.trim() || raw);
   }
 
-  // Poll chat.db for terminal delivery state.
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const row = readOutboundRowAfter(dbPath, preMaxRowId, normalized);
-    if (row) {
-      if (row.error !== 0) {
-        return {
-          status: "failed",
-          service: normalizeService(row.service ?? service),
-          error_code: row.error,
-          message_date: coreDataToIso(row.date),
-        };
-      }
-      if (row.is_delivered === 1) {
-        return {
-          status: "delivered",
-          service: normalizeService(row.service ?? service),
-          message_date: coreDataToIso(row.date),
-        };
-      }
-    }
-    sleepSync(pollIntervalMs);
-  }
-
-  // Timeout: return what we know.
-  const final = readOutboundRowAfter(dbPath, preMaxRowId, normalized);
-  return {
-    status: "timeout",
-    service: final?.service ? normalizeService(final.service) : service,
-    ...(final?.error && final.error !== 0 ? { error_code: final.error } : {}),
-    ...(final?.date ? { message_date: coreDataToIso(final.date) } : {}),
-  };
-}
-
-interface OutboundRow {
-  ROWID: number;
-  is_delivered: number;
-  is_sent: number;
-  error: number;
-  service: string | null;
-  date: number;
-}
-
-function readMaxMessageRowId(dbPath: string): number {
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    const row = db
-      .prepare(`SELECT COALESCE(MAX(ROWID), 0) AS maxId FROM message`)
-      .get() as { maxId: number };
-    return row.maxId;
-  } finally {
-    db.close();
-  }
-}
-
-function readOutboundRowAfter(
-  dbPath: string,
-  afterRowId: number,
-  phone: string,
-): OutboundRow | null {
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    return (db
-      .prepare(
-        `SELECT m.ROWID, m.is_delivered, m.is_sent, m.error, m.service, m.date
-         FROM message m
-         JOIN handle h ON h.ROWID = m.handle_id
-         WHERE m.ROWID > ? AND m.is_from_me = 1 AND h.id = ?
-         ORDER BY m.ROWID DESC
-         LIMIT 1`,
-      )
-      .get(afterRowId, phone) as OutboundRow | undefined) ?? null;
-  } finally {
-    db.close();
-  }
-}
-
-function sleepSync(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // Use Atomics.wait on a throwaway buffer for a true sync sleep.
-    const sab = new SharedArrayBuffer(4);
-    const view = new Int32Array(sab);
-    Atomics.wait(view, 0, 0, Math.max(1, end - Date.now()));
-  }
+  return { status: "submitted", service };
 }

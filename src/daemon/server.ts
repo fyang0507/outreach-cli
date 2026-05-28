@@ -8,11 +8,11 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { writeFile, unlink } from "node:fs/promises";
 import express from "express";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type RawData } from "ws";
 import twilio from "twilio";
 import { generateCallId, createSession, getSession, getSessionByCallSid, listSessions, appendEvent } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { appendCampaignEvent, writeTranscript, isoNow } from "../logs/sessionLog.js";
+import { writeTranscript, isoNow } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
@@ -28,6 +28,9 @@ const SOCKET_PATH = "/tmp/outreach-daemon.sock";
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const CALL_INACTIVITY_MS = 60 * 1000; // 60 seconds
 const VOICEMAIL_SILENCE_MS = 90 * 1000; // 90 seconds without transcript = likely voicemail/hold
+const PRECONNECT_PICKUP_WAIT_MS = 500;
+const PRE_GENERATED_GREETING_PROMPT =
+  "The outbound phone call is ringing. Pre-generate a very brief natural greeting for when the person answers. Identify yourself as the caller's assistant and, if the objective is clear, include the purpose. Do not mention these instructions.";
 
 // --- Express app ---
 
@@ -42,12 +45,36 @@ app.get("/health", (_req, res) => {
 
 // --- Twilio signature validation middleware ---
 
-// Build middleware once at startup. If TWILIO_AUTH_TOKEN is set, use twilio.webhook()
-// to validate X-Twilio-Signature on inbound requests. If not set, skip validation
-// gracefully (the daemon already enforces the token in handleCallPlace before placing calls).
-const twilioValidation: import("express").RequestHandler = process.env.TWILIO_AUTH_TOKEN
-  ? twilio.webhook({ validate: true })
-  : (_req, _res, next) => next();
+// Validate Twilio callbacks against the public webhook URL Twilio used. The
+// daemon sits behind an HTTPS tunnel, so Express sees local HTTP; validating
+// against req.protocol/host would reject legitimate status callbacks.
+const twilioValidation: import("express").RequestHandler = async (req, res, next) => {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    next();
+    return;
+  }
+
+  const baseUrl = process.env.OUTREACH_WEBHOOK_URL || (await readRuntime())?.webhook_url;
+  if (!baseUrl) {
+    res.status(500).send("Missing OUTREACH_WEBHOOK_URL/runtime webhook URL for Twilio validation");
+    return;
+  }
+
+  const publicUrl = `${baseUrl.replace(/\/$/, "")}${req.originalUrl}`;
+  const valid = twilio.validateRequest(
+    authToken,
+    req.header("X-Twilio-Signature") || "",
+    publicUrl,
+    req.body || {},
+  );
+  if (!valid) {
+    console.warn(`[daemon] Rejected Twilio callback with invalid signature for ${publicUrl}`);
+    res.status(403).send("Twilio request validation failed");
+    return;
+  }
+  next();
+};
 
 if (!process.env.TWILIO_AUTH_TOKEN) {
   console.log("[daemon] TWILIO_AUTH_TOKEN not set — Twilio webhook signature validation is disabled");
@@ -71,7 +98,7 @@ app.post("/call-status/:callId", twilioValidation, (req, res) => {
   if (callStatus === "ringing") {
     session.ringingAt = isoNow();
     appendEvent(session, { type: "call_ringing", ts: session.ringingAt, call_sid: session.callSid ?? "" });
-  } else if (callStatus === "in-progress") {
+  } else if (callStatus === "in-progress" || callStatus === "answered") {
     session.answeredAt = isoNow();
     const ringDurationMs = session.ringingAt
       ? new Date(session.answeredAt).getTime() - new Date(session.ringingAt).getTime()
@@ -157,7 +184,7 @@ function logCallCost(session: CallSession): void {
 }
 
 /**
- * Write transcript and campaign attempt entry when a call ends.
+ * Write the call transcript when a call ends.
  * Called from all call-end paths (forceHangup, handleCallHangup, bridge cleanup).
  */
 async function finalizeCall(session: CallSession): Promise<void> {
@@ -175,6 +202,72 @@ async function finalizeCall(session: CallSession): Promise<void> {
   const firstResponseDelayMs = session.firstRemoteSpeechAt && session.firstLocalResponseAt
     ? new Date(session.firstLocalResponseAt).getTime() - new Date(session.firstRemoteSpeechAt).getTime()
     : undefined;
+  const twilioCallCreateMs = session.callCreateStartedAt && session.callPlacedAt
+    ? new Date(session.callPlacedAt).getTime() - new Date(session.callCreateStartedAt).getTime()
+    : undefined;
+  const geminiPreconnectMs = session.geminiPreconnectStartedAt && session.geminiPreconnectConnectedAt
+    ? new Date(session.geminiPreconnectConnectedAt).getTime() - new Date(session.geminiPreconnectStartedAt).getTime()
+    : undefined;
+  const geminiPreconnectedBeforeCall = session.geminiPreconnectConnectedAt && session.callPlacedAt
+    ? new Date(session.geminiPreconnectConnectedAt).getTime() <= new Date(session.callPlacedAt).getTime()
+    : false;
+  const answerToStreamMs = session.answeredAt && session.mediaStreamStartedAt
+    ? new Date(session.mediaStreamStartedAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const streamToFirstOutboundAudioMs = session.mediaStreamStartedAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.mediaStreamStartedAt).getTime()
+    : undefined;
+  const preGeneratedGreetingRequestToFirstGeneratedAudioMs = session.preGeneratedGreetingRequestedAt && session.firstPreGeneratedGreetingAudioAt
+    ? new Date(session.firstPreGeneratedGreetingAudioAt).getTime() - new Date(session.preGeneratedGreetingRequestedAt).getTime()
+    : undefined;
+  const preGeneratedGreetingRequestToFirstOutboundAudioMs = session.preGeneratedGreetingRequestedAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.preGeneratedGreetingRequestedAt).getTime()
+    : undefined;
+  const preGeneratedGreetingReadyBeforeStream = session.firstPreGeneratedGreetingAudioAt && session.mediaStreamStartedAt
+    ? new Date(session.firstPreGeneratedGreetingAudioAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
+    : undefined;
+  const preGeneratedGreetingEndedBeforeStream = session.preGeneratedGreetingEndedAt && session.mediaStreamStartedAt
+    ? new Date(session.preGeneratedGreetingEndedAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
+    : Boolean(session.preGeneratedGreetingEndedAt && !session.mediaStreamStartedAt);
+  const streamToInitialGreetingRequestMs = session.mediaStreamStartedAt && session.initialGreetingRequestedAt
+    ? new Date(session.initialGreetingRequestedAt).getTime() - new Date(session.mediaStreamStartedAt).getTime()
+    : undefined;
+  const initialGreetingRequestToFirstOutboundAudioMs = session.initialGreetingRequestedAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.initialGreetingRequestedAt).getTime()
+    : undefined;
+  const answerToFirstOutboundAudioMs = session.answeredAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const streamToFirstOutboundAudioPlayedMs = session.mediaStreamStartedAt && session.firstOutboundAudioPlayedAt
+    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.mediaStreamStartedAt).getTime()
+    : undefined;
+  const answerToFirstOutboundAudioPlayedMs = session.answeredAt && session.firstOutboundAudioPlayedAt
+    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityDelayMs = session.answeredAt && session.firstRemoteAudioActivityAt
+    ? new Date(session.firstRemoteAudioActivityAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityEndDelayMs = session.answeredAt && session.firstRemoteAudioActivityEndedAt
+    ? new Date(session.firstRemoteAudioActivityEndedAt).getTime() - new Date(session.answeredAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityToFirstOutboundAudioMs = session.firstRemoteAudioActivityAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.firstRemoteAudioActivityAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityToFirstOutboundAudioPlayedMs = session.firstRemoteAudioActivityAt && session.firstOutboundAudioPlayedAt
+    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.firstRemoteAudioActivityAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityEndToFirstOutboundAudioMs = session.firstRemoteAudioActivityEndedAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.firstRemoteAudioActivityEndedAt).getTime()
+    : undefined;
+  const firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs = session.firstRemoteAudioActivityEndedAt && session.firstOutboundAudioPlayedAt
+    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.firstRemoteAudioActivityEndedAt).getTime()
+    : undefined;
+  const lastRemoteAudioActivityToFirstOutboundAudioMs = session.lastRemoteAudioActivityAt && session.firstOutboundAudioAt
+    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.lastRemoteAudioActivityAt).getTime()
+    : undefined;
+  const lastRemoteAudioActivityToFirstOutboundAudioPlayedMs = session.lastRemoteAudioActivityAt && session.firstOutboundAudioPlayedAt
+    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.lastRemoteAudioActivityAt).getTime()
+    : undefined;
 
   const summary: TranscriptEvent = {
     type: "call_summary",
@@ -182,6 +275,32 @@ async function finalizeCall(session: CallSession): Promise<void> {
     duration_ms: durationMs,
     ...(ringDurationMs !== undefined && { ring_duration_ms: ringDurationMs }),
     ...(session.answeredBy && { answered_by: session.answeredBy }),
+    wait_for_user_before_greeting: Boolean(session.waitForUserBeforeGreeting),
+    experimental_local_vad: Boolean(session.experimentalLocalVad),
+    ...(twilioCallCreateMs !== undefined && { twilio_call_create_ms: twilioCallCreateMs }),
+    gemini_preconnected_before_call: geminiPreconnectedBeforeCall,
+    ...(geminiPreconnectMs !== undefined && { gemini_preconnect_ms: geminiPreconnectMs }),
+    pre_generated_greeting_requested: Boolean(session.preGeneratedGreetingRequestedAt),
+    pre_generated_greeting_audio_chunks: session.preGeneratedGreetingAudioChunks,
+    pre_generated_greeting_ended_before_stream: preGeneratedGreetingEndedBeforeStream,
+    ...(preGeneratedGreetingReadyBeforeStream !== undefined && { pre_generated_greeting_ready_before_stream: preGeneratedGreetingReadyBeforeStream }),
+    ...(preGeneratedGreetingRequestToFirstGeneratedAudioMs !== undefined && { pre_generated_greeting_request_to_first_generated_audio_ms: preGeneratedGreetingRequestToFirstGeneratedAudioMs }),
+    ...(preGeneratedGreetingRequestToFirstOutboundAudioMs !== undefined && { pre_generated_greeting_request_to_first_outbound_audio_ms: preGeneratedGreetingRequestToFirstOutboundAudioMs }),
+    ...(answerToStreamMs !== undefined && { answer_to_stream_ms: answerToStreamMs }),
+    ...(streamToInitialGreetingRequestMs !== undefined && { stream_to_initial_greeting_request_ms: streamToInitialGreetingRequestMs }),
+    ...(initialGreetingRequestToFirstOutboundAudioMs !== undefined && { initial_greeting_request_to_first_outbound_audio_ms: initialGreetingRequestToFirstOutboundAudioMs }),
+    ...(streamToFirstOutboundAudioMs !== undefined && { stream_to_first_outbound_audio_ms: streamToFirstOutboundAudioMs }),
+    ...(answerToFirstOutboundAudioMs !== undefined && { answer_to_first_outbound_audio_ms: answerToFirstOutboundAudioMs }),
+    ...(streamToFirstOutboundAudioPlayedMs !== undefined && { stream_to_first_outbound_audio_played_ms: streamToFirstOutboundAudioPlayedMs }),
+    ...(answerToFirstOutboundAudioPlayedMs !== undefined && { answer_to_first_outbound_audio_played_ms: answerToFirstOutboundAudioPlayedMs }),
+    ...(firstRemoteAudioActivityDelayMs !== undefined && { first_remote_audio_activity_delay_ms: firstRemoteAudioActivityDelayMs }),
+    ...(firstRemoteAudioActivityEndDelayMs !== undefined && { first_remote_audio_activity_end_delay_ms: firstRemoteAudioActivityEndDelayMs }),
+    ...(firstRemoteAudioActivityToFirstOutboundAudioMs !== undefined && { first_remote_audio_activity_to_first_outbound_audio_ms: firstRemoteAudioActivityToFirstOutboundAudioMs }),
+    ...(firstRemoteAudioActivityToFirstOutboundAudioPlayedMs !== undefined && { first_remote_audio_activity_to_first_outbound_audio_played_ms: firstRemoteAudioActivityToFirstOutboundAudioPlayedMs }),
+    ...(firstRemoteAudioActivityEndToFirstOutboundAudioMs !== undefined && { first_remote_audio_activity_end_to_first_outbound_audio_ms: firstRemoteAudioActivityEndToFirstOutboundAudioMs }),
+    ...(firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs !== undefined && { first_remote_audio_activity_end_to_first_outbound_audio_played_ms: firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs }),
+    ...(lastRemoteAudioActivityToFirstOutboundAudioMs !== undefined && { last_remote_audio_activity_to_first_outbound_audio_ms: lastRemoteAudioActivityToFirstOutboundAudioMs }),
+    ...(lastRemoteAudioActivityToFirstOutboundAudioPlayedMs !== undefined && { last_remote_audio_activity_to_first_outbound_audio_played_ms: lastRemoteAudioActivityToFirstOutboundAudioPlayedMs }),
     ...(firstRemoteSpeechDelayMs !== undefined && { first_remote_speech_delay_ms: firstRemoteSpeechDelayMs }),
     ...(firstResponseDelayMs !== undefined && { first_response_delay_ms: firstResponseDelayMs }),
   };
@@ -189,28 +308,6 @@ async function finalizeCall(session: CallSession): Promise<void> {
 
   await writeTranscript(session.id, session.fullTranscript);
 
-  // Auto-append attempt entry to campaign JSONL if campaign was specified.
-  // `call.place` validates the header before dispatching to the daemon, so
-  // this should always succeed — but if the campaign file disappeared
-  // mid-call, log instead of crashing the daemon (transcript is preserved).
-  if (session.campaignId) {
-    const hasRemoteSpeech = session.fullTranscript.some((e) => e.type === "speech" && e.speaker === "remote");
-    const result = hasRemoteSpeech ? "connected" : "no_answer";
-    try {
-      await appendCampaignEvent(session.campaignId, {
-        ts: isoNow(),
-        contact_id: session.contactId ?? null,
-        type: "attempt",
-        channel: "call",
-        result,
-        call_id: session.id,
-      });
-    } catch (err) {
-      console.error(
-        `[daemon] Failed to log call attempt for campaign '${session.campaignId}': ${(err as Error).message}`,
-      );
-    }
-  }
 }
 
 async function forceHangup(session: CallSession, reason: string): Promise<void> {
@@ -248,15 +345,38 @@ async function forceHangup(session: CallSession, reason: string): Promise<void> 
   await finalizeCall(session);
 }
 
+function requestPreGeneratedGreeting(session: CallSession, geminiSession: GeminiLiveSession): void {
+  if (!session.callPlacedAt || session.mediaStreamStartedAt || session.preGeneratedGreetingRequestedAt || geminiSession.isClosed) {
+    return;
+  }
+  session.preGeneratedGreetingRequestedAt = isoNow();
+  geminiSession.sendTextTurn(PRE_GENERATED_GREETING_PROMPT);
+}
+
+async function waitForPreconnectedGemini(session: CallSession, timeoutMs: number): Promise<GeminiLiveSession | undefined> {
+  if (!session.preConnectingGemini) return undefined;
+  const result = await Promise.race([
+    session.preConnectingGemini,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+  return result ?? undefined;
+}
+
 function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
   console.log(`[media-stream] WebSocket connected — waiting for start event with callId`);
 
   // Twilio's <Stream> delivers customParameters in the "start" event, not in the URL.
   // We listen for the first message to resolve the session, then set up the bridge.
   let initialized = false;
+  let initializing = false;
+  const pendingBridgeMessages: RawData[] = [];
 
   ws.on("message", async (data) => {
     if (initialized) return; // Bridge handles subsequent messages
+    if (initializing) {
+      pendingBridgeMessages.push(data);
+      return;
+    }
 
     try {
       const msg = JSON.parse(data.toString()) as {
@@ -269,6 +389,7 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
       };
 
       if (msg.event === "start") {
+        initializing = true;
         const callId = msg.start?.customParameters?.callId ?? "";
         const session = callId ? getSession(callId) : undefined;
 
@@ -293,7 +414,18 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         console.log(`[media-stream] Start event received for call ${callId}`);
         session.ws = ws;
         session.lastActivityTime = Date.now();
-        if (msg.start?.streamSid) session.streamSid = msg.start.streamSid;
+        if (msg.start?.streamSid) {
+          session.streamSid = msg.start.streamSid;
+          if (!session.mediaStreamStartedAt) {
+            session.mediaStreamStartedAt = isoNow();
+            appendEvent(session, {
+              type: "media_stream_started",
+              ts: session.mediaStreamStartedAt,
+              stream_sid: msg.start.streamSid,
+              ...(inboundCallSid ? { call_sid: inboundCallSid } : {}),
+            });
+          }
+        }
         if (inboundCallSid) session.callSid = inboundCallSid;
         session.status = "in_progress";
 
@@ -307,9 +439,15 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         const appConfig = await loadAppConfig();
         const systemInstruction = session.systemInstruction ?? "You are a helpful phone assistant.";
 
-        // Use pre-connected Gemini session if available (issue #9)
-        const preConnected = session.preConnectedGemini ?? undefined;
-        session.preConnectedGemini = undefined; // consumed
+        // Use a warm Gemini session if it is ready, or wait very briefly for an
+        // in-flight warm-up before falling back to connecting after pickup.
+        const preConnected =
+          session.preConnectedGemini ??
+          await waitForPreconnectedGemini(session, PRECONNECT_PICKUP_WAIT_MS);
+        if (preConnected) {
+          session.preConnectedGemini = undefined; // consumed
+          session.preConnectingGemini = undefined;
+        }
 
         const bridge = new MediaStreamsBridge({
           twilioWs: ws,
@@ -319,6 +457,7 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           geminiConfig: appConfig.gemini,
           systemInstruction,
           preConnectedGemini: preConnected,
+          initialTwilioMessages: pendingBridgeMessages.splice(0),
           onCleanup: () => {
             finalizeCall(session).catch((err) => {
               console.error(`[daemon] Failed to finalize call ${callId}:`, err);
@@ -340,12 +479,24 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
 
         if (preConnected) {
           console.log(`[media-stream] Using pre-connected Gemini session for call ${callId}`);
+          if (!session.waitForUserBeforeGreeting) bridge.sendInitialGreeting();
         } else {
+          const latePreconnect = session.preConnectingGemini;
           // Fallback: connect Gemini now (pre-connect failed or wasn't attempted)
-          bridge.connectGemini().catch((err) => {
-            console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
-            bridge.cleanup();
-          });
+          bridge.connectGemini()
+            .then(() => {
+              if (!session.waitForUserBeforeGreeting) bridge.sendInitialGreeting();
+            })
+            .catch((err) => {
+              console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
+              bridge.cleanup();
+            });
+          latePreconnect?.then((lateGemini) => {
+            if (lateGemini && session.preConnectedGemini === lateGemini) {
+              session.preConnectedGemini = undefined;
+              lateGemini.close();
+            }
+          }).catch(() => undefined);
         }
       }
     } catch {
@@ -389,12 +540,14 @@ async function handleIpcMessage(msg: {
 async function handleCallPlace(params: Record<string, unknown>): Promise<object> {
   const to = params.to as string;
   const from = params.from as string;
-  const campaignId = (params.campaignId as string) || undefined;
-  const contactId = (params.contactId as string) || undefined;
   const objective = (params.objective as string) || undefined;
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
   const maxDuration = (params.maxDuration as number) || undefined;
+  const autoHangupAfterFirstOutboundAudioPlayedMs = (params.autoHangupAfterFirstOutboundAudioPlayedMs as number) || undefined;
+  const waitForUserBeforeGreeting = params.waitForUserBeforeGreeting === true;
+  const experimentalLocalVad = params.experimentalLocalVad === true;
+  const enableAmd = params.amd !== false;
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -419,12 +572,13 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
-  session.campaignId = campaignId;
-  session.contactId = contactId;
 
   // G1: Set max duration from flag or config default
   const maxDurationSec = maxDuration ?? appConfig.call.max_duration_seconds;
   session.maxDurationMs = maxDurationSec * 1000;
+  session.autoHangupAfterFirstOutboundAudioPlayedMs = autoHangupAfterFirstOutboundAudioPlayedMs;
+  session.waitForUserBeforeGreeting = waitForUserBeforeGreeting;
+  session.experimentalLocalVad = experimentalLocalVad;
 
   const sysInstruction = await buildSystemInstruction({
     identity: appConfig.identity,
@@ -455,47 +609,90 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     apiKey,
     geminiConfig: appConfig.gemini,
     systemInstruction: sysInstruction,
-    // No-op callbacks during pre-connect — bridge will rebind when media stream connects
-    onAudio: () => {},
-    onTranscript: () => {},
+    manualActivityDetection: experimentalLocalVad,
+    // During ringing, buffer the greeting audio so it can be flushed as soon as
+    // Twilio starts the media stream.
+    onAudio: (base64Pcm24k: string) => {
+      if (!session.firstPreGeneratedGreetingAudioAt) {
+        session.firstPreGeneratedGreetingAudioAt = isoNow();
+      }
+      session.preGeneratedGreetingAudio.push(base64Pcm24k);
+      session.preGeneratedGreetingAudioChunks += 1;
+    },
+    onTranscript: (speaker: "remote" | "local", text: string) => {
+      if (speaker === "local") {
+        session.preGeneratedGreetingTranscriptParts.push(text);
+      }
+    },
     onToolCall: () => {},
+    onGenerationComplete: () => {},
+    onTurnComplete: () => {},
+    onInterrupted: () => {},
     onEnd: () => {
+      session.preGeneratedGreetingEnded = true;
+      session.preGeneratedGreetingEndedAt = isoNow();
       console.log(`[daemon] Pre-connected Gemini session ended before media stream for call ${id}`);
     },
   });
 
-  try {
-    await geminiSession.connect();
-    session.preConnectedGemini = geminiSession;
-    console.log(`[daemon] Gemini pre-connected for call ${id}`);
-  } catch (err) {
-    console.error(`[daemon] Gemini pre-connect failed for call ${id}:`, (err as Error).message);
-    // Fall back to connecting after media stream starts — don't block the call
-  }
+  const preconnectPromise = (async (): Promise<GeminiLiveSession | null> => {
+    session.geminiPreconnectStartedAt = isoNow();
+    try {
+      await geminiSession.connect();
+      session.geminiPreconnectConnectedAt = isoNow();
+      if (session.status === "ended" || session.mediaStreamStartedAt || session.bridge) {
+        geminiSession.close();
+        return null;
+      }
+      session.preConnectedGemini = geminiSession;
+      console.log(`[daemon] Gemini pre-connected for call ${id}`);
+      if (!session.waitForUserBeforeGreeting) {
+        requestPreGeneratedGreeting(session, geminiSession);
+      }
+      return geminiSession;
+    } catch (err) {
+      console.error(`[daemon] Gemini pre-connect failed for call ${id}:`, (err as Error).message);
+      return null;
+    }
+  })();
+  session.preConnectingGemini = preconnectPromise;
 
   try {
     const client = twilio(accountSid, authToken);
+    session.callCreateStartedAt = isoNow();
     const twilioCall = await client.calls.create({
       to,
       from,
       twiml,
       statusCallback: `${webhookBaseUrl}/call-status/${id}`,
       statusCallbackEvent: ["ringing", "answered", "completed"],
-      machineDetection: "DetectMessageEnd",
-      asyncAmd: "true",
-      asyncAmdStatusCallback: `${webhookBaseUrl}/call-amd/${id}`,
-      asyncAmdStatusCallbackMethod: "POST",
+      ...(enableAmd ? {
+        machineDetection: "DetectMessageEnd",
+        asyncAmd: "true",
+        asyncAmdStatusCallback: `${webhookBaseUrl}/call-amd/${id}`,
+        asyncAmdStatusCallbackMethod: "POST",
+      } : {}),
     });
 
     session.callSid = twilioCall.sid;
     session.callPlacedAt = isoNow();
     appendEvent(session, { type: "call_placed", ts: session.callPlacedAt, from, to });
+    if (session.preConnectedGemini && !session.waitForUserBeforeGreeting) {
+      requestPreGeneratedGreeting(session, session.preConnectedGemini);
+    }
 
     resetIdleTimer();
-    return { id, status: "ringing" };
+    return {
+      id,
+      status: "ringing",
+      amd: enableAmd,
+      wait_for_user_before_greeting: waitForUserBeforeGreeting,
+      experimental_local_vad: experimentalLocalVad,
+    };
   } catch (err) {
     session.status = "ended";
     // Clean up pre-connected Gemini if Twilio call fails
+    preconnectPromise.then((connected) => connected?.close()).catch(() => undefined);
     geminiSession.close();
     return { error: "twilio_error", message: (err as Error).message };
   }
@@ -513,13 +710,23 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
   session.lastListenIndex = session.transcriptBuffer.length;
   session.lastActivityTime = Date.now();
   const silenceMs = Date.now() - session.lastSpeechTime;
+  const summary = latestCallSummary(session);
 
   return {
     id,
     status: session.status,
     transcript: newEntries,
     silence_ms: silenceMs,
+    ...(summary ? { summary } : {}),
   };
+}
+
+function latestCallSummary(session: CallSession): TranscriptEvent | undefined {
+  for (let i = session.fullTranscript.length - 1; i >= 0; i--) {
+    const event = session.fullTranscript[i];
+    if (event?.type === "call_summary") return event;
+  }
+  return undefined;
 }
 
 async function handleCallStatus(params: Record<string, unknown>): Promise<object> {
@@ -529,6 +736,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
   if (!session) {
     return { error: "session_not_found", message: `No session with id ${id}` };
   }
+  const summary = latestCallSummary(session);
 
   const statusToPhase: Record<string, string> = {
     ringing: "ringing",
@@ -548,6 +756,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
     from: session.from,
     to: session.to,
     hint,
+    ...(summary ? { summary } : {}),
   };
 }
 

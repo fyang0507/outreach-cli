@@ -1,35 +1,40 @@
 ---
 name: outreach
-description: Omnichannel outreach AND campaign record management — send via call, SMS, email, or calendar (Google Calendar), and maintain the campaign JSONL (attempts, outcomes, decisions, amendments, human_input). Use for any outreach send OR any campaign state update — including logging an off-horizon reply, resolving an outcome, or amending a decision without any new send.
+description: Utility interface for outbound calls, SMS/iMessage, Gmail, and per-channel history/search. Campaign/process management is out of scope for this repo.
 ---
 
-This skill is a catalog. Load only the doc matching your task — each sub-doc is self-contained.
+Use `outreach` when an agent already has the recipient and the message or call objective. Run `outreach health` first when channel readiness is unknown.
 
-## Task routing
+## Channel References
 
-**→ [once.md](./once.md) — One-off send (utility mode).** Smoke test, demo, or one-shot notification. No campaign, no contact record, no follow-up tracking, no reply watcher. Uses `--once` on any send command.
+Load a channel note only when channel behavior matters, not just to copy command syntax:
 
-**→ [campaign.md](./campaign.md) — Campaign management (full SOP).** Anything tied to a named outreach goal, including:
-- Campaign-coupled sends (with `--campaign-id` + `--contact-id`), AND
-- **Record-only updates** with no new send — logging that the vendor called back, recording an off-channel reply, appending an `outcome` / `decision` / `amendment` after new information lands.
+- [call.md](./call.md) - voice-agent constraints, objective writing, and monitoring judgment
+- [sms.md](./sms.md) - iMessage-first behavior, send semantics, and Messages history caveats
+- [email.md](./email.md) - Gmail reply threading, search-vs-history choice, and auth caveats
 
-If your task is "update the campaign record for X" or "mark Y resolved" — **you are in campaign, even with no send.** The record IS the work.
+## Boundary
 
-## Per-channel references
+`outreach` does not manage workflow state or automatic follow-up. If follow-up matters after a send, schedule it outside this CLI.
 
-**Channel preference: email > sms > phone** (default heuristic, **overridden by explicit operator preference**). The agent cannot receive inbound calls, so phone is outbound-only and replies can only land via email or SMS. Default to email unless the contact is SMS-native or the task genuinely requires voice. If the operator stipulates an order in the prompt (e.g. "call > sms > email"), follow that order — don't second-guess the explicit preference with the heuristic.
+## Command Surface
 
-Flag details and output shapes for each channel — load only the one you need:
+```bash
+outreach health
 
-- [call.md](./call.md) — voice calls (Twilio + Gemini Live)
-- [sms.md](./sms.md) — SMS (iMessage)
-- [email.md](./email.md) — email (Gmail)
-- [calendar.md](./calendar.md) — calendar events (Google Calendar)
+outreach call init
+outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>]
+outreach call listen --id <callId>
+outreach call status --id <callId>
+outreach call hangup --id <callId>
+outreach call teardown
 
-## Prerequisites
+outreach sms send --to <number> --body <text> [--service iMessage|SMS]
+outreach sms history --phone <number> [--limit <n>]
 
-Always start a session with `outreach health`. Use its `data_repo.path` as `$DATA_REPO` for any direct file reads; `config_path` in the same block tells you which config file was resolved.
+outreach email send --subject <text> --body <text> (--to <address> | --reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]
+outreach email history (--address <email> | --thread-id <threadId>) [--limit <n>]
+outreach email search --query <gmail-query> [--limit <n>]
+```
 
-**Data repo resolution.** You normally run from inside the data repo, so the CLI locates it by walking up from cwd looking for `.agents/workspace.yaml`. For one-off invocations against a different repo, export `OUTREACH_DATA_REPO=/path` for that command (or session). If health errors with no data repo found, the operator needs to run `outreach setup` — flag it and stop.
-
-**Daemon lifecycle (campaign path).** Outreach composes with two sibling daemons: **sundial** (the scheduler behind auto-reply watchers and `ask-human` callbacks) and **relay** (delivers human-in-the-loop traffic for `ask-human` — the agent writes a `human_question`, relay ships it to a messaging platform, the human replies, relay appends a `human_input` entry, and sundial fires the callback). Without relay, `ask-human` just times out. These daemons are operator-managed and persist across sessions — `outreach setup` runs a readiness check at install time (any sundial or relay gap is a hard failure) and surfaces any gaps. If watcher behavior seems off mid-session, re-running `outreach setup --skip-stack-check` is cheap and idempotent. The one-off path ([once.md](./once.md)) does not require these daemons.
+All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`.
