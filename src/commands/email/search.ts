@@ -21,9 +21,9 @@ export function registerSearchCommand(parent: Command): void {
           return;
         }
 
-        let threads;
+        let result;
         try {
-          threads = await searchEmails({ query: opts.query, limit });
+          result = await searchEmails({ query: opts.query, limit });
         } catch (err) {
           const status = (err as { code?: number }).code;
           const msg = (err as Error).message;
@@ -38,10 +38,26 @@ export function registerSearchCommand(parent: Command): void {
           return;
         }
 
-        outputJson({
+        // Base truncation on raw messages fetched (pre-grouping) hitting the
+        // limit, not the post-grouping thread count.
+        const truncated = result.fetched === limit;
+
+        const payload: {
+          query: string;
+          truncated: boolean;
+          note?: string;
+          threads: typeof result.threads;
+        } = {
           query: opts.query,
-          threads,
-        });
+          truncated,
+          threads: result.threads,
+        };
+
+        if (truncated) {
+          payload.note = `showing ${result.fetched} most recent; raise --limit or narrow with after:/before:`;
+        }
+
+        outputJson(payload);
         process.exit(SUCCESS);
       },
     );

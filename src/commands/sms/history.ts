@@ -28,7 +28,18 @@ export function registerHistoryCommand(parent: Command): void {
         return;
       }
 
-      outputJson({ phone: normalized, messages });
+      const truncated = messages.length === limit;
+      const payload: {
+        phone: string;
+        truncated: boolean;
+        note?: string;
+        messages: typeof messages;
+      } = { phone: normalized, truncated, messages };
+      if (truncated) {
+        payload.note = `showing ${messages.length} most recent; raise --limit`;
+      }
+
+      outputJson(payload);
       process.exit(SUCCESS);
     });
 }

@@ -326,7 +326,7 @@ export interface SearchThread {
 export async function searchEmails(opts: {
   query: string;
   limit?: number;
-}): Promise<SearchThread[]> {
+}): Promise<{ threads: SearchThread[]; fetched: number }> {
   const gmail = await getGmailClient();
   const limit = opts.limit ?? 10;
 
@@ -337,7 +337,7 @@ export async function searchEmails(opts: {
   });
 
   const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
-  if (messageIds.length === 0) return [];
+  if (messageIds.length === 0) return { threads: [], fetched: 0 };
 
   // Fetch metadata only (no body) — lightweight for search
   const summaries: EmailSummary[] = [];
@@ -373,7 +373,7 @@ export async function searchEmails(opts: {
     });
   }
 
-  return threads;
+  return { threads, fetched: messageIds.length };
 }
 
 // --- History ---
@@ -413,6 +413,9 @@ export async function readEmailHistory(opts: {
   threadId?: string;
   limit?: number;
   sinceDays?: number;
+  // Address mode only: include full plain-text bodies. Defaults to false
+  // (snippets only) for token efficiency. Thread mode always includes bodies.
+  includeBody?: boolean;
 }): Promise<EmailSummary[]> {
   const gmail = await getGmailClient();
   const limit = opts.limit ?? 20;
@@ -445,7 +448,10 @@ export async function readEmailHistory(opts: {
   const messageIds = (list.data.messages ?? []).map((m) => m.id!).filter(Boolean);
   if (messageIds.length === 0) return [];
 
-  // Fetch full messages (with body)
+  // Always fetch full so the part structure is available for accurate
+  // attachment detection (metadata format omits it). Token savings come from
+  // omitting the `body` field via includeBody, not from the fetch format.
+  const includeBody = opts.includeBody === true;
   const summaries: EmailSummary[] = [];
   for (const id of messageIds) {
     const msg = await gmail.users.messages.get({
@@ -453,7 +459,7 @@ export async function readEmailHistory(opts: {
       id,
       format: "full",
     });
-    summaries.push(messageToSummary(msg.data, true));
+    summaries.push(messageToSummary(msg.data, includeBody));
   }
 
   // Return chronological order (reverse Gmail's newest-first)
