@@ -10,11 +10,21 @@ export function registerHistoryCommand(parent: Command): void {
     .option("--address <email>", "Email address to search")
     .option("--thread-id <id>", "Gmail thread ID for full thread view")
     .option("--limit <n>", "Max messages to return", "20")
+    .option(
+      "--verbose",
+      "Include full message bodies in --address mode (default: snippets only)",
+    )
+    .option(
+      "--format <format>",
+      "Output detail: 'full' is an alias for --verbose",
+    )
     .action(
       async (opts: {
         address?: string;
         threadId?: string;
         limit: string;
+        verbose?: boolean;
+        format?: string;
       }) => {
         if (!opts.address && !opts.threadId) {
           outputError(INPUT_ERROR, "Either --address or --thread-id is required");
@@ -23,6 +33,7 @@ export function registerHistoryCommand(parent: Command): void {
         }
 
         const limit = parseInt(opts.limit, 10);
+        const verbose = opts.verbose === true || opts.format === "full";
 
         let messages;
         try {
@@ -30,6 +41,7 @@ export function registerHistoryCommand(parent: Command): void {
             address: opts.address,
             threadId: opts.threadId,
             limit,
+            includeBody: verbose,
           });
         } catch (err) {
           const status = (err as { code?: number }).code;
@@ -45,11 +57,34 @@ export function registerHistoryCommand(parent: Command): void {
           return;
         }
 
-        outputJson({
+        // Truncation only applies to address mode (thread mode returns a whole
+        // thread, uncapped by --limit).
+        const truncated = !opts.threadId && messages.length === limit;
+
+        const payload: {
+          address: string | null;
+          thread_id: string | null;
+          truncated: boolean;
+          note?: string;
+          hint?: string;
+          messages: typeof messages;
+        } = {
           address: opts.address ?? null,
           thread_id: opts.threadId ?? null,
+          truncated,
           messages,
-        });
+        };
+
+        if (truncated) {
+          payload.note = `showing ${messages.length} most recent; raise --limit or narrow with after:/before:`;
+        }
+
+        // Address mode without --verbose omits bodies; advertise the flag.
+        if (opts.address && !opts.threadId && !verbose) {
+          payload.hint = "bodies omitted; pass --verbose for full text";
+        }
+
+        outputJson(payload);
         process.exit(SUCCESS);
       },
     );
