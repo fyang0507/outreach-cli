@@ -5,7 +5,6 @@ export interface GeminiLiveSessionOptions {
   apiKey: string;
   geminiConfig: GeminiConfig;
   systemInstruction: string;
-  manualActivityDetection?: boolean;
   onAudio: (base64Pcm: string) => void;
   onTranscript: (speaker: "remote" | "local", text: string) => void;
   onToolCall: (name: string, args: Record<string, unknown>, id: string) => void;
@@ -61,14 +60,10 @@ export class GeminiLiveSession {
 
     // Build VAD config — only include non-null values
     const vadConfig: Record<string, unknown> = {};
-    if (this.opts.manualActivityDetection) {
-      vadConfig.disabled = true;
-    } else {
-      if (gc.vad.start_of_speech_sensitivity !== null) vadConfig.startOfSpeechSensitivity = gc.vad.start_of_speech_sensitivity;
-      if (gc.vad.end_of_speech_sensitivity !== null) vadConfig.endOfSpeechSensitivity = gc.vad.end_of_speech_sensitivity;
-      if (gc.vad.prefix_padding_ms !== null) vadConfig.prefixPaddingMs = gc.vad.prefix_padding_ms;
-      if (gc.vad.silence_duration_ms !== null) vadConfig.silenceDurationMs = gc.vad.silence_duration_ms;
-    }
+    if (gc.vad.start_of_speech_sensitivity !== null) vadConfig.startOfSpeechSensitivity = gc.vad.start_of_speech_sensitivity;
+    if (gc.vad.end_of_speech_sensitivity !== null) vadConfig.endOfSpeechSensitivity = gc.vad.end_of_speech_sensitivity;
+    if (gc.vad.prefix_padding_ms !== null) vadConfig.prefixPaddingMs = gc.vad.prefix_padding_ms;
+    if (gc.vad.silence_duration_ms !== null) vadConfig.silenceDurationMs = gc.vad.silence_duration_ms;
 
     // Build transcription config
     const inputTranscription: Record<string, unknown> = {};
@@ -182,22 +177,23 @@ export class GeminiLiveSession {
     });
   }
 
-  sendActivityStart(): void {
-    if (!this.session || this.closed) return;
-    this.session.sendRealtimeInput({ activityStart: {} });
-  }
-
-  sendActivityEnd(): void {
-    if (!this.session || this.closed) return;
-    this.session.sendRealtimeInput({ activityEnd: {} });
-  }
-
   sendTextTurn(text: string): void {
     if (!this.session || this.closed) return;
     this.session.sendClientContent({
       turns: [{ role: "user", parts: [{ text }] }],
       turnComplete: true,
     });
+  }
+
+  /**
+   * Inject text on the realtime channel — interleaved with audio, no turn
+   * barrier. The model folds the note into its ongoing turn and rephrases it
+   * in its own voice, so it doesn't restart/interrupt the current turn the way
+   * sendTextTurn (sendClientContent) does. Used for mid-call steering.
+   */
+  steer(note: string): void {
+    if (!this.session || this.closed) return;
+    this.session.sendRealtimeInput({ text: note });
   }
 
   sendToolResponse(functionCallId: string, name: string, result: Record<string, unknown>): void {

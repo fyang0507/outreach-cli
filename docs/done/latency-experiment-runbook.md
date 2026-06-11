@@ -1,5 +1,11 @@
 # Pickup Latency Experiment Runbook
 
+> **Archived / historical.** This runbook documents the original latency experiment.
+> The `latency-test` command and the `--no-amd` / `--experimental-local-vad` flags it
+> relied on were removed in the production cleanup (calls now always enable AMD and use
+> Gemini automatic VAD). For production latency analysis, place a normal call and run
+> `outreach call latency --latest`. The commands below are kept only for historical record.
+
 Use this runbook to measure the pickup-to-audible-greeting delay after the Media Streams + Gemini Live latency work.
 
 ## Goal

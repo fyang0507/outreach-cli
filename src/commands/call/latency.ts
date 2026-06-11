@@ -80,18 +80,6 @@ function streamStartToAudibleGreeting(summary: CallSummaryEvent): number | undef
 }
 
 function userSpeechToAudibleResponse(summary: CallSummaryEvent): { value?: number; source?: string } {
-  if (summary.first_remote_audio_activity_end_to_first_outbound_audio_played_ms !== undefined) {
-    return {
-      value: summary.first_remote_audio_activity_end_to_first_outbound_audio_played_ms,
-      source: "first_remote_audio_activity_end_to_first_outbound_audio_played_ms",
-    };
-  }
-  if (summary.first_remote_audio_activity_end_to_first_outbound_audio_ms !== undefined) {
-    return {
-      value: summary.first_remote_audio_activity_end_to_first_outbound_audio_ms,
-      source: "first_remote_audio_activity_end_to_first_outbound_audio_ms",
-    };
-  }
   if (summary.first_remote_audio_activity_to_first_outbound_audio_played_ms !== undefined) {
     return {
       value: summary.first_remote_audio_activity_to_first_outbound_audio_played_ms,
@@ -170,9 +158,6 @@ function largestDiagnostic(summary: CallSummaryEvent): string | undefined {
 function likelyBottleneck(summary: CallSummaryEvent, missing: string[]): string | undefined {
   if (missing.length > 0) return "missing_latency_milestones";
   if (isWaitForUserSummary(summary)) {
-    if (summary.first_remote_audio_activity_end_to_first_outbound_audio_played_ms !== undefined) {
-      return "local_vad_endpoint_to_playback";
-    }
     if (summary.first_remote_audio_activity_to_first_outbound_audio_played_ms !== undefined) {
       return "remote_audio_activity_to_playback";
     }

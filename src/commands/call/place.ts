@@ -6,34 +6,47 @@ import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
 interface PlaceOptions {
-  to: string;
-  from?: string;
+  to?: string;
   objective?: string;
   persona?: string;
   hangupWhen?: string;
   maxDuration?: string;
-  amd?: boolean;
   waitForUser?: boolean;
-  experimentalLocalVad?: boolean;
+  fromTwilio?: boolean;
+  callOperator?: boolean;
 }
 
 export function registerPlaceCommand(parent: Command): void {
   parent
     .command("place")
     .description("Place an outbound call")
-    .requiredOption("--to <number>", "Destination phone number")
-    .option("--from <number>", "Caller ID phone number")
+    .option("--to <number>", "Destination phone number (omit when using --call-operator)")
     .requiredOption("--objective <text>", "What this call should accomplish")
     .option("--persona <text>", "Who the AI agent is and how it should behave")
     .option("--hangup-when <text>", "Condition for ending the call")
     .option("--max-duration <seconds>", "Max call duration in seconds (default: from config, 600s)")
-    .option("--no-amd", "Disable Twilio answering-machine detection for lowest-latency experiments")
-    .option("--wait-for-user", "Do not proactively greet; wait for remote speech before responding")
-    .option("--experimental-local-vad", "Use experimental bridge-side endpointing for wait-for-user tests")
+    .option("--wait-for-user", "Do not proactively greet; wait for the callee to speak first")
+    .option("--from-twilio","Show the Twilio number (TWILIO_DEFAULT_FROM_NUMBER) as caller ID instead of the operator's personal number (PERSONAL_CALLER_ID)")
+    .option("--call-operator", "Call the operator you're acting for (their PERSONAL_CALLER_ID), dialed from the Twilio number — e.g. to escalate something urgent that needs their input")
     .action(async (opts: PlaceOptions) => {
-      const from = opts.from || outreachConfig.OUTREACH_DEFAULT_FROM;
+      // --call-operator calls the operator's own number, dialed from the Twilio number
+      // (a caller ID can't equal the destination, so it can't be PERSONAL_CALLER_ID).
+      // --from-twilio just swaps the displayed caller ID to the Twilio number for any destination.
+      const useTwilioFrom = opts.callOperator || opts.fromTwilio;
+      const from = useTwilioFrom ? outreachConfig.TWILIO_DEFAULT_FROM_NUMBER : outreachConfig.PERSONAL_CALLER_ID;
       if (!from) {
-        outputError(INPUT_ERROR, "No --from number provided and OUTREACH_DEFAULT_FROM is not set");
+        const missingVar = useTwilioFrom ? "TWILIO_DEFAULT_FROM_NUMBER" : "PERSONAL_CALLER_ID";
+        outputError(INPUT_ERROR, `${missingVar} is not set in .env`);
+        process.exit(INPUT_ERROR);
+        return;
+      }
+
+      const to = opts.to || (opts.callOperator ? outreachConfig.PERSONAL_CALLER_ID : undefined);
+      if (!to) {
+        const message = opts.callOperator
+          ? "--call-operator requires PERSONAL_CALLER_ID to be set (the operator's number to call)"
+          : "--to is required (or use --call-operator to call the operator you're acting for)";
+        outputError(INPUT_ERROR, message);
         process.exit(INPUT_ERROR);
         return;
       }
@@ -58,15 +71,13 @@ export function registerPlaceCommand(parent: Command): void {
 
       try {
         const result = await sendToDaemon("call.place", {
-          to: opts.to,
+          to,
           from,
           objective: opts.objective,
           persona: opts.persona,
           hangupWhen: opts.hangupWhen,
           maxDuration: maxDuration,
-          amd: opts.amd,
           waitForUserBeforeGreeting: opts.waitForUser,
-          experimentalLocalVad: opts.experimentalLocalVad,
         });
 
         const res = result as { error?: string; message?: string };

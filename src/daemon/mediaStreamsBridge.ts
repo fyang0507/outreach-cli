@@ -11,10 +11,6 @@ const SILENCE_TIMEOUT_MS = 800;
 const INITIAL_GREETING_DELAY_MS = 350;
 const FIRST_OUTBOUND_AUDIO_MARK = "first_outbound_audio";
 const REMOTE_AUDIO_RMS_THRESHOLD = 500;
-const LOCAL_VAD_PREROLL_MS = 250;
-const LOCAL_VAD_START_MS = 60;
-const LOCAL_VAD_END_SILENCE_MS = 650;
-const LOCAL_VAD_MIN_ACTIVITY_MS = 180;
 const HANGUP_DRAIN_GRACE_MS = 200;
 const HANGUP_DRAIN_TIMEOUT_MS = 7000;
 
@@ -25,11 +21,6 @@ interface OutboundTurn {
   generated: boolean;
   played: boolean;
   cleared: boolean;
-}
-
-interface VadChunk {
-  payload: string;
-  durationMs: number;
 }
 
 /**
@@ -112,17 +103,11 @@ export class MediaStreamsBridge {
   private onCleanup?: () => void;
   private initialGreetingSent = false;
   private initialGreetingTimer: ReturnType<typeof setTimeout> | null = null;
-  private autoHangupScheduled = false;
   private outboundTurnSeq = 0;
   private activeOutboundTurn: OutboundTurn | null = null;
   private outboundTurnsByMark = new Map<string, OutboundTurn>();
   private pendingHangup: { reason: string; source: string; timeout: ReturnType<typeof setTimeout> } | null = null;
   private hangupGraceTimer: ReturnType<typeof setTimeout> | null = null;
-  private localVadPreRoll: VadChunk[] = [];
-  private localVadActive = false;
-  private localVadAboveThresholdMs = 0;
-  private localVadSilenceMs = 0;
-  private localVadActivityMs = 0;
 
   constructor(opts: MediaStreamsBridgeOptions) {
     this.twilioWs = opts.twilioWs;
@@ -163,7 +148,6 @@ export class MediaStreamsBridge {
         apiKey: opts.apiKey,
         geminiConfig: opts.geminiConfig,
         systemInstruction: opts.systemInstruction,
-        manualActivityDetection: Boolean(opts.session.experimentalLocalVad),
         onAudio: (base64Pcm24k: string) => {
           this.sendOutboundAudio(base64Pcm24k);
         },
@@ -224,6 +208,18 @@ export class MediaStreamsBridge {
 
   async connectGemini(): Promise<void> {
     await this.gemini.connect();
+  }
+
+  /**
+   * Inject text into the live Gemini session mid-call.
+   * - "nudge" (default): realtime channel, no turn barrier — the model folds
+   *   the note into its ongoing turn and rephrases it in its own voice.
+   * - "say": ordered client content — forces a turn, verbatim-ish line.
+   */
+  steerGemini(text: string, mode: "nudge" | "say" = "nudge"): void {
+    if (this.cleaned) return;
+    if (mode === "say") this.gemini.sendTextTurn(text);
+    else this.gemini.steer(text);
   }
 
   sendInitialGreeting(): void {
@@ -404,13 +400,9 @@ export class MediaStreamsBridge {
       case "media": {
         if (msg.media?.payload) {
           this.session.lastActivityTime = Date.now();
-          if (this.session.experimentalLocalVad) {
-            this.handleLocalVadMedia(msg.media.payload);
-          } else {
-            this.noteRemoteAudioActivity(msg.media.payload);
-            const pcm16k = twilioToGemini(msg.media.payload);
-            this.gemini.sendAudio(pcm16k);
-          }
+          this.noteRemoteAudioActivity(msg.media.payload);
+          const pcm16k = twilioToGemini(msg.media.payload);
+          this.gemini.sendAudio(pcm16k);
         }
         break;
       }
@@ -426,7 +418,6 @@ export class MediaStreamsBridge {
             type: "first_outbound_audio_played",
             ts: this.session.firstOutboundAudioPlayedAt,
           });
-          this.scheduleAutoHangupAfterGreeting();
         }
         if (msg.mark?.name) {
           this.handleOutboundTurnMark(msg.mark.name);
@@ -450,87 +441,6 @@ export class MediaStreamsBridge {
     this.session.lastRemoteAudioActivityAt = ts;
   }
 
-  private handleLocalVadMedia(base64Mulaw8k: string): void {
-    const durationMs = this.durationMsForMulaw(base64Mulaw8k);
-    const speechLike = this.rmsForMulaw(base64Mulaw8k) >= REMOTE_AUDIO_RMS_THRESHOLD;
-
-    this.localVadPreRoll.push({ payload: base64Mulaw8k, durationMs });
-    this.trimLocalVadPreRoll();
-
-    if (this.localVadActive) {
-      this.localVadActivityMs += durationMs;
-      if (speechLike) {
-        this.localVadSilenceMs = 0;
-        this.noteRemoteAudioActivity(base64Mulaw8k);
-        this.gemini.sendAudio(twilioToGemini(base64Mulaw8k));
-      } else {
-        this.localVadSilenceMs += durationMs;
-      }
-
-      if (
-        this.localVadActivityMs >= LOCAL_VAD_MIN_ACTIVITY_MS &&
-        this.localVadSilenceMs >= LOCAL_VAD_END_SILENCE_MS
-      ) {
-        this.endLocalVadActivity();
-      }
-      return;
-    }
-
-    if (!speechLike) {
-      this.localVadAboveThresholdMs = 0;
-      return;
-    }
-
-    this.localVadAboveThresholdMs += durationMs;
-    this.noteRemoteAudioActivity(base64Mulaw8k);
-    if (this.localVadAboveThresholdMs >= LOCAL_VAD_START_MS) {
-      this.startLocalVadActivity();
-    }
-  }
-
-  private startLocalVadActivity(): void {
-    if (this.localVadActive) return;
-    const ts = isoNow();
-    this.localVadActive = true;
-    this.localVadSilenceMs = 0;
-    this.localVadActivityMs = this.localVadPreRoll.reduce((sum, chunk) => sum + chunk.durationMs, 0);
-    if (!this.session.firstRemoteAudioActivityAt) {
-      this.session.firstRemoteAudioActivityAt = ts;
-    }
-    this.session.lastRemoteAudioActivityAt = ts;
-    this.batcher.appendDirect({ type: "remote_activity_start", ts });
-    this.clearBufferedOutboundAudio("remote_activity_start");
-    this.gemini.sendActivityStart();
-    for (const chunk of this.localVadPreRoll) {
-      this.gemini.sendAudio(twilioToGemini(chunk.payload));
-    }
-    this.localVadPreRoll = [];
-    this.localVadAboveThresholdMs = 0;
-  }
-
-  private endLocalVadActivity(): void {
-    if (!this.localVadActive) return;
-    const ts = isoNow();
-    if (!this.session.firstRemoteAudioActivityEndedAt) {
-      this.session.firstRemoteAudioActivityEndedAt = ts;
-    }
-    this.batcher.appendDirect({ type: "remote_activity_end", ts });
-    this.gemini.sendActivityEnd();
-    this.localVadActive = false;
-    this.localVadAboveThresholdMs = 0;
-    this.localVadSilenceMs = 0;
-    this.localVadActivityMs = 0;
-    this.localVadPreRoll = [];
-  }
-
-  private trimLocalVadPreRoll(): void {
-    let totalMs = this.localVadPreRoll.reduce((sum, chunk) => sum + chunk.durationMs, 0);
-    while (totalMs > LOCAL_VAD_PREROLL_MS && this.localVadPreRoll.length > 1) {
-      const removed = this.localVadPreRoll.shift();
-      totalMs -= removed?.durationMs ?? 0;
-    }
-  }
-
   private rmsForMulaw(base64Mulaw8k: string): number {
     const mulawBuf = Buffer.from(base64Mulaw8k, "base64");
     const mulawBytes = new Uint8Array(
@@ -544,11 +454,6 @@ export class MediaStreamsBridge {
       sumSquares += sample * sample;
     }
     return Math.sqrt(sumSquares / Math.max(1, pcm8k.length));
-  }
-
-  private durationMsForMulaw(base64Mulaw8k: string): number {
-    const bytes = Buffer.byteLength(base64Mulaw8k, "base64");
-    return (bytes / 8000) * 1000;
   }
 
   private clearBufferedOutboundAudio(reason: string): void {
@@ -640,18 +545,6 @@ export class MediaStreamsBridge {
         console.error(`[media-bridge] DTMF send failed:`, err.message);
         this.gemini.sendToolResponse(id, "send_dtmf", { error: err.message });
       });
-  }
-
-  private scheduleAutoHangupAfterGreeting(): void {
-    const delayMs = this.session.autoHangupAfterFirstOutboundAudioPlayedMs;
-    if (!delayMs || this.autoHangupScheduled) return;
-
-    this.autoHangupScheduled = true;
-    setTimeout(() => {
-      if (!this.cleaned && this.session.status !== "ended") {
-        this.requestDeferredHangup("latency test completed after first audible greeting", "auto_hangup");
-      }
-    }, delayMs);
   }
 
   private handleEndCall(args: Record<string, unknown>, id: string): void {
