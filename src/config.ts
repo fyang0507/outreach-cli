@@ -13,7 +13,8 @@ config({ path: resolve(__dirname, "..", ".env"), quiet: true });
 export interface OutreachConfig {
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
-  OUTREACH_DEFAULT_FROM: string;
+  PERSONAL_CALLER_ID: string;
+  TWILIO_DEFAULT_FROM_NUMBER: string;
   OUTREACH_WEBHOOK_URL: string;
   GOOGLE_GENERATIVE_AI_API_KEY: string;
   GMAIL_CLIENT_ID: string;
@@ -23,7 +24,8 @@ export interface OutreachConfig {
 export const outreachConfig: OutreachConfig = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID ?? "",
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN ?? "",
-  OUTREACH_DEFAULT_FROM: process.env.OUTREACH_DEFAULT_FROM ?? "",
+  PERSONAL_CALLER_ID: process.env.PERSONAL_CALLER_ID ?? "",
+  TWILIO_DEFAULT_FROM_NUMBER: process.env.TWILIO_DEFAULT_FROM_NUMBER ?? "",
   OUTREACH_WEBHOOK_URL: process.env.OUTREACH_WEBHOOK_URL ?? "",
   GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? "",
   GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID ?? "",

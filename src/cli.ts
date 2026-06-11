@@ -2,12 +2,12 @@
 import { Command } from "commander";
 import { registerPlaceCommand } from "./commands/call/place.js";
 import { registerListenCommand } from "./commands/call/listen.js";
+import { registerSteerCommand } from "./commands/call/steer.js";
 import { registerStatusCommand as registerCallStatusCommand } from "./commands/call/status.js";
 import { registerHangupCommand } from "./commands/call/hangup.js";
 import { registerInitCommand } from "./commands/call/init.js";
 import { registerTeardownCommand } from "./commands/call/teardown.js";
 import { registerLatencyCommand } from "./commands/call/latency.js";
-import { registerLatencyTestCommand } from "./commands/call/latencyTest.js";
 import { registerHealthCommand } from "./commands/health.js";
 import { registerSendCommand } from "./commands/sms/send.js";
 import { registerHistoryCommand } from "./commands/sms/history.js";
@@ -43,9 +43,9 @@ registerInitCommand(call);
 registerTeardownCommand(call);
 registerPlaceCommand(call);
 registerListenCommand(call);
+registerSteerCommand(call);
 registerCallStatusCommand(call);
 registerHangupCommand(call);
 registerLatencyCommand(call);
-registerLatencyTestCommand(call);
 
 program.parse();

@@ -247,20 +247,11 @@ async function finalizeCall(session: CallSession): Promise<void> {
   const firstRemoteAudioActivityDelayMs = session.answeredAt && session.firstRemoteAudioActivityAt
     ? new Date(session.firstRemoteAudioActivityAt).getTime() - new Date(session.answeredAt).getTime()
     : undefined;
-  const firstRemoteAudioActivityEndDelayMs = session.answeredAt && session.firstRemoteAudioActivityEndedAt
-    ? new Date(session.firstRemoteAudioActivityEndedAt).getTime() - new Date(session.answeredAt).getTime()
-    : undefined;
   const firstRemoteAudioActivityToFirstOutboundAudioMs = session.firstRemoteAudioActivityAt && session.firstOutboundAudioAt
     ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.firstRemoteAudioActivityAt).getTime()
     : undefined;
   const firstRemoteAudioActivityToFirstOutboundAudioPlayedMs = session.firstRemoteAudioActivityAt && session.firstOutboundAudioPlayedAt
     ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.firstRemoteAudioActivityAt).getTime()
-    : undefined;
-  const firstRemoteAudioActivityEndToFirstOutboundAudioMs = session.firstRemoteAudioActivityEndedAt && session.firstOutboundAudioAt
-    ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.firstRemoteAudioActivityEndedAt).getTime()
-    : undefined;
-  const firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs = session.firstRemoteAudioActivityEndedAt && session.firstOutboundAudioPlayedAt
-    ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.firstRemoteAudioActivityEndedAt).getTime()
     : undefined;
   const lastRemoteAudioActivityToFirstOutboundAudioMs = session.lastRemoteAudioActivityAt && session.firstOutboundAudioAt
     ? new Date(session.firstOutboundAudioAt).getTime() - new Date(session.lastRemoteAudioActivityAt).getTime()
@@ -276,7 +267,6 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ...(ringDurationMs !== undefined && { ring_duration_ms: ringDurationMs }),
     ...(session.answeredBy && { answered_by: session.answeredBy }),
     wait_for_user_before_greeting: Boolean(session.waitForUserBeforeGreeting),
-    experimental_local_vad: Boolean(session.experimentalLocalVad),
     ...(twilioCallCreateMs !== undefined && { twilio_call_create_ms: twilioCallCreateMs }),
     gemini_preconnected_before_call: geminiPreconnectedBeforeCall,
     ...(geminiPreconnectMs !== undefined && { gemini_preconnect_ms: geminiPreconnectMs }),
@@ -294,11 +284,8 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ...(streamToFirstOutboundAudioPlayedMs !== undefined && { stream_to_first_outbound_audio_played_ms: streamToFirstOutboundAudioPlayedMs }),
     ...(answerToFirstOutboundAudioPlayedMs !== undefined && { answer_to_first_outbound_audio_played_ms: answerToFirstOutboundAudioPlayedMs }),
     ...(firstRemoteAudioActivityDelayMs !== undefined && { first_remote_audio_activity_delay_ms: firstRemoteAudioActivityDelayMs }),
-    ...(firstRemoteAudioActivityEndDelayMs !== undefined && { first_remote_audio_activity_end_delay_ms: firstRemoteAudioActivityEndDelayMs }),
     ...(firstRemoteAudioActivityToFirstOutboundAudioMs !== undefined && { first_remote_audio_activity_to_first_outbound_audio_ms: firstRemoteAudioActivityToFirstOutboundAudioMs }),
     ...(firstRemoteAudioActivityToFirstOutboundAudioPlayedMs !== undefined && { first_remote_audio_activity_to_first_outbound_audio_played_ms: firstRemoteAudioActivityToFirstOutboundAudioPlayedMs }),
-    ...(firstRemoteAudioActivityEndToFirstOutboundAudioMs !== undefined && { first_remote_audio_activity_end_to_first_outbound_audio_ms: firstRemoteAudioActivityEndToFirstOutboundAudioMs }),
-    ...(firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs !== undefined && { first_remote_audio_activity_end_to_first_outbound_audio_played_ms: firstRemoteAudioActivityEndToFirstOutboundAudioPlayedMs }),
     ...(lastRemoteAudioActivityToFirstOutboundAudioMs !== undefined && { last_remote_audio_activity_to_first_outbound_audio_ms: lastRemoteAudioActivityToFirstOutboundAudioMs }),
     ...(lastRemoteAudioActivityToFirstOutboundAudioPlayedMs !== undefined && { last_remote_audio_activity_to_first_outbound_audio_played_ms: lastRemoteAudioActivityToFirstOutboundAudioPlayedMs }),
     ...(firstRemoteSpeechDelayMs !== undefined && { first_remote_speech_delay_ms: firstRemoteSpeechDelayMs }),
@@ -516,6 +503,7 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
 type IpcMethod =
   | "call.place"
   | "call.listen"
+  | "call.steer"
   | "call.status"
   | "call.hangup";
 
@@ -528,6 +516,8 @@ async function handleIpcMessage(msg: {
       return handleCallPlace(msg.params);
     case "call.listen":
       return handleCallListen(msg.params);
+    case "call.steer":
+      return handleCallSteer(msg.params);
     case "call.status":
       return handleCallStatus(msg.params);
     case "call.hangup":
@@ -544,10 +534,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const persona = (params.persona as string) || undefined;
   const hangupWhen = (params.hangupWhen as string) || undefined;
   const maxDuration = (params.maxDuration as number) || undefined;
-  const autoHangupAfterFirstOutboundAudioPlayedMs = (params.autoHangupAfterFirstOutboundAudioPlayedMs as number) || undefined;
   const waitForUserBeforeGreeting = params.waitForUserBeforeGreeting === true;
-  const experimentalLocalVad = params.experimentalLocalVad === true;
-  const enableAmd = params.amd !== false;
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -576,9 +563,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   // G1: Set max duration from flag or config default
   const maxDurationSec = maxDuration ?? appConfig.call.max_duration_seconds;
   session.maxDurationMs = maxDurationSec * 1000;
-  session.autoHangupAfterFirstOutboundAudioPlayedMs = autoHangupAfterFirstOutboundAudioPlayedMs;
   session.waitForUserBeforeGreeting = waitForUserBeforeGreeting;
-  session.experimentalLocalVad = experimentalLocalVad;
 
   const sysInstruction = await buildSystemInstruction({
     identity: appConfig.identity,
@@ -609,7 +594,6 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     apiKey,
     geminiConfig: appConfig.gemini,
     systemInstruction: sysInstruction,
-    manualActivityDetection: experimentalLocalVad,
     // During ringing, buffer the greeting audio so it can be flushed as soon as
     // Twilio starts the media stream.
     onAudio: (base64Pcm24k: string) => {
@@ -666,12 +650,10 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       twiml,
       statusCallback: `${webhookBaseUrl}/call-status/${id}`,
       statusCallbackEvent: ["ringing", "answered", "completed"],
-      ...(enableAmd ? {
-        machineDetection: "DetectMessageEnd",
-        asyncAmd: "true",
-        asyncAmdStatusCallback: `${webhookBaseUrl}/call-amd/${id}`,
-        asyncAmdStatusCallbackMethod: "POST",
-      } : {}),
+      machineDetection: "DetectMessageEnd",
+      asyncAmd: "true",
+      asyncAmdStatusCallback: `${webhookBaseUrl}/call-amd/${id}`,
+      asyncAmdStatusCallbackMethod: "POST",
     });
 
     session.callSid = twilioCall.sid;
@@ -685,9 +667,8 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     return {
       id,
       status: "ringing",
-      amd: enableAmd,
+      amd: true,
       wait_for_user_before_greeting: waitForUserBeforeGreeting,
-      experimental_local_vad: experimentalLocalVad,
     };
   } catch (err) {
     session.status = "ended";
@@ -719,6 +700,28 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
     silence_ms: silenceMs,
     ...(summary ? { summary } : {}),
   };
+}
+
+async function handleCallSteer(params: Record<string, unknown>): Promise<object> {
+  const id = params.id as string;
+  const text = params.text as string;
+  const mode = params.mode === "say" ? "say" : "nudge";
+
+  const session = getSession(id);
+  if (!session) {
+    return { error: "session_not_found", message: `No session with id ${id}` };
+  }
+  if (session.status === "ended") {
+    return { error: "call_not_active", message: "Call has already ended" };
+  }
+  if (!session.bridge || !(session.bridge instanceof MediaStreamsBridge)) {
+    return { error: "bridge_not_ready", message: "Call has not been answered yet — no live session to steer" };
+  }
+
+  (session.bridge as MediaStreamsBridge).steerGemini(text, mode);
+  appendEvent(session, { type: "call_steered", ts: isoNow(), mode, text });
+
+  return { id, status: "steered", mode };
 }
 
 function latestCallSummary(session: CallSession): TranscriptEvent | undefined {

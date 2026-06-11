@@ -14,14 +14,14 @@ This repository is a pure utility CLI for outbound calls, SMS/iMessage, Gmail, a
 
 ```bash
 outreach health
-outreach call init|place|listen|status|latency|latency-test|hangup|teardown
+outreach call init|place|listen|steer|status|latency|hangup|teardown
 outreach sms send|history
 outreach email send|history|search
 ```
 
 ## Configuration Model
 
-- `.env` holds provider secrets and default call-from number.
+- `.env` holds provider secrets, your personal caller ID (`PERSONAL_CALLER_ID`), and the Twilio number (`TWILIO_DEFAULT_FROM_NUMBER`, used as caller ID by `call place --from-twilio`/`--call-operator`).
 - Runtime behavior lives at `<data_repo>/outreach/config.yaml`.
 - `outreach.config.dev.yaml` is a local dev escape hatch and may include `data_repo_path`.
 - Resolution order: `OUTREACH_DATA_REPO`, dev config, walk-up for `.agents/workspace.yaml`.
@@ -40,8 +40,8 @@ Important behavior:
 
 - `call init` starts the daemon and tunnel.
 - `call place` pre-connects Gemini before Twilio answers.
-- Default calls proactively greet. `--wait-for-user` is a test mode.
-- `--experimental-local-vad` uses bridge-side endpointing with Gemini `activityStart` / `activityEnd`.
+- Default calls proactively greet. `--wait-for-user` keeps the agent silent until the callee speaks, then relies on Gemini automatic VAD for turn detection.
+- Calls always use Twilio answering-machine detection (async AMD via `/call-amd`).
 - The bridge sends Twilio `mark` messages after outbound turns and defers `end_call` hangup until playback drains.
 
 ## Key Files
@@ -53,7 +53,7 @@ Important behavior:
 | `src/commands/health.ts` | Readiness checks |
 | `src/commands/call/*.ts` | Call commands |
 | `src/daemon/server.ts` | Daemon, IPC, Twilio status/webhook handling |
-| `src/daemon/mediaStreamsBridge.ts` | Realtime audio bridge, local VAD, playback drain |
+| `src/daemon/mediaStreamsBridge.ts` | Realtime audio bridge, playback drain |
 | `src/audio/geminiLive.ts` | Gemini Live wrapper |
 | `src/providers/messages.ts` | Messages.app send and history |
 | `src/providers/gmail.ts` | Gmail API operations |

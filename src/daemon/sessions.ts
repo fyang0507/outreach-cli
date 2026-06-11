@@ -18,9 +18,7 @@ export interface CallSession {
   lastActivityTime: number;
   lastTranscriptTime: number;
   maxDurationMs?: number;
-  autoHangupAfterFirstOutboundAudioPlayedMs?: number;
   waitForUserBeforeGreeting?: boolean;
-  experimentalLocalVad?: boolean;
   streamSid?: string;
   systemInstruction?: string;
   bridge?: unknown; // MediaStreamsBridge reference
@@ -48,7 +46,6 @@ export interface CallSession {
   firstOutboundAudioPlayedAt?: string;
   firstRemoteAudioActivityAt?: string;
   lastRemoteAudioActivityAt?: string;
-  firstRemoteAudioActivityEndedAt?: string;
   firstRemoteSpeechAt?: string;
   firstLocalResponseAt?: string;
   answeredBy?: string; // Twilio AMD result

@@ -23,8 +23,9 @@ Load a channel note only when channel behavior matters, not just to copy command
 outreach health
 
 outreach call init
-outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>]
+outreach call place (--to <number> | --call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>]
 outreach call listen --id <callId>
+outreach call steer --id <callId> --text <note> [--mode nudge|say]
 outreach call status --id <callId>
 outreach call hangup --id <callId>
 outreach call teardown
@@ -38,3 +39,5 @@ outreach email search --query <gmail-query> [--limit <n>]
 ```
 
 All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`.
+
+When reaching a third party, `call place` displays the operator's personal caller ID (`PERSONAL_CALLER_ID`) by default, so the call appears to come from the operator you're acting for. To call the operator themselves — e.g. to escalate something urgent that needs their input — use `--call-operator`, which dials `PERSONAL_CALLER_ID` from the Twilio number (`TWILIO_DEFAULT_FROM_NUMBER`); the Twilio number is required there because a caller ID can't equal the destination. Use `--from-twilio` to show the Twilio number as caller ID for any other destination. The caller ID is never passed explicitly — it's resolved from `.env`.

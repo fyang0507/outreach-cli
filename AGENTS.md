@@ -18,11 +18,10 @@ Top-level:
 Calls:
 
 - `outreach call init`
-- `outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--no-amd] [--wait-for-user] [--experimental-local-vad]`
+- `outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]`
 - `outreach call listen --id <callId>`
 - `outreach call status --id <callId>`
 - `outreach call latency (--id <callId> | --latest)`
-- `outreach call latency-test --to <number> [--from <number>] [--max-duration <seconds>] [--timeout <seconds>] [--hold-after-greeting <seconds>] [--experimental-local-vad] [--dry-run]`
 - `outreach call hangup --id <callId>`
 - `outreach call teardown`
 
@@ -61,7 +60,7 @@ There is no `outreach setup`. Data path resolution is `OUTREACH_DATA_REPO`, then
 | `src/providers/gmail.ts` | Gmail API client |
 | `src/providers/googleAuth.ts` | Gmail OAuth2 token management |
 | `src/daemon/server.ts` | Call daemon, Twilio webhook server, Gemini bridge orchestration |
-| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, playback drain, experimental local VAD |
+| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, playback drain |
 | `src/audio/geminiLive.ts` | Gemini Live API wrapper |
 | `src/audio/transcode.ts` | μ-law/PCM conversion and resampling |
 | `src/audio/systemInstruction.ts` | Voice-agent system instruction builder |
@@ -73,8 +72,7 @@ There is no `outreach setup`. Data path resolution is `OUTREACH_DATA_REPO`, then
 - Calls require `outreach call init`, which starts the local daemon and webhook tunnel.
 - `call place` pre-connects Gemini while Twilio dials.
 - Normal calls proactively greet. Greeting audio can be pre-generated while ringing and is flushed after a short post-stream delay.
-- `--wait-for-user` is for UX tests where the agent stays silent until remote speech.
-- `--experimental-local-vad` disables Gemini automatic activity detection and lets the bridge send `activityStart` / `activityEnd`.
+- `--wait-for-user` keeps the agent silent until the callee speaks first, then relies on Gemini automatic activity detection for turn-taking.
 - The bridge tracks outbound turns with Twilio `mark`; `end_call` hangups are deferred until the active outbound turn drains, preventing clipped goodbyes.
 
 ## Development

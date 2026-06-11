@@ -12,11 +12,10 @@ All command output is JSON.
 outreach health
 
 outreach call init
-outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--no-amd] [--wait-for-user] [--experimental-local-vad]
+outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]
 outreach call listen --id <callId>
 outreach call status --id <callId>
 outreach call latency (--id <callId> | --latest)
-outreach call latency-test --to <number> [--from <number>] [--max-duration <seconds>] [--timeout <seconds>] [--hold-after-greeting <seconds>] [--experimental-local-vad] [--dry-run]
 outreach call hangup --id <callId>
 outreach call teardown
 
@@ -68,9 +67,9 @@ Important call behavior:
 - `call init` starts the daemon and ngrok tunnel.
 - `call place` pre-connects Gemini while Twilio dials.
 - Normal calls proactively greet by default; greeting audio is pre-generated while ringing and flushed after a short post-stream delay.
-- `--wait-for-user` is for controlled turn-taking tests. Pair it with `--experimental-local-vad` to use bridge-side endpointing instead of Gemini automatic VAD.
+- `--wait-for-user` makes the agent stay silent until the callee speaks first, then respond using Gemini automatic VAD for turn detection.
 - `end_call` is deferred until Twilio confirms the active outbound audio turn has played via media `mark`; this prevents clipped goodbyes.
-- `latency` and `latency-test` report pickup-to-audible-greeting for proactive calls and user-speech-to-audible-response for wait-for-user calls.
+- `latency` reports pickup-to-audible-greeting for proactive calls and user-speech-to-audible-response for wait-for-user calls.
 
 SMS is stateless except for optional history reads from the local Messages database. Sending uses Messages.app AppleScript and does not read `chat.db`.
 
@@ -98,7 +97,7 @@ TypeScript is ESM. Local imports use `.js` extensions. All CLI output must go th
 | `src/commands/health.ts` | Readiness checks without scaffolding |
 | `src/commands/call/*.ts` | Call lifecycle, monitoring, latency commands |
 | `src/daemon/server.ts` | Call daemon, Twilio webhooks, IPC handling |
-| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, local VAD, playback drain |
+| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, playback drain |
 | `src/audio/geminiLive.ts` | Gemini Live API wrapper and tool/callback plumbing |
 | `src/audio/transcode.ts` | μ-law/PCM conversion and resampling |
 | `src/commands/sms/*.ts`, `src/providers/messages.ts` | SMS/iMessage send and history |
@@ -114,7 +113,7 @@ npm run build
 node dist/cli.js --help
 node dist/cli.js health
 node dist/cli.js call place --help
-node dist/cli.js call latency-test --help
+node dist/cli.js call latency --help
 node dist/cli.js sms send --help
 node dist/cli.js email send --help
 npm pack --dry-run
@@ -124,7 +123,7 @@ For live call releases, also run:
 
 ```bash
 node dist/cli.js call init
-node dist/cli.js call latency-test --to <verified-test-number>
-node dist/cli.js call place --to <verified-test-number> --objective 'Say a brief goodbye, then end the call.' --max-duration 30 --no-amd
+node dist/cli.js call place --to <verified-test-number> --objective 'Say a brief goodbye, then end the call.' --max-duration 30
+node dist/cli.js call latency --latest
 node dist/cli.js call teardown
 ```

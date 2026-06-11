@@ -79,14 +79,6 @@ export interface HangupTimeoutEvent extends BaseEvent {
   reason: string;
 }
 
-export interface RemoteActivityStartEvent extends BaseEvent {
-  type: "remote_activity_start";
-}
-
-export interface RemoteActivityEndEvent extends BaseEvent {
-  type: "remote_activity_end";
-}
-
 export interface AudioClearedEvent extends BaseEvent {
   type: "audio_cleared";
   reason: string;
@@ -104,6 +96,12 @@ export interface DtmfEvent extends BaseEvent {
   digits: string;
 }
 
+export interface CallSteeredEvent extends BaseEvent {
+  type: "call_steered";
+  mode: "nudge" | "say";
+  text: string;
+}
+
 export interface CallEndedEvent extends BaseEvent {
   type: "call_ended";
   reason: string;
@@ -116,7 +114,6 @@ export interface CallSummaryEvent extends BaseEvent {
   ring_duration_ms?: number;
   answered_by?: string;
   wait_for_user_before_greeting?: boolean;
-  experimental_local_vad?: boolean;
   twilio_call_create_ms?: number;
   gemini_preconnected_before_call?: boolean;
   gemini_preconnect_ms?: number;
@@ -134,11 +131,8 @@ export interface CallSummaryEvent extends BaseEvent {
   stream_to_first_outbound_audio_played_ms?: number;
   answer_to_first_outbound_audio_played_ms?: number;
   first_remote_audio_activity_delay_ms?: number;
-  first_remote_audio_activity_end_delay_ms?: number;
   first_remote_audio_activity_to_first_outbound_audio_ms?: number;
   first_remote_audio_activity_to_first_outbound_audio_played_ms?: number;
-  first_remote_audio_activity_end_to_first_outbound_audio_ms?: number;
-  first_remote_audio_activity_end_to_first_outbound_audio_played_ms?: number;
   last_remote_audio_activity_to_first_outbound_audio_ms?: number;
   last_remote_audio_activity_to_first_outbound_audio_played_ms?: number;
   first_remote_speech_delay_ms?: number;
@@ -159,11 +153,10 @@ export type TranscriptEvent =
   | EndCallRequestedEvent
   | DeferredHangupEvent
   | HangupTimeoutEvent
-  | RemoteActivityStartEvent
-  | RemoteActivityEndEvent
   | AudioClearedEvent
   | SpeechEvent
   | DtmfEvent
+  | CallSteeredEvent
   | CallEndedEvent
   | CallSummaryEvent;
 
