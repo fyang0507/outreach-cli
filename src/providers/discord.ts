@@ -17,6 +17,9 @@ const TEXT_CHANNEL = 0;
 // Discord caps message content at 2000 chars; chunk below that with headroom.
 const MAX_CHUNK = 1900;
 
+// Discord message flag: suppress push/desktop notifications (silent message).
+const SUPPRESS_NOTIFICATIONS = 1 << 12;
+
 // --- Request helper ---
 
 function authHeaders(): Record<string, string> {
@@ -173,13 +176,16 @@ function chunkContent(content: string): string[] {
 export async function postMessage(
   channelId: string,
   content: string,
+  opts: { silent?: boolean } = {},
 ): Promise<{ id: string }[]> {
   const chunks = chunkContent(content);
   const ids: { id: string }[] = [];
   for (const chunk of chunks) {
+    const body: Record<string, unknown> = { content: chunk };
+    if (opts.silent) body.flags = SUPPRESS_NOTIFICATIONS;
     const msg = (await discordFetch(`/channels/${channelId}/messages`, {
       method: "POST",
-      body: { content: chunk },
+      body,
     })) as { id: string };
     ids.push({ id: msg.id });
   }

@@ -38,7 +38,7 @@ outreach email send --subject <text> --body <text> (--to <address> | --reply-to-
 outreach email history (--address <email> | --thread-id <threadId>) [--limit <n>]
 outreach email search --query <gmail-query> [--limit <n>]
 
-outreach discord post --body <text> [--channel <id|name>]
+outreach discord post --body <text> [--channel <id|name>] [--silent]
 outreach discord channels list
 outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 ```

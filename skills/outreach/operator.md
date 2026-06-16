@@ -30,6 +30,8 @@ If the answer to the heuristic is "yes, but it can wait," prefer Discord and kee
 
 Single-quote `--body` and `--name` so the shell doesn't expand `$`, backticks, or `!`.
 
+Add `--silent` for low-priority updates (digests, routine progress) that should land in the channel without pinging the recipient with a push/desktop notification.
+
 ## Boundary reminder
 
 `discord post` is **fire-and-forget**. It does not watch for replies or reactions — nothing in this CLI does. If you need a response, that's the call path, not Discord. On infrastructure failure (Discord unreachable, bad token), log it and move on; do not invent hidden commands or poll for a human to react.
