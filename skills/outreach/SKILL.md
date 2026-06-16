@@ -1,6 +1,6 @@
 ---
 name: outreach
-description: Utility interface for outbound calls, SMS/iMessage, Gmail, and per-channel history/search. Campaign/process management is out of scope for this repo.
+description: Utility interface for outbound calls, SMS/iMessage, Gmail, and per-channel history/search. Use when reaching out, including the operator themselves.
 ---
 
 Use `outreach` when an agent already has the recipient and the message or call objective. Run `outreach health` first when channel readiness is unknown.
@@ -12,6 +12,7 @@ Load a channel note only when channel behavior matters, not just to copy command
 - [call.md](./call.md) - voice-agent constraints, objective writing, and monitoring judgment
 - [sms.md](./sms.md) - iMessage-first behavior, send semantics, and Messages history caveats
 - [email.md](./email.md) - Gmail reply threading, search-vs-history choice, and auth caveats
+- [operator.md](./operator.md) - reaching the operator when headless: the call vs. Discord decision rule
 
 ## Boundary
 
@@ -36,6 +37,10 @@ outreach sms history --phone <number> [--limit <n>]
 outreach email send --subject <text> --body <text> (--to <address> | --reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]
 outreach email history (--address <email> | --thread-id <threadId>) [--limit <n>]
 outreach email search --query <gmail-query> [--limit <n>]
+
+outreach discord post --body <text> [--channel <id|name>]
+outreach discord channels list
+outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 ```
 
 All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`.

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { loadAppConfig } from "../appConfig.js";
 import { readRuntime, checkDaemonHealth, isProcessRunning } from "../runtime.js";
 import { checkGmailAuth } from "../providers/gmail.js";
+import { checkDiscordAuth } from "../providers/discord.js";
 import { outputJson } from "../output.js";
 import { SUCCESS } from "../exitCodes.js";
 
@@ -142,6 +143,12 @@ async function checkSms(): Promise<Record<string, unknown>> {
   };
 }
 
+// ---- Discord channel checks ----
+
+async function checkDiscord(): Promise<Record<string, unknown>> {
+  return checkDiscordAuth();
+}
+
 // ---- Health command ----
 
 export function registerHealthCommand(program: Command): void {
@@ -149,11 +156,12 @@ export function registerHealthCommand(program: Command): void {
     .command("health")
     .description("Check readiness of all channels")
     .action(async () => {
-      const [dataRepo, call, sms, email] = await Promise.all([
+      const [dataRepo, call, sms, email, discord] = await Promise.all([
         checkDataRepo(),
         checkCall(),
         checkSms(),
         checkGmailAuth(),
+        checkDiscord(),
       ]);
 
       outputJson({
@@ -161,6 +169,7 @@ export function registerHealthCommand(program: Command): void {
         call,
         sms,
         email,
+        discord,
       });
       process.exit(SUCCESS);
     });
