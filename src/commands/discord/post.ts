@@ -10,18 +10,25 @@ export function registerPostCommand(parent: Command): void {
     .description("Post a message to a Discord channel")
     .requiredOption("--body <text>", "Message body (single-quote in the shell)")
     .option("--channel <id|name>", "Target channel id or name")
+    .option(
+      "--silent",
+      "Suppress push/desktop notifications (silent message)",
+    )
     .action(
-      async (opts: { body: string; channel?: string }) => {
+      async (opts: { body: string; channel?: string; silent?: boolean }) => {
         const target =
           opts.channel ?? (outreachConfig.DISCORD_DEFAULT_CHANNEL || "#general");
 
         try {
           const channel = await resolveChannel(target);
-          const messages = await postMessage(channel.id, opts.body);
+          const messages = await postMessage(channel.id, opts.body, {
+            silent: opts.silent,
+          });
           outputJson({
             channel: { id: channel.id, name: channel.name },
             messages: messages.map((m) => m.id),
             chunks: messages.length,
+            silent: Boolean(opts.silent),
           });
           process.exit(SUCCESS);
         } catch (err) {
