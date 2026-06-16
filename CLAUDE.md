@@ -17,6 +17,8 @@ outreach health
 outreach call init|place|listen|steer|status|latency|hangup|teardown
 outreach sms send|history
 outreach email send|history|search
+outreach discord post
+outreach discord channels list|create
 ```
 
 ## Configuration Model
@@ -57,6 +59,7 @@ Important behavior:
 | `src/audio/geminiLive.ts` | Gemini Live wrapper |
 | `src/providers/messages.ts` | Messages.app send and history |
 | `src/providers/gmail.ts` | Gmail API operations |
+| `src/providers/discord.ts` | Discord bot REST: channel list/create, message post |
 | `src/logs/sessionLog.ts` | Transcript read/write and latency event types |
 | `skills/outreach/*.md` | Sharable agent-facing docs |
 

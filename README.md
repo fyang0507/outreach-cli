@@ -25,6 +25,10 @@ outreach sms history --phone <number> [--limit <n>]
 outreach email send --subject <text> --body <text> (--to <address> | --reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]
 outreach email history (--address <email> | --thread-id <threadId>) [--limit <n>]
 outreach email search --query <gmail-query> [--limit <n>]
+
+outreach discord post --body <text> [--channel <id|name>]
+outreach discord channels list
+outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 ```
 
 There is no `outreach setup` command. Create config/workspace files outside this CLI, or point the CLI at an existing workspace.
@@ -40,7 +44,23 @@ OUTREACH_DEFAULT_FROM=+15551234567
 GOOGLE_GENERATIVE_AI_API_KEY=...
 GMAIL_CLIENT_ID=...
 GMAIL_CLIENT_SECRET=...
+DISCORD_BOT_TOKEN=...
+DISCORD_GUILD_ID=...
+DISCORD_DEFAULT_CHANNEL=General
 ```
+
+### Discord bot setup
+
+`outreach discord` posts async operator updates via a Discord bot. One-time manual setup:
+
+1. Create an application and a bot at <https://discord.com/developers>.
+2. No privileged intents are required (the CLI uses REST only).
+3. Generate an OAuth2 invite URL with `scope=bot` and permissions **View Channels (1024)**, **Send Messages (2048)**, and **Manage Channels (16)**; open it to invite the bot to your server.
+4. Copy the bot token into `DISCORD_BOT_TOKEN`.
+5. With Developer Mode on, right-click the server -> **Copy Server ID** into `DISCORD_GUILD_ID`.
+6. Optionally set `DISCORD_DEFAULT_CHANNEL` (channel name or id used when `discord post` omits `--channel`; defaults to `General`).
+
+`outreach health` reports the `discord` channel state once these are set.
 
 Behavior config is loaded from `<data_repo>/outreach/config.yaml`; for dev-only use, `outreach.config.dev.yaml` next to the CLI may carry the same config plus `data_repo_path`.
 
@@ -102,6 +122,7 @@ TypeScript is ESM. Local imports use `.js` extensions. All CLI output must go th
 | `src/audio/transcode.ts` | μ-law/PCM conversion and resampling |
 | `src/commands/sms/*.ts`, `src/providers/messages.ts` | SMS/iMessage send and history |
 | `src/commands/email/*.ts`, `src/providers/gmail.ts` | Gmail send/history/search |
+| `src/commands/discord/*.ts`, `src/providers/discord.ts` | Discord post and channel list/create |
 | `skills/outreach/*.md` | Agent-facing sharable utility docs |
 
 ## Release Checklist

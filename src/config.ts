@@ -19,6 +19,9 @@ export interface OutreachConfig {
   GOOGLE_GENERATIVE_AI_API_KEY: string;
   GMAIL_CLIENT_ID: string;
   GMAIL_CLIENT_SECRET: string;
+  DISCORD_BOT_TOKEN: string;
+  DISCORD_GUILD_ID: string;
+  DISCORD_DEFAULT_CHANNEL: string;
 }
 
 export const outreachConfig: OutreachConfig = {
@@ -30,4 +33,7 @@ export const outreachConfig: OutreachConfig = {
   GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? "",
   GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID ?? "",
   GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET ?? "",
+  DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN ?? "",
+  DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID ?? "",
+  DISCORD_DEFAULT_CHANNEL: process.env.DISCORD_DEFAULT_CHANNEL ?? "",
 };
