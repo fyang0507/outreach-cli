@@ -16,7 +16,7 @@
     "outreach.config.dev.yaml.example"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc && node scripts/sync-skills.js"
+    "build": "rm -rf dist && tsc && node scripts/install-agent-skill-symlinks.js"
   },
   "dependencies": {
     "@google/genai": "^1.48.0",

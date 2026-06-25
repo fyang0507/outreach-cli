@@ -2,8 +2,8 @@
  * Post-build hook:
  *   1. `chmod +x dist/cli.js` so the `outreach` bin stays executable even on
  *      filesystems that don't preserve the exec bit (e.g. Google Drive FUSE).
- *   2. Best-effort link of skills/outreach/ to
- *      <data_repo>/.agents/skills/outreach when a workspace is configured.
+ *   2. Best-effort installation of <data_repo>/.agents/skills/outreach as an
+ *      agent skill symlink to skills/outreach/ when a workspace is configured.
  *
  * Resolves the data repo via the same helper the CLI uses (dist/dataRepo.js)
  * so env var, dev config, and walk-up precedence all match runtime.
@@ -22,7 +22,7 @@ try {
   const source = resolve("skills/outreach");
   rmSync(dest, { recursive: true, force: true });
   symlinkSync(source, dest, "dir");
-  console.log(`Skills linked -> ${dest} -> ${source}`);
+  console.log(`Agent skill symlink installed -> ${dest} -> ${source}`);
 } catch (err) {
-  console.log(`Skills sync skipped: ${(err).message}`);
+  console.log(`Agent skill symlink skipped: ${(err).message}`);
 }

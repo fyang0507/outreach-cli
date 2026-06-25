@@ -84,6 +84,6 @@ node dist/cli.js --help
 node dist/cli.js health
 ```
 
-`npm run build` compiles TypeScript and best-effort syncs `skills/outreach/` into the configured agent workspace. If no data workspace is configured, skill sync is skipped.
+`npm run build` compiles TypeScript, marks `dist/cli.js` executable, and best-effort installs `.agents/skills/outreach` as an agent skill symlink to `skills/outreach/` in the configured agent workspace. If no data workspace is configured, symlink installation is skipped.
 
 TypeScript is ESM. Local imports use `.js` extensions. All CLI output must go through `outputJson()` / `outputError()`.
