@@ -32,9 +32,29 @@ Single-quote `--body` and `--name` so the shell doesn't expand `$`, backticks, o
 
 Add `--silent` for low-priority updates (digests, routine progress) that should land in the channel without pinging the recipient with a push/desktop notification.
 
+## Reading a channel
+
+`outreach discord history --channel <id|name>` reads recent messages back in
+chronological order, surfacing each message's id, author (`bot: true` only for the agent's
+own posts), timestamp, text content, attachments, and reply reference. Empty fields are
+omitted to stay token-cheap. It is a **one-shot, stateless fetch** — it does not poll,
+watch, or remember a cursor. To read only what's new, pass `--after <message_id>` (the id
+of the last message you processed); `--since <iso>` is a coarser alternative. The caller
+owns the cursor. `--count` returns just the count + `newest_id` for cheap "anything new?"
+triage.
+
+```bash
+outreach discord history --channel intake --after 1399999999999999999 --limit 100
+```
+
+This needs the bot's Message Content intent + Read Message History permission (see
+`.env.example`); without them, `content` comes back empty. **Attachment URLs are signed and
+expire (~24h)** — download/transcribe/store the bytes at read time, never persist the URL
+for later. See [discord.md](./discord.md) for the full set of read/intake caveats.
+
 ## Boundary reminder
 
-`discord post` is **fire-and-forget**. It does not watch for replies or reactions — nothing in this CLI does. If you need a response, that's the call path, not Discord. On infrastructure failure (Discord unreachable, bad token), log it and move on; do not invent hidden commands or poll for a human to react.
+`discord post` is **fire-and-forget**, and `discord history` is a **one-shot read** — neither watches for replies or reactions, and nothing in this CLI schedules, polls, or runs a digest loop. Any cadence/digestion lives outside this CLI. If you need an answer before your next step, that's the call path, not Discord. On infrastructure failure (Discord unreachable, bad token), log it and move on; do not invent hidden commands or poll for a human to react.
 
 ## Worked examples
 

@@ -9,10 +9,11 @@ Use `outreach` when an agent already has the recipient and the message or call o
 
 Load a channel note only when channel behavior matters, not just to copy command syntax:
 
+- [operator.md](./operator.md) - reaching the operator when headless: the call vs. Discord decision rule
 - [call.md](./call.md) - voice-agent constraints, objective writing, and monitoring judgment
 - [sms.md](./sms.md) - iMessage-first behavior, send semantics, and Messages history caveats
 - [email.md](./email.md) - Gmail reply threading, search-vs-history choice, and auth caveats
-- [operator.md](./operator.md) - reaching the operator when headless: the call vs. Discord decision rule
+- [discord.md](./discord.md) - Discord read and operational caveats
 
 ## Boundary
 
@@ -41,6 +42,7 @@ outreach email search --query <gmail-query> [--limit <n>]
 outreach discord post --body <text> [--channel <id|name>] [--silent]
 outreach discord channels list
 outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
+outreach discord history --channel <id|name> [--limit <n>] [--after <messageId>] [--before <messageId>] [--since <iso>] [--count]
 ```
 
 All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`. Gotcha: if the whole command is itself wrapped as `zsh -lc '...'`, do not put apostrophes or contractions inside single-quoted inner arguments. Use double-quoted inner values for long free-text call objectives/personas/hangup conditions, or call `outreach` directly when PATH is already available.
