@@ -9,10 +9,29 @@ export interface DiscordChannel {
   parent_id: string | null;
 }
 
+export interface DiscordAttachment {
+  url: string;
+  filename: string;
+  content_type: string | null;
+  size: number;
+}
+
+export interface DiscordMessage {
+  id: string;
+  content: string;
+  author: { id: string; username: string; bot: boolean };
+  timestamp: string;
+  attachments: DiscordAttachment[];
+  referenced_message_id: string | null;
+}
+
 const API_BASE = "https://discord.com/api/v10";
 
 // Discord text channel type.
 const TEXT_CHANNEL = 0;
+
+// Discord caps GET .../messages at 100 per request.
+const MAX_PAGE = 100;
 
 // Discord caps message content at 2000 chars; chunk below that with headroom.
 const MAX_CHUNK = 1900;
@@ -192,6 +211,113 @@ export async function postMessage(
   return ids;
 }
 
+// --- Reading messages ---
+
+interface RawDiscordMessage {
+  id: string;
+  content: string;
+  author: { id: string; username: string; bot?: boolean };
+  timestamp: string;
+  attachments: {
+    url: string;
+    filename: string;
+    content_type?: string | null;
+    size: number;
+  }[];
+  message_reference?: { message_id?: string } | null;
+}
+
+function mapMessage(raw: RawDiscordMessage): DiscordMessage {
+  return {
+    id: raw.id,
+    content: raw.content,
+    author: {
+      id: raw.author.id,
+      username: raw.author.username,
+      bot: Boolean(raw.author.bot),
+    },
+    timestamp: raw.timestamp,
+    attachments: (raw.attachments ?? []).map((a) => ({
+      url: a.url,
+      filename: a.filename,
+      content_type: a.content_type ?? null,
+      size: a.size,
+    })),
+    referenced_message_id: raw.message_reference?.message_id ?? null,
+  };
+}
+
+async function fetchPage(
+  channelId: string,
+  params: URLSearchParams,
+): Promise<RawDiscordMessage[]> {
+  return (await discordFetch(
+    `/channels/${channelId}/messages?${params.toString()}`,
+  )) as RawDiscordMessage[];
+}
+
+/**
+ * Fetch messages from a channel, returned in chronological order
+ * (oldest -> newest). Pages internally up to `limit` since Discord caps each
+ * request at 100, and always returns messages newest-first.
+ *
+ * Cursors: pass `after` (a message id / snowflake) to fetch only messages
+ * newer than it — the digest "everything since my last read" path. `before`
+ * fetches messages older than it. Discord treats `before`/`after` as mutually
+ * exclusive; when both are given, `after` drives paging and `before` is
+ * applied client-side as an upper bound.
+ *
+ * NOTE: `content` and `attachments` come back empty unless the bot has the
+ * Message Content privileged intent enabled and Read Message History
+ * permission on the channel.
+ */
+export async function fetchMessages(
+  channelId: string,
+  opts: { limit?: number; after?: string; before?: string } = {},
+): Promise<DiscordMessage[]> {
+  const limit = Math.max(1, opts.limit ?? 50);
+  const collected: RawDiscordMessage[] = [];
+
+  if (opts.after) {
+    // Forward pagination. With `after`, Discord returns the oldest messages
+    // above the cursor (descending within the page), so we advance by the
+    // NEWEST id seen — page[0] — until we reach `limit` or run dry.
+    let after = opts.after;
+    while (collected.length < limit) {
+      const want = Math.min(MAX_PAGE, limit - collected.length);
+      const params = new URLSearchParams({
+        limit: String(want),
+        after,
+      });
+      const page = await fetchPage(channelId, params);
+      const bounded = opts.before
+        ? page.filter((m) => m.id < opts.before!)
+        : page;
+      collected.push(...bounded);
+      if (page.length < want || bounded.length < page.length) break;
+      after = page[0]!.id;
+    }
+  } else {
+    // Backward pagination from most-recent, advancing by the OLDEST id seen.
+    let before = opts.before;
+    while (collected.length < limit) {
+      const want = Math.min(MAX_PAGE, limit - collected.length);
+      const params = new URLSearchParams({ limit: String(want) });
+      if (before) params.set("before", before);
+      const page = await fetchPage(channelId, params);
+      if (page.length === 0) break;
+      collected.push(...page);
+      if (page.length < want) break;
+      before = page[page.length - 1]!.id;
+    }
+  }
+
+  // Discord delivers newest-first; return chronological for digestion.
+  return collected
+    .map(mapMessage)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 // --- Health ---
 
 export async function checkDiscordAuth(): Promise<Record<string, unknown>> {
@@ -220,7 +346,7 @@ export async function checkDiscordAuth(): Promise<Record<string, unknown>> {
     if (/Discord 40[34]:/.test(message)) {
       return {
         ok: false,
-        hint: "Bot not in guild or missing View Channels — invite the bot to DISCORD_GUILD_ID with View Channels permission",
+        hint: "Bot not in guild or missing permissions — invite the bot to DISCORD_GUILD_ID with View Channels and Read Message History (the latter, plus the Message Content intent, is required for `discord history`)",
       };
     }
     return { ok: false, hint: message };

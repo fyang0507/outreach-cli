@@ -16,13 +16,14 @@ import { registerHistoryCommand as registerEmailHistoryCommand } from "./command
 import { registerSearchCommand as registerEmailSearchCommand } from "./commands/email/search.js";
 import { registerPostCommand as registerDiscordPostCommand } from "./commands/discord/post.js";
 import { registerChannelsCommand as registerDiscordChannelsCommand } from "./commands/discord/channels.js";
+import { registerHistoryCommand as registerDiscordHistoryCommand } from "./commands/discord/history.js";
 
 const program = new Command();
 
 program
   .name("outreach")
   .description("Outreach utility CLI — calls, SMS/iMessage, email, Discord")
-  .version("4.1.0");
+  .version("4.3.0");
 
 // --- top-level commands ---
 registerHealthCommand(program);
@@ -42,6 +43,7 @@ registerEmailSearchCommand(email);
 const discord = program.command("discord").description("Discord operator updates");
 registerDiscordPostCommand(discord);
 registerDiscordChannelsCommand(discord);
+registerDiscordHistoryCommand(discord);
 
 // --- call subcommand group ---
 const call = program.command("call").description("Voice call commands");
