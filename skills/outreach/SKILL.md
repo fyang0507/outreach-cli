@@ -43,6 +43,6 @@ outreach discord channels list
 outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 ```
 
-All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`.
+All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`. Gotcha: if the whole command is itself wrapped as `zsh -lc '...'`, do not put apostrophes or contractions inside single-quoted inner arguments. Use double-quoted inner values for long free-text call objectives/personas/hangup conditions, or call `outreach` directly when PATH is already available.
 
 When reaching a third party, `call place` displays the operator's personal caller ID (`PERSONAL_CALLER_ID`) by default, so the call appears to come from the operator you're acting for. To call the operator themselves — e.g. to escalate something urgent that needs their input — use `--call-operator`, which dials `PERSONAL_CALLER_ID` from the Twilio number (`TWILIO_DEFAULT_FROM_NUMBER`); the Twilio number is required there because a caller ID can't equal the destination. Use `--from-twilio` to show the Twilio number as caller ID for any other destination. The caller ID is never passed explicitly — it's resolved from `.env`.
