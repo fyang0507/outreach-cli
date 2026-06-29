@@ -1,13 +1,14 @@
-# Discord Channel
+# Discord Channel Manual
 
-Use this note for Discord **read / intake** behavior, not command syntax. For *posting* to
-Discord and the call-vs-Discord decision when reaching the operator, see
-[operator.md](./operator.md).
+Use this as the companion to `outreach discord --help`. It captures durable
+read semantics and intake gotchas; command flags and examples should stay in the CLI help.
+For *posting* to Discord and the call-vs-Discord decision when reaching the operator, see
+[operator.md](./operator.md). For scheduled capture processing, use the local
+`discord-intake` skill where it is installed.
 
-`outreach discord history` reads a channel's messages back — the async-intake half of the
-channel, where a human dumps scattered thoughts and a scheduled agent later digests them.
-It is a **stateless, one-shot fetch**: no polling, no watching, no stored cursor. The
-caller owns the cursor and the digest; the CLI only transports.
+`outreach discord history` reads a channel's messages back. It is a stateless, one-shot
+fetch: no polling, no watching, no stored cursor. The caller owns any cursor, digest, and
+side effects; the CLI only transports.
 
 ## Output Shape
 
@@ -20,8 +21,8 @@ Lean by default — empty fields are omitted to stay token-cheap:
   "newest_id": "1519790632749629450",
   "has_more": false,
   "messages": [
-    { "id": "...", "ts": "2026-06-25T19:45:23.192000+00:00", "author": "freddie0104", "content": "你好啊" },
-    { "id": "...", "ts": "...", "author": "freddie0104",
+    { "id": "...", "ts": "2026-06-25T19:45:23.192000+00:00", "author": "operator", "content": "你好啊" },
+    { "id": "...", "ts": "...", "author": "operator",
       "attachments": [ { "url": "https://cdn.discordapp.com/...", "name": "IMG.png", "size": 2867126, "type": "image/png" } ] }
   ]
 }
@@ -66,23 +67,8 @@ intake channel, filter `bot` out before digesting. Better: route digests, questi
 syntheses to a **separate** channel and keep the dump channel human-only — agent chatter in
 the capture surface re-introduces the friction the async flow exists to remove.
 
-## Triage Before Digesting
-
-Don't wake a digest agent on every tick. Gate it on "anything new?" using the exit code of
-[`scripts/discord-triage.sh`](./scripts/discord-triage.sh):
-
-```bash
-if scripts/discord-triage.sh capture-this ~/.local/state/outreach/capture-cursor; then
-    # exit 0 → new intake present; launch the async digest job
-    claude -p "$(cat digest-this-channel.md)"
-fi
-# exit 1 → nothing new; no-op
-```
-
-It checks for newer messages without pulling bodies (`--count`) and does **not** advance the
-cursor — the digest job does that when it finishes.
-
 ## Boundary
 
 This CLI does not schedule, watch, or digest. Reading is one-shot and stateless. Any cadence,
-cursor persistence, and digestion live outside, in the scheduler + digest skill.
+cursor persistence, and digestion live outside, in the scheduler plus the Discord intake
+skill.
