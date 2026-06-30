@@ -1,0 +1,4 @@
+interface:
+  display_name: "Contact Operator"
+  short_description: "Escalate to Fred from headless runs"
+  default_prompt: "Use $contact-operator to decide whether to call Fred or post a Discord update from a headless run."

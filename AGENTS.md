@@ -66,6 +66,7 @@ There is no `outreach setup`. Data path resolution is `OUTREACH_DATA_REPO`, then
 | `src/audio/systemInstruction.ts` | Voice-agent system instruction builder |
 | `src/logs/sessionLog.ts` | Call transcript JSONL writer/reader |
 | `skills/outreach/*.md` | Agent-facing sharable utility docs |
+| `skills/contact-operator/*.md` | Agent-facing proactive operator contact policy |
 
 ## Call Architecture Notes
 
@@ -84,6 +85,6 @@ node dist/cli.js --help
 node dist/cli.js health
 ```
 
-`npm run build` compiles TypeScript, marks `dist/cli.js` executable, and best-effort installs `.agents/skills/outreach` as an agent skill symlink to `skills/outreach/` in the configured agent workspace. If no data workspace is configured, symlink installation is skipped.
+`npm run build` compiles TypeScript, marks `dist/cli.js` executable, and best-effort installs shipped skills as symlinks under `.agents/skills/` in the configured agent workspace. If no data workspace is configured, symlink installation is skipped.
 
 TypeScript is ESM. Local imports use `.js` extensions. All CLI output must go through `outputJson()` / `outputError()`.

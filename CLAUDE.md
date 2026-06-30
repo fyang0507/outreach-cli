@@ -63,6 +63,7 @@ Important behavior:
 | `src/providers/discord.ts` | Discord bot REST: channel list/create, message post, channel history read |
 | `src/logs/sessionLog.ts` | Transcript read/write and latency event types |
 | `skills/outreach/*.md` | Sharable agent-facing docs |
+| `skills/contact-operator/*.md` | Sharable proactive operator contact policy |
 
 ## Development Checks
 
@@ -76,4 +77,4 @@ node dist/cli.js sms send --help
 node dist/cli.js email send --help
 ```
 
-`npm run build` compiles TypeScript and best-effort syncs `skills/outreach/` to the configured agent workspace. It should still succeed when no data workspace is configured.
+`npm run build` compiles TypeScript and best-effort syncs shipped skills to the configured agent workspace. It should still succeed when no data workspace is configured.

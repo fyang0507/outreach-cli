@@ -1,6 +1,6 @@
 ---
 name: outreach
-description: Utility interface for outbound calls, SMS/iMessage, Gmail, and per-channel history/search. Use when reaching out, including the operator themselves.
+description: Utility interface for outbound calls, SMS/iMessage, Gmail, Discord posting, and per-channel history/search. Use when an agent already knows the recipient and message or call objective.
 ---
 
 Use `outreach` when an agent already has the recipient and the message or call objective. Run `outreach health` first when channel readiness is unknown.
@@ -9,7 +9,6 @@ Use `outreach` when an agent already has the recipient and the message or call o
 
 Load a channel note only when channel behavior matters, not just to copy command syntax:
 
-- [operator.md](./operator.md) - reaching the operator when headless: the call vs. Discord decision rule
 - [call.md](./call.md) - voice-agent constraints, objective writing, and monitoring judgment
 - [sms.md](./sms.md) - iMessage-first behavior, send semantics, and Messages history caveats
 - [email.md](./email.md) - Gmail reply threading, search-vs-history choice, and auth caveats
