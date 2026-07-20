@@ -6,11 +6,13 @@ Use this note for Messages.app behavior, not command syntax.
 
 Do not choose between iMessage and SMS unless the user explicitly asks for a specific service. Omit `--service` for normal sends.
 
-The system auto-resolves the transport and prefers iMessage. Use `--service iMessage` or `--service SMS` only to honor an explicit user instruction.
+The CLI auto-resolves transport from Messages history: recent inbound iMessage wins; otherwise it preserves the most recent successful outbound or inbound service; unknown recipients default to SMS. Use `--service iMessage` or `--service SMS` only to honor an explicit user instruction.
 
 ## Send Semantics
 
-Send uses Messages.app through AppleScript and returns after Messages accepts the message for sending. A JSON `status: "submitted"` means the local app accepted the send, not that the recipient read it or that carrier/iMessage delivery is proven.
+Send uses Messages.app through AppleScript and checks the local Messages database before returning. SMS `status: "sent"` means the phone relay accepted the message; iMessage `status: "delivered"` reflects the Messages delivery flag. Neither proves that the recipient read it.
+
+If an iMessage attempt fails, the CLI briefly watches for Messages.app's automatic SMS fallback. A successful fallback returns `status: "sent"` with `service: "SMS"`, preventing an unnecessary duplicate retry.
 
 If send fails with an SMS-service error, Text Message Forwarding may be disabled on the paired iPhone. If it fails with an AppleScript permission error, the terminal or Codex app may need Accessibility access.
 

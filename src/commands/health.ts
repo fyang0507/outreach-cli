@@ -138,7 +138,11 @@ async function checkSms(): Promise<Record<string, unknown>> {
 
   return {
     ok: osascriptAvailable,
-    send: { ok: true, service_default: "iMessage" },
+    send: {
+      ok: true,
+      service_default: "auto",
+      auto_route: history.ok === true,
+    },
     history,
   };
 }

@@ -91,7 +91,7 @@ Important call behavior:
 - `end_call` is deferred until Twilio confirms the active outbound audio turn has played via media `mark`; this prevents clipped goodbyes.
 - `latency` reports pickup-to-audible-greeting for proactive calls and user-speech-to-audible-response for wait-for-user calls.
 
-SMS is stateless except for optional history reads from the local Messages database. Sending uses Messages.app AppleScript and does not read `chat.db`.
+SMS is stateless except for Messages history and send-outcome reads. With no explicit `--service`, the CLI selects iMessage or SMS from recent history, defaulting unknown recipients to SMS. Sending uses Messages.app AppleScript and checks `chat.db` for success, failure, or automatic SMS fallback before returning.
 
 Email is stateless apart from Gmail OAuth tokens stored under the configured data repo. Replies with `--reply-to-id` derive Gmail threading headers and reply-all recipients.
 

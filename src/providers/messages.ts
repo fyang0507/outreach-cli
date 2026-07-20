@@ -337,19 +337,95 @@ export function readMessageHistory(
 
 export type Service = "iMessage" | "SMS";
 
+/**
+ * Pick the service from recent history with this phone.
+ *
+ * Prefer iMessage when the contact has recently reached us over iMessage.
+ * Otherwise preserve the last successful outbound or latest inbound service.
+ * Unknown contacts default to SMS.
+ */
+export function pickService(
+  phone: string,
+  dbPathOverride?: string,
+): Service {
+  const normalized = normalizePhone(phone);
+  const dbPath =
+    dbPathOverride ?? join(homedir(), "Library", "Messages", "chat.db");
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const recentInbound = db
+      .prepare(
+        `SELECT m.service FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE h.id = ? AND m.is_from_me = 0
+         ORDER BY m.date DESC
+         LIMIT 5`,
+      )
+      .all(normalized) as Array<{ service: string | null }>;
+
+    if (
+      recentInbound.some(
+        (row) => row.service && normalizeService(row.service) === "iMessage",
+      )
+    ) {
+      return "iMessage";
+    }
+
+    const lastSuccessfulOutbound = db
+      .prepare(
+        `SELECT m.service FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE h.id = ? AND m.is_from_me = 1
+           AND m.is_sent = 1 AND m.error = 0
+         ORDER BY m.date DESC
+         LIMIT 1`,
+      )
+      .get(normalized) as { service: string | null } | undefined;
+
+    if (lastSuccessfulOutbound?.service) {
+      return normalizeService(lastSuccessfulOutbound.service);
+    }
+
+    if (recentInbound[0]?.service) {
+      return normalizeService(recentInbound[0].service);
+    }
+
+    return "SMS";
+  } finally {
+    db.close();
+  }
+}
+
+function normalizeService(raw: string): Service {
+  return raw.toLowerCase() === "sms" ? "SMS" : "iMessage";
+}
+
 // --- Send message (iMessage or SMS) ---
 
+export type SendStatus = "sent" | "delivered" | "failed" | "timeout";
+
 export interface SendResult {
-  status: "submitted";
+  status: SendStatus;
   service: Service;
+  error_code?: number;
+  message_date?: string;
 }
 
 export interface SendOptions {
   service?: Service;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  fallbackGraceMs?: number;
+  dbPath?: string;
 }
 
 /**
- * Send a message via Messages.app and return once Messages.app accepts it.
+ * Send a message via Messages.app and probe chat.db for its outcome.
+ *
+ * A failed iMessage can be followed by an automatic Messages.app SMS fallback.
+ * Keep watching briefly after a failure so callers do not retry a message that
+ * the system is already delivering over SMS.
  */
 export function sendIMessage(
   to: string,
@@ -358,6 +434,12 @@ export function sendIMessage(
 ): SendResult {
   const normalized = normalizePhone(to);
   const service = options.service ?? "iMessage";
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 750;
+  const fallbackGraceMs = options.fallbackGraceMs ?? 60_000;
+  const dbPath =
+    options.dbPath ?? join(homedir(), "Library", "Messages", "chat.db");
+  const preMaxRowId = readMaxMessageRowId(dbPath);
 
   // Run AppleScript send with the chosen service.
   const serviceClause =
@@ -393,5 +475,122 @@ end run`;
     throw new Error(stderr.trim() || raw);
   }
 
-  return { status: "submitted", service };
+  const deadline = Date.now() + timeoutMs;
+  let failureObservedAt: number | null = null;
+
+  while (Date.now() < deadline) {
+    const rows = readOutboundRowsAfter(dbPath, preMaxRowId, normalized);
+    const success = classifySendOutcome(rows, service, false);
+    if (success) return success;
+
+    if (rows.some((row) => row.error !== 0)) {
+      failureObservedAt ??= Date.now();
+      if (Date.now() - failureObservedAt >= fallbackGraceMs) {
+        return classifySendOutcome(rows, service, true)!;
+      }
+    }
+
+    sleepSync(pollIntervalMs);
+  }
+
+  const finalRows = readOutboundRowsAfter(dbPath, preMaxRowId, normalized);
+  return (
+    classifySendOutcome(finalRows, service, true) ?? {
+      status: "timeout",
+      service,
+    }
+  );
+}
+
+export interface OutboundStatusRow {
+  ROWID: number;
+  is_delivered: number;
+  is_sent: number;
+  error: number;
+  service: string | null;
+  date: number;
+}
+
+/**
+ * Classify rows created by one send attempt. Successful fallback rows win over
+ * earlier failures. Failures are optional so the caller can allow fallback time.
+ */
+export function classifySendOutcome(
+  rows: readonly OutboundStatusRow[],
+  requestedService: Service,
+  includeFailure: boolean,
+): SendResult | null {
+  for (const row of rows) {
+    const actualService = row.service
+      ? normalizeService(row.service)
+      : requestedService;
+    const succeeded =
+      row.error === 0 &&
+      (actualService === "SMS"
+        ? row.is_sent === 1
+        : row.is_delivered === 1);
+
+    if (succeeded) {
+      return {
+        status: actualService === "SMS" ? "sent" : "delivered",
+        service: actualService,
+        message_date: coreDataToIso(row.date),
+      };
+    }
+  }
+
+  if (includeFailure) {
+    const failed = rows.find((row) => row.error !== 0);
+    if (failed) {
+      return {
+        status: "failed",
+        service: failed.service
+          ? normalizeService(failed.service)
+          : requestedService,
+        error_code: failed.error,
+        message_date: coreDataToIso(failed.date),
+      };
+    }
+  }
+
+  return null;
+}
+
+function readMaxMessageRowId(dbPath: string): number {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .prepare(`SELECT COALESCE(MAX(ROWID), 0) AS maxId FROM message`)
+      .get() as { maxId: number };
+    return row.maxId;
+  } finally {
+    db.close();
+  }
+}
+
+function readOutboundRowsAfter(
+  dbPath: string,
+  afterRowId: number,
+  phone: string,
+): OutboundStatusRow[] {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db
+      .prepare(
+        `SELECT m.ROWID, m.is_delivered, m.is_sent, m.error, m.service, m.date
+         FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE m.ROWID > ? AND m.is_from_me = 1 AND h.id = ?
+         ORDER BY m.ROWID DESC`,
+      )
+      .all(afterRowId, phone) as OutboundStatusRow[];
+  } finally {
+    db.close();
+  }
+}
+
+function sleepSync(ms: number): void {
+  const buffer = new SharedArrayBuffer(4);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, Math.max(1, ms));
 }
