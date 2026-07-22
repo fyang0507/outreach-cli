@@ -1,6 +1,8 @@
 {
   "name": "outreach-cli",
   "version": "4.3.2",
+  "description": "Agent-native communication utilities for explicit calls, SMS/iMessage, Gmail, Discord, and channel-scoped history.",
+  "private": true,
   "type": "module",
   "bin": {
     "outreach": "dist/cli.js"

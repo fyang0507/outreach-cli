@@ -1,150 +1,157 @@
-# Outreach CLI
+# Outreach
 
-Utility CLI for outbound calls, SMS/iMessage, Gmail, and per-channel history/search.
+[![Agent-native](https://img.shields.io/badge/design-agent--native-8A2BE2)](skills/outreach/SKILL.md) [![Works with](https://img.shields.io/badge/works%20with-Codex%20%C2%B7%20Claude%20Code-black)](skills/outreach/SKILL.md) [![Interface](https://img.shields.io/badge/interface-explicit%20JSON%20commands-0F766E)](#command-map) [![Platform](https://img.shields.io/badge/platform-macOS--first-silver?logo=apple&logoColor=white)](#requirements)
 
-This repo is intentionally not a campaign manager. It does not own contacts, campaign files, async follow-up policy, reply watchers, callback agents, calendar/workspace management, or cross-channel context assembly. Calling agents/workflows pass explicit phone numbers, email addresses, Gmail IDs, and task text.
+**A deliberately narrow interface for reaching real people once an agent or operator has already decided what to say, to whom, and why.** It provides calls, iMessage/SMS, Gmail, Discord, and per-channel history—not a campaign engine dressed up as a CLI.
 
-## Command Surface
+The distinction matters. Outreach takes care of the channel mechanics that are awkward or unsafe to rebuild in every workflow: authenticated Gmail threading, Messages.app delivery checks, a live voice-call bridge, and a small JSON-shaped surface an agent can use predictably. It does not decide who deserves a message, infer consent, maintain a contact database, or quietly chase a reply.
 
-All command output is JSON.
+> **The operating rule:** decide and record the work in the workflow layer; use `outreach` only for the explicit communication action or the channel-specific evidence needed to make that decision.
 
-```bash
-outreach health
+## What it is—and is not
 
-outreach call init
-outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]
-outreach call listen --id <callId>
-outreach call status --id <callId>
-outreach call latency (--id <callId> | --latest)
-outreach call hangup --id <callId>
-outreach call teardown
+| Outreach does | The calling workflow still owns |
+| --- | --- |
+| Checks whether each channel is ready | Contact selection, consent, and the reason to reach out |
+| Sends one explicit message, email, Discord post, or voice call | Contact records, campaigns, and durable workflow state |
+| Reads the requested SMS thread, Gmail thread/search, Discord history, or live-call state | Cross-channel briefings, interpretation, and follow-up policy |
+| Manages the local voice daemon and records call transcripts | Retries, reply watchers, timers, and scheduling (for example, through [Sundial](https://github.com/fyang0507/sundial)) |
 
-outreach sms send --to <number> --body <text> [--service iMessage|SMS]
-outreach sms history --phone <number> [--limit <n>]
+There are intentionally no campaign commands, contacts, calendar actions, `outreach context`, polling loops, callback agents, or local campaign files. An agent can read and write its own workflow state directly; this tool should stay a sharp boundary around communication infrastructure.
 
-outreach email send --subject <text> --body <text> (--to <address> | --reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]
-outreach email history (--address <email> | --thread-id <threadId>) [--limit <n>]
-outreach email search --query <gmail-query> [--limit <n>]
+## Architecture in one glance
 
-outreach discord post --body <text> [--channel <id|name>]
-outreach discord channels list
-outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
+```mermaid
+flowchart LR
+    A["Agent or operator<br/>makes the decision"] --> B["outreach CLI<br/>explicit command + JSON result"]
+    B --> C["Calls<br/>Twilio + Gemini Live"]
+    B --> D["Messages.app<br/>iMessage / SMS"]
+    B --> E["Gmail API"]
+    B --> F["Discord API"]
+    A -. "state, consent, follow-up" .-> G["Workflow / data repo / scheduler"]
+    B -. "call transcripts + Gmail OAuth token" .-> G
 ```
 
-There is no `outreach setup` command. Create config/workspace files outside this CLI, or point the CLI at an existing workspace.
+Calls are the only stateful channel. `outreach call init` starts a local daemon and webhook tunnel; `call place` connects Twilio Media Streams to Gemini Live; the remaining call commands inspect, steer, measure, or close that one session. SMS, Gmail, and Discord commands are direct channel operations.
 
-## Configuration
+## Safety and privacy boundaries
 
-Secrets live in `.env` next to the CLI checkout:
+This is communication infrastructure, so its constraints are part of the product:
 
-```bash
-TWILIO_ACCOUNT_SID=...
-TWILIO_AUTH_TOKEN=...
-OUTREACH_DEFAULT_FROM=+15551234567
-GOOGLE_GENERATIVE_AI_API_KEY=...
-GMAIL_CLIENT_ID=...
-GMAIL_CLIENT_SECRET=...
-DISCORD_BOT_TOKEN=...
-DISCORD_GUILD_ID=...
-DISCORD_DEFAULT_CHANNEL=General
-```
+- **No implicit outreach.** A send, post, or call happens only through an explicit command with a recipient and content/objective. The CLI has no automated follow-up or reply-watching loop.
+- **Read narrowly.** SMS history is scoped to one phone number; Gmail reads/searches use the requested address, thread, or Gmail query. Address-mode Gmail history returns snippets unless `--verbose` is requested.
+- **Check before acting.** `outreach health` reports readiness for the data repo, call daemon, Messages, Gmail, and Discord without creating a workspace or sending anything.
+- **Treat identity as shareable voice context.** The fields under `identity` in `outreach/config.yaml` can be supplied to the voice agent. Put only information you would be comfortable having the assistant say. Its call instruction forbids pretending to be human and requires it to identify as the operator's assistant when asked.
+- **Keep secrets out of source control.** Credentials live in the ignored `.env` file. The Gmail OAuth token is stored in `<data-repo>/outreach/gmail-token.json`, outside this checkout; protect that data repo accordingly. Never put tokens, personal message history, or real recipient details in issues, examples, or commits.
+- **Use delivery state honestly.** When `--service` is omitted, SMS selects iMessage or SMS from recent local history (unknown recipients default to SMS), then probes Messages.app's outcome. A failure or timeout is not an invitation to blindly resend.
 
-### Discord bot setup
+## Requirements
 
-`outreach discord` posts async operator updates via a Discord bot. One-time manual setup:
+- A current Node.js runtime (the dependency graph requires Node.js 20 or newer) and npm.
+- macOS for the Messages.app channel. SMS history needs Full Disk Access for the terminal/agent host; sending needs the relevant macOS accessibility permission. Messages.app must be signed in.
+- Optional channel credentials only for the channels you enable: Twilio + a Google Generative AI key for calls, Gmail OAuth credentials for email, and a Discord bot token/guild for Discord. Voice calls use a local `ngrok` tunnel by default, or a manually supplied public webhook URL.
+- An existing data repository for application configuration and call/Gmail artifacts. Outreach deliberately does not scaffold or manage that repository.
 
-1. Create an application and a bot at <https://discord.com/developers>.
-2. No privileged intents are required (the CLI uses REST only).
-3. Generate an OAuth2 invite URL with `scope=bot` and permissions **View Channels (1024)**, **Send Messages (2048)**, and **Manage Channels (16)**; open it to invite the bot to your server.
-4. Copy the bot token into `DISCORD_BOT_TOKEN`.
-5. With Developer Mode on, right-click the server -> **Copy Server ID** into `DISCORD_GUILD_ID`.
-6. Optionally set `DISCORD_DEFAULT_CHANNEL` (channel name or id used when `discord post` omits `--channel`; defaults to `General`).
+## Setup
 
-`outreach health` reports the `discord` channel state once these are set.
-
-Behavior config is loaded from `<data_repo>/outreach/config.yaml`; for dev-only use, `outreach.config.dev.yaml` next to the CLI may carry the same config plus `data_repo_path`.
-
-Data/workspace path resolution order:
-
-1. `OUTREACH_DATA_REPO`
-2. `outreach.config.dev.yaml` next to the CLI with `data_repo_path`
-3. Walk up from `cwd` for `.agents/workspace.yaml`
-
-The config shape is documented in `outreach.config.dev.yaml.example`. Call transcripts are written to `<data_repo>/outreach/transcripts/<callId>.jsonl`; the writer creates that directory on demand.
-
-## Architecture
-
-Calls are stateful and use a local daemon:
-
-```text
-CLI command -> Unix IPC -> daemon/server.ts
-Twilio webhook tunnel -> Express + WebSocket
-Twilio Media Streams <-> mediaStreamsBridge.ts <-> Gemini Live
-```
-
-Important call behavior:
-
-- `call init` starts the daemon and ngrok tunnel.
-- `call place` pre-connects Gemini while Twilio dials.
-- Normal calls proactively greet by default; greeting audio is pre-generated while ringing and flushed after a short post-stream delay.
-- `--wait-for-user` makes the agent stay silent until the callee speaks first, then respond using Gemini automatic VAD for turn detection.
-- `end_call` is deferred until Twilio confirms the active outbound audio turn has played via media `mark`; this prevents clipped goodbyes.
-- `latency` reports pickup-to-audible-greeting for proactive calls and user-speech-to-audible-response for wait-for-user calls.
-
-SMS is stateless except for Messages history and send-outcome reads. With no explicit `--service`, the CLI selects iMessage or SMS from recent history, defaulting unknown recipients to SMS. Sending uses Messages.app AppleScript and checks `chat.db` for success, failure, or automatic SMS fallback before returning.
-
-Email is stateless apart from Gmail OAuth tokens stored under the configured data repo. Replies with `--reply-to-id` derive Gmail threading headers and reply-all recipients.
-
-## Development
+Clone the repository, create local-only configuration, then verify the channels you intend to use:
 
 ```bash
+git clone https://github.com/fyang0507/outreach-cli.git
+cd outreach-cli
 npm install
+
+cp .env.example .env
+cp outreach.config.dev.yaml.example outreach.config.dev.yaml
+# Edit .env and outreach.config.dev.yaml. Point data_repo_path at an existing workspace.
+
 npm run build
-node dist/cli.js --help
 node dist/cli.js health
 ```
 
-`npm run build` compiles TypeScript, marks `dist/cli.js` executable, and best-effort installs `.agents/skills/outreach` as an agent skill symlink to `skills/outreach/` in the configured agent workspace. If no data workspace is configured, symlink installation is skipped and the build still succeeds.
+`outreach.config.dev.yaml` is ignored and is useful for a development checkout. In a shared workspace, the normal configuration lives at `<data-repo>/outreach/config.yaml`. The CLI resolves its data repo in this order:
 
-TypeScript is ESM. Local imports use `.js` extensions. All CLI output must go through `outputJson()` / `outputError()`. Exit codes: `0` success, `1` input error, `2` infrastructure error, `3` operation failed, `4` timeout.
+1. `OUTREACH_DATA_REPO`
+2. `outreach.config.dev.yaml` beside this checkout (`data_repo_path`)
+3. A `.agents/workspace.yaml` found by walking up from the current directory
 
-## Key Files
+During development, invoke the compiled CLI as `node dist/cli.js …`. If you install the executable on your `PATH`, use `outreach …` instead. `npm run build` also makes the packaged `outreach` and `contact-operator` skills discoverable from the configured agent workspace when possible; the build still succeeds when no workspace is configured.
 
-| Path | Purpose |
-|---|---|
-| `src/cli.ts` | Commander.js entrypoint and command registration |
-| `src/appConfig.ts`, `src/dataRepo.ts` | Config loading and data/workspace resolution |
-| `src/commands/health.ts` | Readiness checks without scaffolding |
-| `src/commands/call/*.ts` | Call lifecycle, monitoring, latency commands |
-| `src/daemon/server.ts` | Call daemon, Twilio webhooks, IPC handling |
-| `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, playback drain |
-| `src/audio/geminiLive.ts` | Gemini Live API wrapper and tool/callback plumbing |
-| `src/audio/transcode.ts` | μ-law/PCM conversion and resampling |
-| `src/commands/sms/*.ts`, `src/providers/messages.ts` | SMS/iMessage send and history |
-| `src/commands/email/*.ts`, `src/providers/gmail.ts` | Gmail send/history/search |
-| `src/commands/discord/*.ts`, `src/providers/discord.ts` | Discord post and channel list/create |
-| `skills/outreach/*.md` | Agent-facing sharable utility docs |
+### A careful first workflow
 
-## Release Checklist
-
-Before cutting a major release:
+Start with an observation, keep the decision in the caller, then make one explicit action:
 
 ```bash
-npm run build
+# 1. Non-destructive: see which channels are ready and which config was resolved.
+node dist/cli.js health
+
+# 2. Read only the email context required for the decision.
+node dist/cli.js email history --address "recipient@example.com" --limit 5
+
+# 3. After the calling workflow has approved the message, send it.
+node dist/cli.js email send \
+  --to "recipient@example.com" \
+  --subject "A brief follow-up" \
+  --body "Hello — following up on our earlier conversation."
+```
+
+For a non-blocking update to an operator, Discord is often the quieter choice:
+
+```bash
+node dist/cli.js discord channels list
+node dist/cli.js discord post --channel "updates" --silent \
+  --body "The requested work is complete; the result is in the run artifact."
+```
+
+For voice, start and stop the local call infrastructure deliberately:
+
+```bash
+node dist/cli.js call init
+node dist/cli.js call place --to +15551234567 \
+  --objective "Introduce yourself as an assistant, ask whether this is a good time, then say goodbye."
+node dist/cli.js call status --id <callId>
+node dist/cli.js call teardown
+```
+
+The number above is a placeholder. A real call requires the configured Twilio caller-ID setup; use `--from-twilio` when the Twilio number should be shown, and `--call-operator` only for an intentional escalation to the configured operator.
+
+## Command map
+
+Operational command results are JSON, making them safe to compose into an agent workflow without parsing decorative terminal output. Run `outreach <command> --help` for the complete option list and inline descriptions.
+
+| Area | Commands | Notes |
+| --- | --- | --- |
+| Readiness | `health` | Reports data-repo and channel readiness; does not scaffold or send. |
+| SMS / iMessage | `sms send --to <number> --body <text> [--service iMessage\|SMS]`<br>`sms history --phone <number> [--limit <n>]` | Defaults to history-informed service selection; messages are sent through Messages.app. |
+| Gmail | `email send --subject <text> --body <text> (--to <address>\|--reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]`<br>`email history (--address <email>\|--thread-id <threadId>) [--limit <n>] [--verbose]`<br>`email search --query <gmail-query> [--limit <n>]` | `--reply-to-id` preserves Gmail threading and defaults to reply-all. |
+| Discord | `discord post --body <text> [--channel <id\|name>] [--silent]`<br>`discord channels list`<br>`discord channels create --name <name> [--topic <text>] [--category <id\|name>]`<br>`discord history --channel <id\|name> [--limit <n>] [--after <messageId>] [--before <messageId>] [--since <iso>] [--count]` | Intended for operational updates, not a reply-watching loop. |
+| Voice calls | `call init` · `call place (--to <number>\|--call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]`<br>`call listen --id <callId>` · `call steer --id <callId> --text <note> [--mode nudge\|say]` · `call status --id <callId>` · `call hangup --id <callId>` · `call latency (--id <callId>\|--latest)` · `call teardown [--force]` | Calls use the local daemon until teardown. `steer` is a live-session control, not a background agent. |
+
+When passing long free text through a shell, quote it so the shell does not expand `$`, backticks, or `!`. If the entire command is itself wrapped in `zsh -lc '…'`, use double-quoted inner values for text containing apostrophes, or run `outreach` directly when its `PATH` is already initialized.
+
+## For agents and contributors
+
+The README is the human overview. The packaged skill tree is the agent-facing operating manual:
+
+- [`skills/outreach/SKILL.md`](skills/outreach/SKILL.md) — when the utility is appropriate and the canonical command surface.
+- [`skills/outreach/call.md`](skills/outreach/call.md), [`sms.md`](skills/outreach/sms.md), [`email.md`](skills/outreach/email.md), and [`discord.md`](skills/outreach/discord.md) — channel-specific behavior and caveats.
+- [`skills/contact-operator/SKILL.md`](skills/contact-operator/SKILL.md) — a separate policy for when a headless agent should interrupt an operator; it prefers the quietest adequate channel.
+- [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md) — repository boundaries and contributor guidance.
+
+For development and release checks:
+
+```bash
+npm test                       # builds, then runs the unit tests
 node dist/cli.js --help
 node dist/cli.js health
 node dist/cli.js call place --help
-node dist/cli.js call latency --help
 node dist/cli.js sms send --help
 node dist/cli.js email send --help
 npm pack --dry-run
 ```
 
-For live call releases, also run:
+Live channel tests can contact real people or services. Run them only with an explicit test target and permission, and always finish a voice test with `call teardown`.
 
-```bash
-node dist/cli.js call init
-node dist/cli.js call place --to <verified-test-number> --objective 'Say a brief goodbye, then end the call.' --max-duration 30
-node dist/cli.js call latency --latest
-node dist/cli.js call teardown
-```
+## Repository and license
+
+This is a source-visible operational tool, not a published npm package; `package.json` marks it `private` to prevent accidental publication. The repository currently includes **no license file**, so it does not grant a general license to use, copy, modify, or distribute the code. If you need permission beyond viewing the source, contact the repository owner.
