@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
@@ -25,6 +25,12 @@ function expandHome(p: string): string {
   return p;
 }
 
+/** Resolve a config value relative to the config file, not the caller's cwd. */
+export function resolveConfigRelativePath(configPath: string, value: string): string {
+  const expanded = expandHome(value.trim());
+  return isAbsolute(expanded) ? expanded : resolve(dirname(configPath), expanded);
+}
+
 function cliRepoRoot(): string {
   // src/dataRepo.ts → repo root is two levels up.
   // dist/dataRepo.js → dist lives directly under repo root, one level up.
@@ -36,7 +42,8 @@ function cliRepoRoot(): string {
 /**
  * Locate outreach.config.dev.yaml next to the CLI binary, if present.
  * Returns the path and the data_repo_path value it declares (or null if the
- * file parses but doesn't declare one).
+ * file parses but doesn't declare one). Relative values are based on the
+ * config file's directory.
  */
 export function locateDevConfig(): DevConfigLocation | null {
   const path = join(cliRepoRoot(), DEV_CONFIG_FILENAME);
@@ -58,7 +65,7 @@ export function locateDevConfig(): DevConfigLocation | null {
     return { path, dataRepoPath: null };
   }
 
-  return { path, dataRepoPath: expandHome(raw) };
+  return { path, dataRepoPath: resolveConfigRelativePath(path, raw) };
 }
 
 function findWorkspaceMarker(startDir: string): string | null {

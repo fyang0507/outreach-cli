@@ -5,7 +5,8 @@
 # Path to the external data repo where outreach data (transcripts) is stored.
 # Transcripts to <data_repo_path>/outreach/transcripts/.
 # Contacts and campaigns are managed directly by the orchestrator in the same repo.
-data_repo_path: ~/path/to/your-data-repo
+# Relative paths resolve from this config file, so sibling checkouts can use ../fred-agent.
+data_repo_path: ../your-data-repo
 
 identity:
   # Required — reserved, always injected into voice calls as {user_name}.
