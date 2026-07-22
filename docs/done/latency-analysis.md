@@ -63,3 +63,23 @@ User feedback: "didn't really feel natural." At 2-3s response times, the agent s
 | V2a (Raw pipeline + Haiku) | ~0.8-1.2s | Borderline |
 | V2b (GPT-4o Realtime) | ~0.3-0.5s | Yes |
 | Human conversation baseline | ~0.3-0.8s | Yes |
+
+## Update — V2 (Gemini Live), 2026-07-22
+
+V1 was superseded by V2b: Gemini Live API (`models/gemini-3.1-flash-live-preview`) direct audio pipeline, no ConversationRelay/Haiku sub-agent hop (see `v2-architecture-options.md`, Option B). Measured on three live mock-interview calls during voice-agent hallucination-fix testing:
+
+| Call | Config (as actually applied) | Turn | Agent latency |
+|---|---|---|---|
+| `call_c3c1cba90a97` | temp: null (~1.0), thinking: minimal | opening substantive turn | **673ms** |
+| `call_dae77efb4c91` | temp: 0.1, thinking: minimal (⚠️ configured "medium", but a code bug in `src/audio/geminiLive.ts` silently skipped sending `thinkingConfig` for "medium" — this call never actually ran elevated reasoning) | "basic information" (config lookup) | **104ms** |
+| `call_dae77efb4c91` | " | "what job is he applying for" (deferral) | **192ms** |
+| `call_dae77efb4c91` | " | "highlighted skills" (deferral) | **62ms** |
+| `call_dae77efb4c91` | " | wrap-up ×2 | **45ms, 18ms** |
+| `call_4568ba977d25` | temp: 0.1, thinking: medium (bug fixed and rebuilt first — genuinely applied) | intro | **296ms** |
+| `call_4568ba977d25` | " | "specific project" (hallucinated before any steer could land) | **736ms** |
+| `call_4568ba977d25` | " | "benefits of the system" | **1617ms** |
+| `call_4568ba977d25` | " | closing (barge-in) | **24ms** |
+
+All measured turns land at 18ms-1.6s — the slowest (1617ms, the one call where `thinking_level: medium` was genuinely active) is still well inside the V1 average of 2.4s, but it's also the slowest single turn across all three calls, and the highest-latency configuration did not prevent a hallucination (a fabricated "real time anomaly detection system" personal project, invented before either steer arrived). So the elevated-reasoning attempt bought no observed groundedness benefit while costing the most latency of anything tested — `thinking_level` has since been dropped to `"low"` pending a dedicated, controlled test.
+
+**Conclusion: latency is still not the primary concern for this architecture, but it's no longer a closed question either.** Every turn across all three calls beat V1's ~2.4s average by a wide margin, so the V1 finding that drove the V2 migration ("didn't really feel natural" at 2-3s) clearly doesn't apply here. But the one call that actually exercised heavier reasoning was also the slowest and still hallucinated, so "higher thinking_level trades latency for groundedness" is not supported by this data — if anything the opposite. Future tuning should keep measuring both dimensions together per call rather than assuming a knob free of cost, and treat groundedness as the still-open problem.
