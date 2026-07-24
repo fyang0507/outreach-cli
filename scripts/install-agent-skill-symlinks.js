@@ -10,7 +10,7 @@
  */
 
 import { chmodSync, rmSync, symlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 chmodSync("dist/cli.js", 0o755);
 
@@ -23,9 +23,13 @@ try {
   for (const skill of skills) {
     const dest = join(dataRepo, ".agents", "skills", skill);
     const source = resolve("skills", skill);
+    // Emit a RELATIVE target. An absolute target bakes this machine's checkout
+    // path into the data repo, so moving or re-cloning either repo silently
+    // leaves the data repo's committed symlinks pointing at a dead path.
+    const linkTarget = relative(dirname(dest), source);
     rmSync(dest, { recursive: true, force: true });
-    symlinkSync(source, dest, "dir");
-    console.log(`Agent skill symlink installed -> ${dest} -> ${source}`);
+    symlinkSync(linkTarget, dest, "dir");
+    console.log(`Agent skill symlink installed -> ${dest} -> ${linkTarget}`);
   }
 } catch (err) {
   console.log(`Agent skill symlink skipped: ${(err).message}`);
