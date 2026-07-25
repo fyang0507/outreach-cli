@@ -154,4 +154,6 @@ Live channel tests can contact real people or services. Run them only with an ex
 
 ## Repository and license
 
-This is a source-visible operational tool, not a published npm package; `package.json` marks it `private` to prevent accidental publication. The repository currently includes **no license file**, so it does not grant a general license to use, copy, modify, or distribute the code. If you need permission beyond viewing the source, contact the repository owner.
+This is a source-visible operational tool, not a published npm package; `package.json` marks it `private` to prevent accidental publication.
+
+It is released under the [MIT License](LICENSE). You may use, copy, modify, and distribute the software under its terms.
