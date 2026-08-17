@@ -8,13 +8,15 @@ Live integration tests that exercise the voice agent's ability to navigate IVR m
 
 1. **Twilio account** with a configured phone number
    - `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in `.env`
-   - `OUTREACH_DEFAULT_FROM` set to your Twilio number
+   - `TWILIO_DEFAULT_FROM_NUMBER` set to a number on the account
+   - `PERSONAL_CALLER_ID` set to a number Twilio has verified (or one the account owns)
 
 2. **Google Gemini API key**
    - `GOOGLE_GENERATIVE_AI_API_KEY` in `.env`
 
 3. **ngrok** installed and authenticated
    - `outreach call init` uses ngrok to expose the local daemon
+   - `init` also runs a preflight (~2-7s) over all five required variables, the config, Twilio auth, both caller IDs, Gemini Live, and the tunnel; it hard-fails with the offending checks instead of reporting ready
 
 4. **jq** installed
    - `brew install jq` (macOS) or `apt-get install jq` (Linux)
@@ -67,9 +69,9 @@ Each script is idempotent: it tears down any existing daemon before starting and
 
 ## Inspecting Results
 
-### Daemon logs
+### Daemon diagnostics
 
-The daemon writes to stdout/stderr. To see tool call logs (`send_dtmf`, `end_call`), check the daemon output. When running via `outreach call init`, daemon logs go to the spawned background process. You can find the PID in `/tmp/outreach-daemon.pid` and inspect its output.
+The daemon is forked with `stdio: "ignore"`, so its console output is discarded and there is nothing to read behind `/tmp/outreach-daemon.pid`. The durable channels are the preflight report that `call init` returns and the per-call transcript below: tool calls (`send_dtmf`, `end_call`), pre-connect failures, and the hangup reason all appear there.
 
 ### Transcript files
 
@@ -77,14 +79,6 @@ Each call writes a JSONL transcript to `<data_repo>/outreach/transcripts/<call_i
 
 ```bash
 cat <data_repo>/outreach/transcripts/call_*.jsonl | jq .
-```
-
-### Campaign logs
-
-Campaign events are written to `<data_repo>/outreach/campaigns/`. Inspect with:
-
-```bash
-cat <data_repo>/outreach/campaigns/*.jsonl | jq .
 ```
 
 ### Twilio console

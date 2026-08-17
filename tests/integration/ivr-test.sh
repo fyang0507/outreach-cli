@@ -113,8 +113,10 @@ sleep 1
 # --- Init ---
 
 log "Running outreach init..."
-INIT_OUTPUT=$($OUTREACH call init 2>/dev/null) || {
-  echo "Error: 'outreach call init' failed. Check .env and prerequisites."
+# Keep stderr: init reports a failed preflight as JSON on stderr, and that report
+# is the whole diagnosis.
+INIT_OUTPUT=$($OUTREACH call init 2>&1) || {
+  echo "Error: 'outreach call init' failed. Check .env and the preflight report below."
   echo "$INIT_OUTPUT"
   exit 1
 }

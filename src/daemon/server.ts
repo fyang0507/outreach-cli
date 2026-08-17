@@ -6,29 +6,42 @@ config({ path: resolve(__dotdir, "..", "..", ".env"), quiet: true });
 
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { randomBytes } from "node:crypto";
 import { writeFile, unlink } from "node:fs/promises";
 import express from "express";
 import { WebSocketServer, type RawData } from "ws";
 import twilio from "twilio";
-import { generateCallId, createSession, getSession, getSessionByCallSid, listSessions, appendEvent } from "./sessions.js";
+import { generateCallId, createSession, getSession, deleteSession, listSessions, appendEvent } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { writeTranscript, isoNow } from "../logs/sessionLog.js";
+import { writeTranscript, ensureDataDirs, isoNow } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
 import { readRuntime } from "../runtime.js";
 import { loadAppConfig } from "../appConfig.js";
+import type { AppConfig } from "../appConfig.js";
+import { runPreflight } from "./preflight.js";
 
 // --- Constants ---
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
+// Identifies this daemon process. The tunnel probe in the preflight compares it
+// against /health so a stale tunnel URL pointing at another process (or another
+// daemon on this port) is a hard failure instead of a silently dead call.
+const INSTANCE_ID = randomBytes(8).toString("hex");
 const PID_FILE = "/tmp/outreach-daemon.pid";
 const SOCKET_PATH = "/tmp/outreach-daemon.sock";
-const IDLE_SHUTDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const CALL_INACTIVITY_MS = 60 * 1000; // 60 seconds
 const VOICEMAIL_SILENCE_MS = 90 * 1000; // 90 seconds without transcript = likely voicemail/hold
-const PRECONNECT_PICKUP_WAIT_MS = 500;
+const SESSION_RETENTION_MS = 60 * 60 * 1000; // ended sessions stay listenable for an hour
+const MAX_RETAINED_ENDED_SESSIONS = 100;
+// At pickup, waiting on the in-flight preconnect handshake strictly dominates
+// starting a fresh one — the fresh connection costs a full handshake anyway, and
+// the warm one is already partway through. The bound only protects against a
+// handshake that is hung rather than slow; keep it near the p95 handshake so a
+// hung one does not hold the callee on a silent line.
+const PRECONNECT_HANDOVER_WAIT_MS = 1500;
 const PRE_GENERATED_GREETING_PROMPT =
   "The outbound phone call is ringing. Pre-generate a very brief natural greeting for when the person answers. Identify yourself as the caller's assistant and, if the objective is clear, include the purpose. Do not mention these instructions.";
 
@@ -40,7 +53,7 @@ app.use(express.urlencoded({ extended: false }));
 
 app.get("/health", (_req, res) => {
   const activeSessions = listSessions().filter((s) => s.status !== "ended");
-  res.json({ status: "ok", calls: activeSessions.length });
+  res.json({ status: "ok", calls: activeSessions.length, instance_id: INSTANCE_ID });
 });
 
 // --- Twilio signature validation middleware ---
@@ -142,6 +155,26 @@ function escapeXml(s: string): string {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+// --- Twilio REST client ---
+
+let twilioClient: ReturnType<typeof twilio> | undefined;
+let twilioClientKey = "";
+
+/**
+ * Reuse one Twilio client per credential pair: it owns the keep-alive HTTPS
+ * agent, so only the first request of a daemon's life pays DNS + TLS. Keyed on
+ * the credentials so an edited .env is still picked up (the daemon reads them
+ * from process.env on every call).
+ */
+function getTwilioClient(accountSid: string, authToken: string): ReturnType<typeof twilio> {
+  const key = `${accountSid}:${authToken}`;
+  if (!twilioClient || twilioClientKey !== key) {
+    twilioClient = twilio(accountSid, authToken);
+    twilioClientKey = key;
+  }
+  return twilioClient;
 }
 
 // --- HTTP + WebSocket server ---
@@ -270,6 +303,8 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ...(twilioCallCreateMs !== undefined && { twilio_call_create_ms: twilioCallCreateMs }),
     gemini_preconnected_before_call: geminiPreconnectedBeforeCall,
     ...(geminiPreconnectMs !== undefined && { gemini_preconnect_ms: geminiPreconnectMs }),
+    ...(session.preconnectHandover && { preconnect_handover: session.preconnectHandover }),
+    ...(session.preconnectHandoverWaitMs !== undefined && { preconnect_handover_wait_ms: session.preconnectHandoverWaitMs }),
     pre_generated_greeting_requested: Boolean(session.preGeneratedGreetingRequestedAt),
     pre_generated_greeting_audio_chunks: session.preGeneratedGreetingAudioChunks,
     pre_generated_greeting_ended_before_stream: preGeneratedGreetingEndedBeforeStream,
@@ -293,8 +328,20 @@ async function finalizeCall(session: CallSession): Promise<void> {
   };
   appendEvent(session, summary);
 
-  await writeTranscript(session.id, session.fullTranscript);
-
+  try {
+    await writeTranscript(session.id, session.fullTranscript);
+  } finally {
+    // finalizedAt gates session reaping, so it is only stamped once the write has
+    // settled — a session can never be dropped while its transcript is in flight.
+    session.finalizedAt = Date.now();
+    // The greeting audio is base64 24kHz PCM (~200KB for a 3s greeting) and is
+    // never drained for a call that was not answered. The transcript is on disk
+    // now, so nothing downstream needs either buffer. transcriptBuffer and
+    // fullTranscript stay: a final `call listen` reads the tail of one and
+    // status/listen summaries read the other.
+    session.preGeneratedGreetingAudio = [];
+    session.preGeneratedGreetingTranscriptParts = [];
+  }
 }
 
 async function forceHangup(session: CallSession, reason: string): Promise<void> {
@@ -315,7 +362,7 @@ async function forceHangup(session: CallSession, reason: string): Promise<void> 
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (accountSid && authToken && session.callSid) {
     try {
-      const client = twilio(accountSid, authToken);
+      const client = getTwilioClient(accountSid, authToken);
       await client.calls(session.callSid).update({ status: "completed" });
     } catch (err) {
       console.error(`[daemon] Failed to hangup call ${session.id} via Twilio:`, (err as Error).message);
@@ -326,10 +373,27 @@ async function forceHangup(session: CallSession, reason: string): Promise<void> 
   if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
     (session.bridge as MediaStreamsBridge).cleanup();
   }
+  // No bridge on a call that never got answered — the warm session is ours to close.
+  abandonPreconnect(session);
 
   session.status = "ended";
   logCallCost(session);
   await finalizeCall(session);
+}
+
+/**
+ * Give up on the warm Gemini session for a call. Every path that abandons a call
+ * without handing the warm session to a bridge must call this, otherwise the
+ * pre-connect either parks a live WebSocket on the session forever or self-closes
+ * only by luck.
+ */
+function abandonPreconnect(session: CallSession): void {
+  session.preconnectAbandoned = true;
+  session.preConnectedGemini?.close();
+  session.preConnectedGemini = undefined;
+  const inFlight = session.preConnectingGemini;
+  session.preConnectingGemini = undefined;
+  inFlight?.then((late) => late?.close()).catch(() => undefined);
 }
 
 function requestPreGeneratedGreeting(session: CallSession, geminiSession: GeminiLiveSession): void {
@@ -342,11 +406,49 @@ function requestPreGeneratedGreeting(session: CallSession, geminiSession: Gemini
 
 async function waitForPreconnectedGemini(session: CallSession, timeoutMs: number): Promise<GeminiLiveSession | undefined> {
   if (!session.preConnectingGemini) return undefined;
-  const result = await Promise.race([
-    session.preConnectingGemini,
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-  ]);
-  return result ?? undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      session.preConnectingGemini,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+    return result ?? undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * A warm session that died during ringing must never be adopted: the bridge skips
+ * its own connect for a pre-connected session, and every send on a closed session
+ * silently no-ops, so the call would greet (from the buffer) and then go deaf.
+ */
+function usableWarmSession(gemini: GeminiLiveSession | undefined): GeminiLiveSession | undefined {
+  return gemini && !gemini.isClosed ? gemini : undefined;
+}
+
+/** Re-read the status after an await: hangup paths can end a call mid-handover. */
+function callEnded(session: CallSession): boolean {
+  return session.status === "ended";
+}
+
+/**
+ * Callee audio buffered during the handover wait would reach the warm session as
+ * one burst immediately before the greeting, and Gemini's automatic VAD would
+ * answer that burst instead of greeting. Control frames are kept.
+ * In --wait-for-user mode there is no greeting to protect and this audio is the
+ * turn trigger, so callers keep the buffer intact there.
+ */
+function dropBufferedInboundAudio(messages: RawData[]): RawData[] {
+  return messages.filter((data) => {
+    try {
+      return (JSON.parse(data.toString()) as { event?: string }).event !== "media";
+    } catch {
+      return true;
+    }
+  });
 }
 
 function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
@@ -356,6 +458,10 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
   // We listen for the first message to resolve the session, then set up the bridge.
   let initialized = false;
   let initializing = false;
+  let wsClosed = false;
+  // Set once the start event is matched to a call: from then on this connection owns
+  // that call's warm Gemini session and must close it on every path that gives up.
+  let startedSession: CallSession | undefined;
   const pendingBridgeMessages: RawData[] = [];
 
   ws.on("message", async (data) => {
@@ -399,6 +505,7 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         }
 
         console.log(`[media-stream] Start event received for call ${callId}`);
+        startedSession = session;
         session.ws = ws;
         session.lastActivityTime = Date.now();
         if (msg.start?.streamSid) {
@@ -419,6 +526,13 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
         if (!apiKey) {
           console.error("[media-stream] GOOGLE_GENERATIVE_AI_API_KEY not set");
+          abandonPreconnect(session);
+          // The call is answered: ending it names the cause, where a bare close
+          // would leave a silent line for the inactivity sweep to mislabel.
+          await forceHangup(session, `Call ${callId} — Gemini unavailable: GOOGLE_GENERATIVE_AI_API_KEY not set`)
+            .catch((err) => {
+              console.error(`[media-stream] Failed to hang up call ${callId}:`, (err as Error).message);
+            });
           ws.close();
           return;
         }
@@ -426,14 +540,55 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
         const appConfig = await loadAppConfig();
         const systemInstruction = session.systemInstruction ?? "You are a helpful phone assistant.";
 
-        // Use a warm Gemini session if it is ready, or wait very briefly for an
-        // in-flight warm-up before falling back to connecting after pickup.
-        const preConnected =
-          session.preConnectedGemini ??
-          await waitForPreconnectedGemini(session, PRECONNECT_PICKUP_WAIT_MS);
+        // Use the warm Gemini session if it is ready, otherwise wait for the
+        // in-flight handshake instead of racing it with a second, colder one.
+        let preConnected = usableWarmSession(session.preConnectedGemini);
+        let handover: "warm" | "handover" | "fresh_fallback" | "none" = preConnected ? "warm" : "none";
+        let waitedMs = 0;
+        if (!preConnected && session.preConnectingGemini) {
+          const waitStart = Date.now();
+          preConnected = usableWarmSession(await waitForPreconnectedGemini(session, PRECONNECT_HANDOVER_WAIT_MS));
+          waitedMs = Date.now() - waitStart;
+          // A preconnect that lands in the same tick as the timeout parks itself on
+          // the session without winning the race — adopt it rather than orphan it.
+          preConnected ??= usableWarmSession(session.preConnectedGemini);
+          handover = preConnected ? "handover" : "fresh_fallback";
+        }
         if (preConnected) {
           session.preConnectedGemini = undefined; // consumed
           session.preConnectingGemini = undefined;
+        } else {
+          // Stop a late preconnect from being adopted, and close it if it lands.
+          abandonPreconnect(session);
+          // Any buffered greeting belongs to the session we just gave up on. Playing
+          // it through a fresh session would leave that session unaware it greeted,
+          // so let the fresh session greet for itself instead.
+          session.preGeneratedGreetingAudio = [];
+          session.preGeneratedGreetingTranscriptParts = [];
+        }
+        session.preconnectHandover = handover;
+        session.preconnectHandoverWaitMs = waitedMs;
+        appendEvent(session, {
+          type: "preconnect_handover",
+          ts: isoNow(),
+          outcome: handover,
+          waited_ms: waitedMs,
+        });
+
+        // The callee can hang up while we wait: with no live Twilio socket there is
+        // nothing to bridge to, and the bridge's own close handler would never fire.
+        // The session is already "in_progress", so it also has to be ended here —
+        // otherwise status/listen report a live call and teardown refuses for a
+        // minute, until the inactivity sweep mislabels it as an auto-hangup.
+        if (wsClosed || callEnded(session)) {
+          console.log(`[media-stream] Call ${callId} ended during Gemini handover — discarding warm session`);
+          preConnected?.close();
+          abandonPreconnect(session); // forceHangup below returns early if the call already ended
+          await forceHangup(session, `Call ${callId} — callee disconnected during Gemini handover`)
+            .catch((err) => {
+              console.error(`[media-stream] Failed to end call ${callId}:`, (err as Error).message);
+            });
+          return;
         }
 
         const bridge = new MediaStreamsBridge({
@@ -444,7 +599,9 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           geminiConfig: appConfig.gemini,
           systemInstruction,
           preConnectedGemini: preConnected,
-          initialTwilioMessages: pendingBridgeMessages.splice(0),
+          initialTwilioMessages: session.waitForUserBeforeGreeting
+            ? pendingBridgeMessages.splice(0)
+            : dropBufferedInboundAudio(pendingBridgeMessages.splice(0)),
           onCleanup: () => {
             finalizeCall(session).catch((err) => {
               console.error(`[daemon] Failed to finalize call ${callId}:`, err);
@@ -468,7 +625,6 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           console.log(`[media-stream] Using pre-connected Gemini session for call ${callId}`);
           if (!session.waitForUserBeforeGreeting) bridge.sendInitialGreeting();
         } else {
-          const latePreconnect = session.preConnectingGemini;
           // Fallback: connect Gemini now (pre-connect failed or wasn't attempted)
           bridge.connectGemini()
             .then(() => {
@@ -476,24 +632,39 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
             })
             .catch((err) => {
               console.error(`[media-stream] Failed to connect Gemini for call ${callId}:`, (err as Error).message);
-              bridge.cleanup();
+              appendEvent(session, { type: "preconnect_failed", ts: isoNow(), message: (err as Error).message });
+              // Without Gemini there is no call — hang up instead of leaving the
+              // callee on a silent line until the inactivity sweep. forceHangup
+              // cleans up the bridge and finalizes (both are idempotent).
+              forceHangup(session, `Call ${callId} — Gemini unavailable: ${(err as Error).message}`)
+                .catch((hangupErr) => {
+                  console.error(`[media-stream] Failed to hang up call ${callId}:`, (hangupErr as Error).message);
+                });
             });
-          latePreconnect?.then((lateGemini) => {
-            if (lateGemini && session.preConnectedGemini === lateGemini) {
-              session.preConnectedGemini = undefined;
-              lateGemini.close();
-            }
-          }).catch(() => undefined);
         }
       }
-    } catch {
-      // ignore non-JSON or unexpected messages before init
+    } catch (err) {
+      if (!startedSession) return; // non-JSON or unexpected message before the start event
+      // Anything thrown after the start event (config load, bridge construction)
+      // leaves an answered call with no bridge, so the warm session has no owner
+      // and the callee is on a silent line. End it with the real cause instead of
+      // letting the 60s sweep relabel it as an inactivity hangup.
+      console.error(`[media-stream] Failed to initialize call ${startedSession.id}:`, (err as Error).message);
+      const failed = startedSession;
+      abandonPreconnect(failed);
+      await forceHangup(failed, `Call ${failed.id} — media stream setup failed: ${(err as Error).message}`)
+        .catch((hangupErr) => {
+          console.error(`[media-stream] Failed to hang up call ${failed.id}:`, (hangupErr as Error).message);
+        });
+      ws.close();
     }
   });
 
   ws.on("close", () => {
+    wsClosed = true;
     if (!initialized) {
       console.log("[media-stream] WebSocket closed before initialization");
+      if (startedSession) abandonPreconnect(startedSession);
     }
   });
 }
@@ -505,7 +676,8 @@ type IpcMethod =
   | "call.listen"
   | "call.steer"
   | "call.status"
-  | "call.hangup";
+  | "call.hangup"
+  | "daemon.preflight";
 
 async function handleIpcMessage(msg: {
   method: IpcMethod;
@@ -522,9 +694,55 @@ async function handleIpcMessage(msg: {
       return handleCallStatus(msg.params);
     case "call.hangup":
       return handleCallHangup(msg.params);
+    case "daemon.preflight":
+      return handleDaemonPreflight();
     default:
       return { error: "unknown_method", method: msg.method };
   }
+}
+
+/**
+ * Preflight is an IPC method, not an HTTP route: httpServer is published to the
+ * internet through the tunnel, so an HTTP endpoint would let anyone spend our
+ * Twilio/Gemini quota and read back the resolved config and data-repo paths.
+ */
+async function handleDaemonPreflight(): Promise<object> {
+  // Same resolution order as handleCallPlace, so the preflight validates the URL
+  // the call would actually use.
+  let webhookUrl = process.env.OUTREACH_WEBHOOK_URL;
+  if (!webhookUrl) {
+    webhookUrl = (await readRuntime())?.webhook_url;
+  }
+
+  // A stored startup error can be stale — the operator may have fixed the config
+  // since — so re-attempt the preload rather than reporting a solved problem.
+  if (startupPreloadError) {
+    try {
+      await preloadCallPath();
+      startupPreloadError = undefined;
+    } catch (err) {
+      startupPreloadError = (err as Error).message;
+    }
+  }
+
+  const report = await runPreflight({
+    webhookUrl: webhookUrl ?? "",
+    instanceId: INSTANCE_ID,
+    activeCalls: listSessions().filter((s) => s.status !== "ended").length,
+  });
+
+  if (startupPreloadError) {
+    report.checks.unshift({
+      name: "daemon_startup",
+      ok: false,
+      status: "fail",
+      detail: `startup preload failed: ${startupPreloadError}`,
+      hint: "The daemon is listening but could not warm the config/prompt/transcript path — the checks below name the underlying problem.",
+    });
+    report.ok = false;
+  }
+
+  return { ...report, instance_id: INSTANCE_ID };
 }
 
 async function handleCallPlace(params: Record<string, unknown>): Promise<object> {
@@ -555,7 +773,23 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     return { error: "config_error", message: "OUTREACH_WEBHOOK_URL must be set (or run 'outreach call init')" };
   }
 
-  const appConfig = await loadAppConfig();
+  // Both are warmed at daemon startup, so this normally costs nothing. Resolved
+  // before the session exists: a config error would otherwise leave a phantom
+  // 'ringing' session behind, and the IPC layer would report it as
+  // {"error":"internal"} with no cause.
+  let appConfig: AppConfig;
+  let sysInstruction: string;
+  try {
+    appConfig = await loadAppConfig();
+    sysInstruction = await buildSystemInstruction({
+      identity: appConfig.identity,
+      persona: persona || appConfig.voice_agent.default_persona,
+      objective,
+      hangupWhen,
+    });
+  } catch (err) {
+    return { error: "config_error", message: (err as Error).message };
+  }
 
   const id = generateCallId();
   const session = createSession({ id, from, to });
@@ -564,13 +798,6 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   const maxDurationSec = maxDuration ?? appConfig.call.max_duration_seconds;
   session.maxDurationMs = maxDurationSec * 1000;
   session.waitForUserBeforeGreeting = waitForUserBeforeGreeting;
-
-  const sysInstruction = await buildSystemInstruction({
-    identity: appConfig.identity,
-    persona: persona || appConfig.voice_agent.default_persona,
-    objective,
-    hangupWhen,
-  });
   session.systemInstruction = sysInstruction;
 
   // Extract host from webhook URL for WebSocket connection
@@ -616,6 +843,16 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       session.preGeneratedGreetingEnded = true;
       session.preGeneratedGreetingEndedAt = isoNow();
       console.log(`[daemon] Pre-connected Gemini session ended before media stream for call ${id}`);
+      // Only fires when the remote end closed the socket — our own close() never
+      // calls back. A rejected key/model/quota arrives exactly this way, after a
+      // connect() that already resolved, so record it as the recoverable
+      // pre-connect failure it is (pickup falls back to a fresh session).
+      appendEvent(session, {
+        type: "preconnect_failed",
+        ts: session.preGeneratedGreetingEndedAt,
+        message: geminiSession.closeReason
+          ?? "the pre-connected Gemini session closed while the call was ringing",
+      });
     },
   });
 
@@ -624,7 +861,11 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     try {
       await geminiSession.connect();
       session.geminiPreconnectConnectedAt = isoNow();
-      if (session.status === "ended" || session.mediaStreamStartedAt || session.bridge) {
+      // A started media stream means the callee picked up and the pickup path
+      // *wants* this warm session, so it must not be a reason to throw it away.
+      // Only an explicit abandonment, an ended call, or a bridge that already owns
+      // a different session justifies closing it here.
+      if (session.status === "ended" || session.preconnectAbandoned || session.bridge) {
         geminiSession.close();
         return null;
       }
@@ -636,13 +877,16 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       return geminiSession;
     } catch (err) {
       console.error(`[daemon] Gemini pre-connect failed for call ${id}:`, (err as Error).message);
+      // Daemon logs are not visible to the caller — put the failure in the
+      // transcript so 'call listen'/'call status' can report it.
+      appendEvent(session, { type: "preconnect_failed", ts: isoNow(), message: (err as Error).message });
       return null;
     }
   })();
   session.preConnectingGemini = preconnectPromise;
 
   try {
-    const client = twilio(accountSid, authToken);
+    const client = getTwilioClient(accountSid, authToken);
     session.callCreateStartedAt = isoNow();
     const twilioCall = await client.calls.create({
       to,
@@ -663,7 +907,6 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       requestPreGeneratedGreeting(session, session.preConnectedGemini);
     }
 
-    resetIdleTimer();
     return {
       id,
       status: "ringing",
@@ -789,7 +1032,7 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (accountSid && authToken && session.callSid) {
     try {
-      const client = twilio(accountSid, authToken);
+      const client = getTwilioClient(accountSid, authToken);
       await client.calls(session.callSid).update({ status: "completed" });
     } catch (err) {
       console.error(`[daemon] Failed to hangup call ${id} via Twilio:`, (err as Error).message);
@@ -800,6 +1043,8 @@ async function handleCallHangup(params: Record<string, unknown>): Promise<object
   if (session.bridge && session.bridge instanceof MediaStreamsBridge) {
     (session.bridge as MediaStreamsBridge).cleanup();
   }
+  // Hangup during ringing has no bridge — the warm session is ours to close.
+  abandonPreconnect(session);
 
   session.status = "ended";
   logCallCost(session);
@@ -837,21 +1082,46 @@ const ipcServer = createNetServer((socket) => {
   });
 });
 
-// --- Auto-shutdown & call inactivity checks ---
+// --- Call cost guards & session reaping ---
 
-let idleTimer: ReturnType<typeof setTimeout> | null = null;
+// The daemon lives from `call init` until `call teardown` and never exits on its
+// own: lifecycle belongs to the orchestrator that runs init, spawns sub-agents,
+// then tears down, and a daemon that walks away mid-session breaks that contract.
+// The cost guards below (max-duration, G2 inactivity, G3 voicemail) are what bound
+// spend; the idle self-shutdown this replaced only ever fired with zero active
+// calls, so it never guarded cost — it just made runtime.json unreliable.
 
-function resetIdleTimer(): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => {
-    const active = listSessions().filter((s) => s.status !== "ended");
-    if (active.length === 0) {
-      console.log("[daemon] No active calls for 5 minutes — shutting down");
-      shutdown();
-    } else {
-      resetIdleTimer();
+/**
+ * When an ended session became reapable. finalizeCall stamps finalizedAt only
+ * after the transcript write settles, so a finalized session without it still has
+ * a write in flight and must be left alone. A session that ended without ever
+ * finalizing (e.g. Twilio rejected the place) has no transcript to wait for.
+ */
+function reapableSince(session: CallSession): number | undefined {
+  return session.finalized ? session.finalizedAt : session.lastActivityTime;
+}
+
+// With an immortal daemon the session map would otherwise grow for the life of the
+// process, retaining every transcript twice plus the system instruction per call.
+function reapEndedSessions(now: number): void {
+  const retained: Array<{ id: string; since: number }> = [];
+
+  for (const session of listSessions()) {
+    if (session.status !== "ended") continue;
+    const since = reapableSince(session);
+    if (since === undefined) continue;
+    if (now - since > SESSION_RETENTION_MS) {
+      deleteSession(session.id);
+      continue;
     }
-  }, IDLE_SHUTDOWN_MS);
+    retained.push({ id: session.id, since });
+  }
+
+  const excess = retained.length - MAX_RETAINED_ENDED_SESSIONS;
+  if (excess > 0) {
+    retained.sort((a, b) => a.since - b.since);
+    for (const { id } of retained.slice(0, excess)) deleteSession(id);
+  }
 }
 
 const activityInterval = setInterval(() => {
@@ -873,6 +1143,8 @@ const activityInterval = setInterval(() => {
       forceHangup(session, `Call ${session.id} — no conversational activity detected (likely voicemail/hold music) — auto-hangup`);
     }
   }
+
+  reapEndedSessions(now);
 }, 10_000);
 
 // --- Lifecycle ---
@@ -892,7 +1164,6 @@ async function cleanup(): Promise<void> {
 
 function shutdown(): void {
   console.log("[daemon] Shutting down...");
-  if (idleTimer) clearTimeout(idleTimer);
   clearInterval(activityInterval);
 
   wss.close();
@@ -906,6 +1177,23 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 // --- Start ---
+
+let startupPreloadError: string | undefined;
+
+/**
+ * Warm everything the first `call place` would otherwise do inline: YAML parse,
+ * prompt file read, transcript directory creation. loadAppConfig and the static
+ * prompt are both process-cached, so this is a one-time cost at startup instead
+ * of latency on the first call.
+ */
+async function preloadCallPath(): Promise<void> {
+  const appConfig = await loadAppConfig();
+  await buildSystemInstruction({
+    identity: appConfig.identity,
+    persona: appConfig.voice_agent.default_persona,
+  });
+  await ensureDataDirs();
+}
 
 async function start(): Promise<void> {
   // Clean up stale socket file
@@ -928,7 +1216,15 @@ async function start(): Promise<void> {
     console.log(`[daemon] HTTP listening on port ${PORT}`);
   });
 
-  resetIdleTimer();
+  // A broken config must not stop the daemon from listening: /health answering is
+  // what lets the preflight report the real reason instead of the CLI guessing
+  // "daemon failed to start".
+  try {
+    await preloadCallPath();
+  } catch (err) {
+    startupPreloadError = (err as Error).message;
+    console.error("[daemon] Startup preload failed:", startupPreloadError);
+  }
 }
 
 start().catch((err) => {

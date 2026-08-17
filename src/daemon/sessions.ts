@@ -24,12 +24,16 @@ export interface CallSession {
   bridge?: unknown; // MediaStreamsBridge reference
   preConnectedGemini?: GeminiLiveSession; // Pre-connected Gemini session (issue #9)
   preConnectingGemini?: Promise<GeminiLiveSession | null>;
+  preconnectAbandoned?: boolean; // Handover was given up on; an in-flight preconnect must self-close
+  preconnectHandover?: "warm" | "handover" | "fresh_fallback" | "none";
+  preconnectHandoverWaitMs?: number;
   preGeneratedGreetingAudio: string[];
   preGeneratedGreetingAudioChunks: number;
   preGeneratedGreetingTranscriptParts: string[];
   preGeneratedGreetingEnded: boolean;
   preGeneratedGreetingEndedAt?: string;
   finalized: boolean; // Whether finalizeCall() has already run (idempotency guard)
+  finalizedAt?: number; // Date.now() once the transcript write settled; gates reaping
 
   // Milestone timestamps (ISO 8601) for call lifecycle metrics
   callCreateStartedAt?: string;
@@ -113,13 +117,6 @@ export function createSession(params: {
 
 export function getSession(id: string): CallSession | undefined {
   return sessions.get(id);
-}
-
-export function getSessionByCallSid(callSid: string): CallSession | undefined {
-  for (const session of sessions.values()) {
-    if (session.callSid === callSid) return session;
-  }
-  return undefined;
 }
 
 export function deleteSession(id: string): void {

@@ -144,3 +144,14 @@ For wait-for-user conversation tests, prefer `user_speech_to_audible_response_ms
 ## Hangup Playback
 
 The bridge defers `end_call` until Twilio confirms the active outbound turn has played via a media `mark`. If Twilio never returns the final mark, the daemon force-hangs up after a 7s drain timeout and records `hangup_timeout`.
+
+## Update — 2026-08-16
+
+Correction to *Interpreting Results*: "If `gemini_preconnect_ms` is high, the user waits longer before their phone starts ringing" is no longer true. The preconnect runs concurrently with `calls.create` and does not block dialing, so `gemini_preconnect_ms` is a measure of handshake latency only — read it against the handover fields below, not against time-to-ring.
+
+Two diagnostic fields were added (see `init-preflight-and-daemon-lifetime.md`):
+
+- `summary.preconnect_handover`: `warm` (the warm session was ready at pickup), `handover` (the pickup path waited for the in-flight handshake and got it), `fresh_fallback` (it did not, and a cold session was connected after answer), or `none`.
+- `summary.preconnect_handover_wait_ms`: how long pickup waited for that handshake, bounded at 1500ms.
+
+`assessment.likely_bottleneck` can now report `gemini_preconnect_handover_failed` and `gemini_preconnect_handover_wait`. Both are attributed ahead of the greeting-pregeneration labels, because a lost handover is the upstream cause of "nothing was pre-generated". Expect `warm` on nearly every call; frequent `handover` with a large wait points at Gemini handshake latency rather than this daemon.

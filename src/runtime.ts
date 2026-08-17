@@ -15,7 +15,7 @@ const OUTREACH_DIR = join(homedir(), ".outreach");
 const RUNTIME_FILE = join(OUTREACH_DIR, "runtime.json");
 const LOCK_FILE = join(OUTREACH_DIR, "init.lock");
 
-// ---- Shared process utilities (consolidated from init.ts, teardown.ts, lifecycle.ts) ----
+// ---- Shared process utilities (consolidated from the init/teardown commands) ----
 
 /**
  * Check if a process with the given PID exists (signal 0).

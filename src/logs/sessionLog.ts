@@ -38,6 +38,17 @@ export interface MediaStreamStartedEvent extends BaseEvent {
   call_sid?: string;
 }
 
+export interface PreconnectFailedEvent extends BaseEvent {
+  type: "preconnect_failed";
+  message: string;
+}
+
+export interface PreconnectHandoverEvent extends BaseEvent {
+  type: "preconnect_handover";
+  outcome: "warm" | "handover" | "fresh_fallback" | "none";
+  waited_ms: number;
+}
+
 export interface FirstOutboundAudioEvent extends BaseEvent {
   type: "first_outbound_audio";
 }
@@ -117,6 +128,8 @@ export interface CallSummaryEvent extends BaseEvent {
   twilio_call_create_ms?: number;
   gemini_preconnected_before_call?: boolean;
   gemini_preconnect_ms?: number;
+  preconnect_handover?: "warm" | "handover" | "fresh_fallback" | "none";
+  preconnect_handover_wait_ms?: number;
   pre_generated_greeting_requested?: boolean;
   pre_generated_greeting_audio_chunks?: number;
   pre_generated_greeting_ended_before_stream?: boolean;
@@ -145,6 +158,8 @@ export type TranscriptEvent =
   | CallAnsweredEvent
   | AmdResultEvent
   | MediaStreamStartedEvent
+  | PreconnectFailedEvent
+  | PreconnectHandoverEvent
   | FirstOutboundAudioEvent
   | FirstOutboundAudioPlayedEvent
   | InitialGreetingRequestedEvent

@@ -24,6 +24,28 @@ export interface OutreachConfig {
   DISCORD_DEFAULT_CHANNEL: string;
 }
 
+/**
+ * Everything a voice call needs before any process is started. Both caller IDs
+ * are required: `call place` dials from PERSONAL_CALLER_ID by default and from
+ * TWILIO_DEFAULT_FROM_NUMBER for --from-twilio/--call-operator, so the readiness
+ * guarantee has to hold for either invocation.
+ *
+ * Lives here (rather than in the daemon preflight) so the CLI can run the cheap
+ * local check without loading the Twilio/Gemini SDKs.
+ */
+export const REQUIRED_CALL_ENV = [
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "PERSONAL_CALLER_ID",
+  "TWILIO_DEFAULT_FROM_NUMBER",
+] as const;
+
+/** Reads process.env live — the daemon's env can differ from this module's snapshot. */
+export function missingRequiredCallEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  return REQUIRED_CALL_ENV.filter((key) => !env[key]?.trim());
+}
+
 export const outreachConfig: OutreachConfig = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID ?? "",
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN ?? "",

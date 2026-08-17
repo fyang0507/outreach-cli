@@ -23,7 +23,7 @@ Load a channel note only when channel behavior matters, not just to copy command
 ```bash
 outreach health
 
-outreach call init
+outreach call init [--skip-preflight]
 outreach call place (--to <number> | --call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>]
 outreach call listen --id <callId>
 outreach call steer --id <callId> --text <note> [--mode nudge|say]
@@ -45,5 +45,7 @@ outreach discord history --channel <id|name> [--limit <n>] [--after <messageId>]
 ```
 
 All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`. Gotcha: if the whole command is itself wrapped as `zsh -lc '...'`, do not put apostrophes or contractions inside single-quoted inner arguments. Use double-quoted inner values for long free-text call objectives/personas/hangup conditions, or call `outreach` directly when PATH is already available.
+
+`call init` validates env, config, Twilio credentials, caller IDs, Gemini, and the tunnel *at the moment it runs*, and fails with the failing checks instead of returning `ready`. A `ready` init rules setup out as of that instant; it does not cover a tunnel that dies afterwards, and `--skip-preflight` validates nothing. So don't re-run init reflexively after a call fails — read the error and the transcript first. The exception is a call that reached no one and produced no conversation at all: that is the tunnel-died shape, and the remedy is `call teardown` then `call init`.
 
 When reaching a third party, `call place` displays the operator's personal caller ID (`PERSONAL_CALLER_ID`) by default, so the call appears to come from the operator you're acting for. To call the operator themselves — e.g. to escalate something urgent that needs their input — use `--call-operator`, which dials `PERSONAL_CALLER_ID` from the Twilio number (`TWILIO_DEFAULT_FROM_NUMBER`); the Twilio number is required there because a caller ID can't equal the destination. Use `--from-twilio` to show the Twilio number as caller ID for any other destination. The caller ID is never passed explicitly — it's resolved from `.env`.

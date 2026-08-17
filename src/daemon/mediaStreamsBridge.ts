@@ -334,6 +334,17 @@ export class MediaStreamsBridge {
       this.tryDrainPendingHangup();
       return;
     }
+    // An invalid API key, a rejected model/voice and an exhausted quota all
+    // survive connect() and arrive as a close moments later, so a Gemini setup
+    // failure looks like a session that ended before the callee heard anything.
+    // Plain cleanup() would write a transcript with no error marker at all, and
+    // the silent failed call would read as "the callee said nothing".
+    if (!this.session.firstOutboundAudioAt) {
+      const detail = this.gemini.closeReason ?? "the Live session closed before producing any audio";
+      this.batcher.appendDirect({ type: "preconnect_failed", ts: isoNow(), message: detail });
+      this.endTwilioCall(`Call ${this.callId} — Gemini unavailable: ${detail}`);
+      return;
+    }
     this.cleanup();
   }
 

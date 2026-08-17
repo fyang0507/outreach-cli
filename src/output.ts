@@ -2,6 +2,7 @@ export function outputJson(data: unknown): void {
   process.stdout.write(JSON.stringify(data) + "\n");
 }
 
-export function outputError(code: number, message: string): void {
-  process.stderr.write(JSON.stringify({ error: code, message }) + "\n");
+/** `details` carries machine-readable context (e.g. a preflight report) alongside the message. */
+export function outputError(code: number, message: string, details?: Record<string, unknown>): void {
+  process.stderr.write(JSON.stringify({ error: code, message, ...details }) + "\n");
 }

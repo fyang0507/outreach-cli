@@ -115,3 +115,13 @@ Proper fix: after sending the `end_call` tool response, wait for `generationComp
 | `src/daemon/server.ts` | Set per-call duration timer on call start; fix inactivity timer to use `bridge.cleanup()` |
 | `src/daemon/mediaStreamsBridge.ts` | Add `lastTranscriptTime` tracking for G3 |
 | `src/daemon/sessions.ts` | Add `startTime`, `maxDurationMs`, `lastTranscriptTime` to `CallSession` |
+
+## Update — 2026-08-16
+
+The "5-min idle daemon shutdown" row in *Current safeguards* no longer exists. Its own gap note was the argument against it: it only fired with zero active calls, so it never guarded cost, and it made `runtime.json` unreliable (the daemon's own `shutdown()` removes the PID and socket files but never deletes `runtime.json`, so a self-exited daemon left a runtime file pointing at a dead PID). The daemon now lives from `call init` until `call teardown`.
+
+The three real guards are unchanged and remain the whole cost story: G1 per-call max duration, G2 the 60s inactivity sweep, G3 the 90s no-transcript voicemail/hold sweep.
+
+With an immortal daemon, the ended-session cleanup the idle exit was accidentally providing is now explicit: `finalizeCall` frees the pre-generated greeting audio once the transcript is on disk, and the same 10s interval that runs G2/G3 reaps ended sessions after an hour (or once 100 are retained, oldest first). See `init-preflight-and-daemon-lifetime.md`.
+
+One cost dimension that was not on this list: Gemini Live caps concurrent sessions per API key (3 free tier, ~50 Tier 1), and the preconnect holds a session for the whole ringing period — so the cap applies to calls *in flight*, not calls answered. No max-concurrent guard exists yet; exhausting it surfaces as a preconnect failure and an explicit hangup, not a place-time refusal.
