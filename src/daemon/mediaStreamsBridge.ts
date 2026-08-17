@@ -103,6 +103,11 @@ export class MediaStreamsBridge {
   private onCleanup?: () => void;
   private initialGreetingSent = false;
   private initialGreetingTimer: ReturnType<typeof setTimeout> | null = null;
+  private usingPreConnectedGemini = false;
+  // Between adopting the warm session and draining its greeting buffer, that
+  // buffer — not the Twilio socket — is the outbound queue. See handleGeminiAudio.
+  private greetingHandoverPending = false;
+  private heldGreetingTurnOver = false;
   private outboundTurnSeq = 0;
   private activeOutboundTurn: OutboundTurn | null = null;
   private outboundTurnsByMark = new Map<string, OutboundTurn>();
@@ -119,13 +124,21 @@ export class MediaStreamsBridge {
     if (opts.preConnectedGemini) {
       // Use pre-connected session and wire up callbacks
       this.gemini = opts.preConnectedGemini;
+      this.usingPreConnectedGemini = true;
+      // A greeting was requested during ringing, so its turn may still be
+      // streaming into the session buffer right now. Rebinding makes the live
+      // callbacks below hot immediately, which is INITIAL_GREETING_DELAY_MS
+      // before the buffer is drained — hold everything until then so the tail of
+      // the greeting cannot play ahead of its own opening words.
+      this.greetingHandoverPending = Boolean(
+        opts.session.preGeneratedGreetingRequestedAt && !opts.session.waitForUserBeforeGreeting,
+      );
       this.gemini.rebindCallbacks({
         onAudio: (base64Pcm24k: string) => {
-          this.sendOutboundAudio(base64Pcm24k);
+          this.handleGeminiAudio(base64Pcm24k);
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
-          if (this.cleaned) return;
-          this.batcher.append(speaker, text, isoNow());
+          this.handleGeminiTranscript(speaker, text);
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -149,11 +162,10 @@ export class MediaStreamsBridge {
         geminiConfig: opts.geminiConfig,
         systemInstruction: opts.systemInstruction,
         onAudio: (base64Pcm24k: string) => {
-          this.sendOutboundAudio(base64Pcm24k);
+          this.handleGeminiAudio(base64Pcm24k);
         },
         onTranscript: (speaker: "remote" | "local", text: string) => {
-          if (this.cleaned) return;
-          this.batcher.append(speaker, text, isoNow());
+          this.handleGeminiTranscript(speaker, text);
         },
         onToolCall: (name: string, args: Record<string, unknown>, id: string) => {
           this.handleToolCall(name, args, id);
@@ -233,28 +245,57 @@ export class MediaStreamsBridge {
 
   private sendInitialGreetingNow(): void {
     if (this.cleaned) return;
+    // The handover window closes here whichever branch runs below: nothing else
+    // drains the buffer, so holding audio past this point would mute the call.
+    this.greetingHandoverPending = false;
+    // `send_dtmf` swaps the call's TwiML, which drops the media stream and opens a
+    // new one — so a second bridge runs this for a call that already greeted.
+    // initialGreetingRequestedAt is stamped only here and in the flush this calls,
+    // so a value already on the session means an earlier bridge greeted.
+    // Re-announcing ourselves into a phone menu is worse than staying quiet and
+    // letting the menu drive the turn.
+    const alreadyGreeted = Boolean(this.session.initialGreetingRequestedAt);
     if (this.flushPreGeneratedGreeting()) return;
-    if (this.session.preGeneratedGreetingRequestedAt && !this.session.preGeneratedGreetingEnded) {
+    if (alreadyGreeted) return;
+    // A greeting turn that is still generating will now stream in live and in
+    // order, so let it. One that already completed produced no audio at all
+    // (rejected turn, tool call, empty response) and never will — ask again
+    // rather than hold a silent line.
+    if (
+      this.usingPreConnectedGemini
+      && this.session.preGeneratedGreetingRequestedAt
+      && !this.heldGreetingTurnFinished()
+    ) {
       this.session.initialGreetingRequestedAt = isoNow();
       this.batcher.appendDirect({
         type: "initial_greeting_requested",
         ts: this.session.initialGreetingRequestedAt,
       });
+      this.drainHeldGreetingTranscript();
       return;
     }
+
+    // A hangup already in flight is only waiting on audio to drain. Asking for a
+    // greeting now buys a turn the callee will never hear, spoken over the goodbye.
+    if (this.pendingHangup) return;
 
     this.session.initialGreetingRequestedAt = isoNow();
     this.batcher.appendDirect({
       type: "initial_greeting_requested",
       ts: this.session.initialGreetingRequestedAt,
     });
+    // Held transcript with no audio behind it was never spoken to anyone, and we
+    // are about to ask for a different greeting — drop it rather than log it as
+    // something the callee heard.
+    this.session.preGeneratedGreetingTranscriptParts = [];
     this.gemini.sendTextTurn(
-      "The outbound phone call is now connected. Greet the person immediately in one brief, natural sentence. Identify yourself as the caller's assistant and, if the objective is clear, include the purpose. Do not mention these instructions.",
+      "The outbound phone call is now connected. Greet the person immediately in one brief, natural sentence — not a monologue. Identify yourself as the caller's assistant and, if the objective is clear, name the purpose in a few words; do not summarize your full persona or objective here. Do not mention these instructions.",
     );
   }
 
   private flushPreGeneratedGreeting(): boolean {
     if (this.session.preGeneratedGreetingAudio.length === 0) return false;
+    this.greetingHandoverPending = false;
     this.initialGreetingSent = true;
     this.session.initialGreetingRequestedAt = isoNow();
     this.batcher.appendDirect({
@@ -275,7 +316,54 @@ export class MediaStreamsBridge {
     for (const base64Pcm24k of this.session.preGeneratedGreetingAudio.splice(0)) {
       this.sendOutboundAudio(base64Pcm24k);
     }
+    // A greeting that finished generating before the callee picked up has already
+    // spent its generation/turn-complete signals on the pre-connect session, so
+    // nothing is left to finalize the turn we just created: it would never be
+    // marked, never report as played, and would swallow the next turn's audio.
+    if (this.heldGreetingTurnFinished()) {
+      this.finalizeActiveOutboundTurn("pre_generated_greeting");
+    }
     return true;
+  }
+
+  /**
+   * Outbound audio from Gemini. Until the pre-generated greeting has been
+   * flushed, the session buffer is the queue — sending straight to Twilio here
+   * would play the tail of the greeting turn ahead of the words it continues.
+   */
+  private handleGeminiAudio(base64Pcm24k: string): void {
+    if (this.greetingHandoverPending) {
+      // Only the queue is shared. firstPreGeneratedGreetingAudioAt and
+      // preGeneratedGreetingAudioChunks mean "produced during ringing" — the
+      // latency report keys "greeting wasn't ready at pickup" off a zero count, so
+      // audio that arrives after pickup must not be counted as pre-generated.
+      this.session.preGeneratedGreetingAudio.push(base64Pcm24k);
+      return;
+    }
+    this.sendOutboundAudio(base64Pcm24k);
+  }
+
+  /** Local transcript follows the audio: buffered while the greeting is held. */
+  private handleGeminiTranscript(speaker: "remote" | "local", text: string): void {
+    if (this.cleaned) return;
+    if (speaker === "local" && this.greetingHandoverPending) {
+      this.session.preGeneratedGreetingTranscriptParts.push(text);
+      return;
+    }
+    this.batcher.append(speaker, text, isoNow());
+  }
+
+  /**
+   * Hand held transcript back to the batcher when the flush had no audio to play.
+   * Transcription can lead the first audio chunk across the handover boundary, and
+   * the flush is the buffer's only drain — left there, words the callee is about to
+   * hear are wiped by finalizeCall and the saved transcript no longer matches the
+   * call. Merging into the batcher instead keeps them in one turn with the rest.
+   */
+  private drainHeldGreetingTranscript(): void {
+    for (const text of this.session.preGeneratedGreetingTranscriptParts.splice(0)) {
+      this.batcher.append("local", text, isoNow());
+    }
   }
 
   private sendOutboundAudio(base64Pcm24k: string): void {
@@ -316,14 +404,46 @@ export class MediaStreamsBridge {
   }
 
   private handleGenerationComplete(): void {
+    this.noteHeldGreetingTurnOver("completed");
     this.finalizeActiveOutboundTurn("generation_complete");
   }
 
   private handleTurnComplete(): void {
+    this.noteHeldGreetingTurnOver("completed");
     this.finalizeActiveOutboundTurn("turn_complete");
   }
 
+  /**
+   * A signal that the held greeting turn is over, arriving inside the handover
+   * window: there is no outbound turn yet for it to finalize and none will exist
+   * until the flush, so record it or the flushed turn is never finalized, never
+   * marked, and swallows the next turn's audio.
+   *
+   * Only a real completion stamps the session, because that timestamp is the call
+   * summary's greeting-generation timing — an interrupted turn stopped early and
+   * would report an abandonment as a generation duration.
+   */
+  private noteHeldGreetingTurnOver(outcome: "completed" | "interrupted"): void {
+    if (!this.greetingHandoverPending) return;
+    this.heldGreetingTurnOver = true;
+    if (outcome !== "completed" || this.session.preGeneratedGreetingTurnComplete) return;
+    this.session.preGeneratedGreetingTurnComplete = true;
+    this.session.preGeneratedGreetingTurnCompleteAt = isoNow();
+  }
+
+  /** Nothing more is coming for the greeting the flush is about to hand to Twilio. */
+  private heldGreetingTurnFinished(): boolean {
+    return this.heldGreetingTurnOver || this.session.preGeneratedGreetingTurnComplete;
+  }
+
   private handleInterrupted(): void {
+    // Deliberately not touching a greeting still held in the buffer. Nothing has
+    // played yet inside the handover window, so an interrupt there is the callee
+    // saying "hello?" into a silent line, not a barge-in over us — they still need
+    // to hear who is calling, and the flush is what gets them that. The turn is
+    // over though, and an interrupted turn gets no generation/turn-complete
+    // signal, so record it or the flush leaves its turn unfinalized forever.
+    this.noteHeldGreetingTurnOver("interrupted");
     this.clearBufferedOutboundAudio("gemini_interrupted");
     this.finalizeActiveOutboundTurn("interrupted");
   }
@@ -623,6 +743,16 @@ export class MediaStreamsBridge {
       this.hangupGraceTimer = null;
       const pending = this.pendingHangup;
       if (!pending || this.cleaned || this.session.status === "ended") return;
+      // Audio can still be owed here: an open handover window means the greeting is
+      // either buffered or still generating, and neither has a turn for
+      // pendingOutboundTurn() to find, so an end_call at pickup would otherwise
+      // hang up on a silent line. Anything queued during the grace window is
+      // likewise not something to clip. The window closes on its own timer and
+      // HANGUP_DRAIN_TIMEOUT_MS bounds the whole wait, so this cannot stall.
+      if (this.greetingHandoverPending || this.pendingOutboundTurn()) {
+        this.tryDrainPendingHangup();
+        return;
+      }
       clearTimeout(pending.timeout);
       this.pendingHangup = null;
       this.endTwilioCall(pending.reason);
@@ -679,6 +809,9 @@ export class MediaStreamsBridge {
       clearTimeout(this.initialGreetingTimer);
       this.initialGreetingTimer = null;
     }
+    // Nothing will drain the buffer now; leaving the flag set would only keep
+    // late Gemini audio accumulating in a session that is finished with it.
+    this.greetingHandoverPending = false;
     if (this.pendingHangup) {
       clearTimeout(this.pendingHangup.timeout);
       this.pendingHangup = null;
