@@ -666,6 +666,11 @@ export class MediaStreamsBridge {
     const twiml = `<Response><Play digits="${digits}"/><Connect><Stream url="wss://${wsHost}/media-stream"><Parameter name="callId" value="${this.callId}" /></Stream></Connect></Response>`;
 
     const client = twilio(accountSid, authToken);
+    // Set before the update, not in its callback: Twilio tears the stream down as
+    // soon as it applies this TwiML, and that `stop` does not have to wait for our
+    // HTTP response. Cleared again if the request fails, so a DTMF that never
+    // happened cannot leave the session waiting for a stream that is not coming.
+    this.session.expectingStreamReconnect = true;
     client.calls(callSid).update({ twiml })
       .then(() => {
         console.log(`[media-bridge] Sent DTMF: ${digits}`);
@@ -673,6 +678,7 @@ export class MediaStreamsBridge {
         this.gemini.sendToolResponse(id, "send_dtmf", { success: true, digits });
       })
       .catch((err: Error) => {
+        this.session.expectingStreamReconnect = false;
         console.error(`[media-bridge] DTMF send failed:`, err.message);
         this.gemini.sendToolResponse(id, "send_dtmf", { error: err.message });
       });
@@ -760,6 +766,9 @@ export class MediaStreamsBridge {
   }
 
   private endTwilioCall(reason: string): void {
+    // Ending the call outranks a DTMF reconnect: no further stream is coming, and
+    // the transcript has to be finalized by the cleanup this schedules.
+    this.session.expectingStreamReconnect = false;
     if (this.pendingHangup) {
       clearTimeout(this.pendingHangup.timeout);
       this.pendingHangup = null;
@@ -834,10 +843,29 @@ export class MediaStreamsBridge {
       // ignore
     }
 
-    // Mark session ended
-    this.session.status = "ended";
+    // A newer bridge already owns this call — the reconnect's stream landed before
+    // this teardown ran — so none of the session state below is ours to touch.
+    if (this.session.bridge && this.session.bridge !== this) {
+      console.log(`[media-bridge] Call ${this.callId} handed to a newer stream — leaving it live`);
+      return;
+    }
+
     this.session.ws = undefined;
     this.session.bridge = undefined;
+
+    // `send_dtmf` swaps the call's TwiML, which drops this stream and immediately
+    // opens another one for the same call. Ending the session here would write the
+    // transcript at the DTMF and set finalizeCall's idempotency guard, so the whole
+    // rest of the conversation would stay in memory and never reach disk. Leave the
+    // call live for the next bridge; if the stream never comes back, the inactivity
+    // sweep ends and finalizes it.
+    if (this.session.expectingStreamReconnect) {
+      console.log(`[media-bridge] Call ${this.callId} awaiting stream reconnect — not finalizing`);
+      return;
+    }
+
+    // Mark session ended
+    this.session.status = "ended";
 
     // Notify server to finalize the transcript.
     if (this.onCleanup) {

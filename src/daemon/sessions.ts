@@ -39,6 +39,10 @@ export interface CallSession {
   // Set only when the remote end closed the pre-connect socket (a pre-connect
   // failure); our own close() never reports back. Read by the call summary.
   preGeneratedGreetingSessionClosedAt?: string;
+  // A `send_dtmf` TwiML swap drops the media stream and opens a replacement for the
+  // same call. Set while that gap is open so the bridge teardown does not end and
+  // finalize a call that is still in progress.
+  expectingStreamReconnect?: boolean;
   finalized: boolean; // Whether finalizeCall() has already run (idempotency guard)
   finalizedAt?: number; // Date.now() once the transcript write settled; gates reaping
 
