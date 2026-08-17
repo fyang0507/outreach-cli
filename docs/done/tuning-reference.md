@@ -196,3 +196,20 @@ For immediate UX improvement, iterate in this order:
 3. **Voice selection** (`gemini.speech.voice_name`) — personality/brand fit
 4. **Thinking level** (`gemini.thinking.thinking_level`) — for complex call scenarios
 5. **Temperature** (`gemini.generation.temperature`) — response variety/predictability
+
+## Update — `thinking_level` default moved to `low`, 2026-08-17
+
+The table above records `thinking_level: "minimal"` as the shipped default. That changed.
+
+`minimal` was chosen for latency, and an earlier experiment found `medium` gave no measurable
+latency or groundedness benefit over prompt-only fixes (see `latency-analysis.md`). Neither
+experiment measured *tool-call reliability*, which turned out to be the cost.
+
+Emitting speech and a function call in the same turn is a planning step, and Gemini Live gives no
+second chance: once the turn completes the model is idle, so `end_call` either rides along with the
+farewell or never fires. Under `minimal` it was being dropped on roughly half of calls that reached
+a spoken goodbye, leaving the callee on an open, silent line (issue #98).
+
+The shipped default in `outreach.config.dev.yaml.example` is now `"low"`, paired with a rewrite of
+the "Ending the call" section in `prompts/voice-agent.md` that requires the tool call in the same
+response rather than "after" the farewell. Revisit if per-turn latency regresses.

@@ -58,8 +58,11 @@ gemini:
 
   thinking:
     # Reasoning depth: minimal, low, medium, high.
-    # Higher = smarter responses but more latency. "minimal" is best for most calls for minimal latency.
-    thinking_level: "minimal"
+    # Higher = smarter responses but more latency.
+    # "low" rather than "minimal": emitting speech and a tool call in the same turn is a
+    # planning step, and end_call was being dropped about half the time under "minimal"
+    # (see issue #98). Revisit if per-turn latency regresses.
+    thinking_level: "low"
     # Return thought tokens in the response. Only useful for debugging.
     include_thoughts: false
 
