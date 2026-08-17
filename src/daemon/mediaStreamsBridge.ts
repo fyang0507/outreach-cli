@@ -13,6 +13,13 @@ const FIRST_OUTBOUND_AUDIO_MARK = "first_outbound_audio";
 const REMOTE_AUDIO_RMS_THRESHOLD = 500;
 const HANGUP_DRAIN_GRACE_MS = 200;
 const HANGUP_DRAIN_TIMEOUT_MS = 7000;
+// How much of a cleared greeting has to be left unplayed before we treat it as
+// never delivered. More than a sentence of it went missing, so the callee cannot
+// be assumed to know who is calling; a barge-in over the last moments of a
+// greeting they did hear should not provoke a second introduction.
+const GREETING_UNHEARD_REMAINDER_MS = 1500;
+// Gemini sends 24kHz mono 16-bit PCM, so two bytes per sample at 24 samples/ms.
+const GEMINI_PCM_BYTES_PER_MS = 48;
 
 interface OutboundTurn {
   id: string;
@@ -108,6 +115,11 @@ export class MediaStreamsBridge {
   // buffer — not the Twilio socket — is the outbound queue. See handleGeminiAudio.
   private greetingHandoverPending = false;
   private heldGreetingTurnOver = false;
+  // The turn the greeting flush created, and how much speech it carried, so a
+  // clear that discards it can be told from one that trims its tail.
+  private flushedGreetingTurn: OutboundTurn | null = null;
+  private flushedGreetingAudioMs = 0;
+  private greetingLossReported = false;
   private outboundTurnSeq = 0;
   private activeOutboundTurn: OutboundTurn | null = null;
   private outboundTurnsByMark = new Map<string, OutboundTurn>();
@@ -313,9 +325,13 @@ export class MediaStreamsBridge {
       });
     }
 
+    let greetingBytes = 0;
     for (const base64Pcm24k of this.session.preGeneratedGreetingAudio.splice(0)) {
+      greetingBytes += Buffer.byteLength(base64Pcm24k, "base64");
       this.sendOutboundAudio(base64Pcm24k);
     }
+    this.flushedGreetingAudioMs = greetingBytes / GEMINI_PCM_BYTES_PER_MS;
+    this.flushedGreetingTurn = this.activeOutboundTurn;
     // A greeting that finished generating before the callee picked up has already
     // spent its generation/turn-complete signals on the pre-connect session, so
     // nothing is left to finalize the turn we just created: it would never be
@@ -446,6 +462,44 @@ export class MediaStreamsBridge {
     this.noteHeldGreetingTurnOver("interrupted");
     this.clearBufferedOutboundAudio("gemini_interrupted");
     this.finalizeActiveOutboundTurn("interrupted");
+    this.notifyIfGreetingWentUnheard();
+  }
+
+  /**
+   * A pre-generated greeting is the one turn where Gemini's context and the
+   * callee's ears can disagree. The turn completed on the model's side during
+   * ringing, so an interruption that clears it out of Twilio's queue leaves the
+   * model believing it introduced itself to someone who heard a fraction of a
+   * second of it — and the pre-connect prompt tells it not to repeat the greeting,
+   * so nothing re-identifies. Tell it what actually reached the line.
+   *
+   * Sent on the realtime channel: the callee is mid-sentence, and a turn barrier
+   * here would talk over them. The model folds this into its next reply.
+   */
+  private notifyIfGreetingWentUnheard(): void {
+    const greeting = this.flushedGreetingTurn;
+    if (!greeting || this.greetingLossReported || this.cleaned) return;
+    // Nothing was discarded, so nothing was missed: an interrupt after the turn has
+    // drained finds an empty queue and clearBufferedOutboundAudio no-ops. Note that
+    // a turn's mark still comes back after a clear, so `played` says the queue
+    // emptied, not that the callee heard it — only `cleared` is load-bearing here.
+    if (!greeting.cleared) return;
+    const startedAt = this.session.firstOutboundAudioPlayedAt ?? this.session.firstOutboundAudioAt;
+    if (!startedAt || this.flushedGreetingAudioMs === 0) return;
+
+    const playedMs = Date.now() - new Date(startedAt).getTime();
+    const unheardMs = this.flushedGreetingAudioMs - playedMs;
+    if (unheardMs <= GREETING_UNHEARD_REMAINDER_MS) return;
+
+    this.greetingLossReported = true;
+    console.log(
+      `[media-bridge] Greeting for call ${this.callId} cleared after ~${Math.max(0, Math.round(playedMs))}ms `
+      + `of ~${Math.round(this.flushedGreetingAudioMs)}ms — telling the model it was not heard`,
+    );
+    const note = "System note: the other party started speaking before they could hear your greeting, "
+      + "so they do not know who is calling or why. Identify yourself briefly in your next reply, then continue.";
+    this.batcher.appendDirect({ type: "call_steered", ts: isoNow(), mode: "nudge", text: note });
+    this.gemini.steer(note);
   }
 
   private handleGeminiEnd(): void {
