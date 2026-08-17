@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { latestTranscriptCallId, readTranscript, transcriptPath, type CallSummaryEvent, type TranscriptEvent } from "../../logs/sessionLog.js";
+import { latestTranscriptCallId, readTranscript, transcriptPath, type CallSummaryEvent, type PreconnectHandoverEvent, type TranscriptEvent } from "../../logs/sessionLog.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
@@ -38,6 +38,7 @@ export interface LatencySummaryResult {
 const HUMAN_FEELING_TARGET_MS = 1000;
 const BORDERLINE_TARGET_MS = 2500;
 const BASELINE_RANGE_MS: [number, number] = [5000, 8000];
+const HANDOVER_WAIT_ATTRIBUTION_MS = 250;
 
 function latestSummary(events: Awaited<ReturnType<typeof readTranscript>>): CallSummaryEvent | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -116,11 +117,16 @@ function computeSummary(events: TranscriptEvent[]): CallSummaryEvent {
   const firstOutboundAudioAt = firstEventTs(events, "first_outbound_audio");
   const firstOutboundAudioPlayedAt = firstEventTs(events, "first_outbound_audio_played");
   const initialGreetingRequestedAt = firstEventTs(events, "initial_greeting_requested");
+  const handover = events.find((event): event is PreconnectHandoverEvent => event.type === "preconnect_handover");
 
   return {
     type: "call_summary",
     ts: new Date().toISOString(),
     duration_ms: 0,
+    ...(handover && {
+      preconnect_handover: handover.outcome,
+      preconnect_handover_wait_ms: handover.waited_ms,
+    }),
     ...(diffMs(mediaStreamStartedAt, answeredAt) !== undefined && { answer_to_stream_ms: diffMs(mediaStreamStartedAt, answeredAt) }),
     ...(diffMs(initialGreetingRequestedAt, mediaStreamStartedAt) !== undefined && {
       stream_to_initial_greeting_request_ms: diffMs(initialGreetingRequestedAt, mediaStreamStartedAt),
@@ -162,6 +168,19 @@ function likelyBottleneck(summary: CallSummaryEvent, missing: string[]): string 
       return "remote_audio_activity_to_playback";
     }
     return "wait_for_user_turn_detection";
+  }
+  // A failed or slow warm-session handover is upstream of the greeting-pregeneration
+  // symptoms below (no warm session means nothing was pre-generated), and the wait
+  // is a sub-interval of stream_to_initial_greeting_request_ms so it can never win
+  // largestDiagnostic on its own. Attribute it before the symptoms.
+  if (summary.preconnect_handover === "fresh_fallback") return "gemini_preconnect_handover_failed";
+  const handoverWaitMs = summary.preconnect_handover_wait_ms ?? 0;
+  const streamToGreetingMs = streamStartToAudibleGreeting(summary);
+  if (
+    handoverWaitMs >= HANDOVER_WAIT_ATTRIBUTION_MS &&
+    (streamToGreetingMs === undefined || handoverWaitMs * 2 >= streamToGreetingMs)
+  ) {
+    return "gemini_preconnect_handover_wait";
   }
   if (summary.pre_generated_greeting_requested === false) return "greeting_pregeneration_not_requested";
   if (summary.pre_generated_greeting_ended_before_stream === true) return "greeting_pregeneration_ended_before_stream";

@@ -147,3 +147,15 @@
 - Init needs a cleanup-on-failure path (try/finally after ngrok spawn)
 - Consider adding `outreach init --recover` that aggressively finds and cleans up any outreach-related processes
 - The `isProcessRunning` function is duplicated in 3 files (runtime.ts, init.ts, teardown.ts) — consolidate
+
+## Update — 2026-08-16
+
+E10 (webhook URL expires or rotates) is now **detected**, not repaired. `init` runs a preflight inside the daemon on both the fresh and the "Already initialized" paths; its `webhook` check fetches `<public URL>/health` and compares the returned `instance_id` against the daemon's own, so a re-issued ngrok hostname, an offline tunnel, or a second daemon on the port fails `init` with a hint instead of producing silently dead calls. Nothing re-points a running daemon, so the remedy is still `teardown` then `init`. There is still no place-time or periodic tunnel check.
+
+Also changed since this plan was written:
+
+- E1 tunnel reuse compares the parsed port exactly; the old substring match accepted `localhost:13001` for port `3001`.
+- E3 cleanup only kills processes *this* `init` started — a reused ngrok is no longer killed on failure — and a failed preflight uses the same cleanup path and writes no `runtime.json`.
+- `--tunnel manual --webhook-url` strips a trailing slash, which otherwise made the daemon build `<url>//call-status/<id>` and Express 404 every Twilio callback.
+- The daemon no longer self-shuts down after 5 idle minutes, which removes the *self-inflicted* variant of E2/T12 — `runtime.json` no longer goes stale underneath a working session. A crash, an external `kill` or a reboot still leaves it behind, since `teardown` is the only thing that deletes it, so every consumer keeps health-checking rather than trusting the file.
+- `init` releases `~/.outreach/init.lock` on every exit path, including a failed preflight. It used to `process.exit()` past its own `finally`, leaving a lockfile that only survived because `acquireInitLock` reclaims a dead PID's lock.

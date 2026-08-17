@@ -17,8 +17,8 @@ Top-level:
 
 Calls:
 
-- `outreach call init`
-- `outreach call place --to <number> --objective <text> [--from <number>] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]`
+- `outreach call init [--tunnel ngrok|manual] [--webhook-url <url>] [--skip-preflight]`
+- `outreach call place (--to <number> | --call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]`
 - `outreach call listen --id <callId>`
 - `outreach call status --id <callId>`
 - `outreach call latency (--id <callId> | --latest)`
@@ -40,7 +40,7 @@ All command output is JSON.
 
 ## Configuration
 
-- `.env`: provider secrets (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `OUTREACH_DEFAULT_FROM`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`).
+- `.env`: provider secrets. Calls require all five of `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `GOOGLE_GENERATIVE_AI_API_KEY`, `PERSONAL_CALLER_ID`, `TWILIO_DEFAULT_FROM_NUMBER` (`call init` refuses without them); `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` and `DISCORD_BOT_TOKEN` are needed only for those channels.
 - `<data_repo>/outreach/config.yaml`: voice identity, default persona, call max duration, Gemini model/voice/VAD/thinking/transcription config.
 - `outreach.config.dev.yaml`: gitignored dev pointer/config next to the CLI; `data_repo_path` is meaningful only here.
 
@@ -60,6 +60,7 @@ There is no `outreach setup`. Data path resolution is `OUTREACH_DATA_REPO`, then
 | `src/providers/gmail.ts` | Gmail API client |
 | `src/providers/googleAuth.ts` | Gmail OAuth2 token management |
 | `src/daemon/server.ts` | Call daemon, Twilio webhook server, Gemini bridge orchestration |
+| `src/daemon/preflight.ts` | Daemon-side readiness checks executed by `call init` over IPC |
 | `src/daemon/mediaStreamsBridge.ts` | Twilio Media Streams <-> Gemini Live bridge, playback drain |
 | `src/audio/geminiLive.ts` | Gemini Live API wrapper |
 | `src/audio/transcode.ts` | μ-law/PCM conversion and resampling |
@@ -70,9 +71,10 @@ There is no `outreach setup`. Data path resolution is `OUTREACH_DATA_REPO`, then
 
 ## Call Architecture Notes
 
-- Calls require `outreach call init`, which starts the local daemon and webhook tunnel.
-- `call place` pre-connects Gemini while Twilio dials.
-- Normal calls proactively greet. Greeting audio can be pre-generated while ringing and is flushed after a short post-stream delay.
+- Calls require `outreach call init`, which starts the local daemon and webhook tunnel and then runs a preflight inside the daemon: required `.env` variables, `config.yaml`, the rendered system instruction, the transcripts directory, Twilio auth, both caller IDs, a real Gemini Live connect, and a probe through the public webhook URL that must reach this daemon's `instance_id`. A failing check exits `INFRA_ERROR` with the full report; on a fresh start it kills only the processes that init started and writes no `runtime.json`. The same preflight runs when an existing daemon is reused, but that path leaves the daemon and its `runtime.json` untouched, so a failure there must be resolved with `teardown` + `init`. `--skip-preflight` opts out.
+- The daemon runs until `outreach call teardown`. It has no idle self-shutdown; ended sessions are retained for an hour (max 100) and then reaped.
+- `call place` pre-connects Gemini while Twilio dials. When the media stream opens, the daemon waits for that same in-flight handshake rather than starting a fresh one, and only falls back to a new session if the warm one never arrives or has already closed. Pre-connect failures are recorded as `preconnect_failed` in the transcript, and an answered call left without a usable Gemini session is hung up with a `Gemini unavailable: …` reason rather than held open in silence — including when Gemini accepts the socket and then closes it, which is how a bad key, a rejected model and an exhausted quota all arrive.
+- Normal calls proactively greet. Greeting audio can be pre-generated while ringing and is flushed after a short post-stream delay. Inbound audio buffered before the bridge exists is discarded rather than replayed into the greeting (kept for `--wait-for-user`, where it is the turn trigger).
 - `--wait-for-user` keeps the agent silent until the callee speaks first, then relies on Gemini automatic activity detection for turn-taking.
 - The bridge tracks outbound turns with Twilio `mark`; `end_call` hangups are deferred until the active outbound turn drains, preventing clipped goodbyes.
 

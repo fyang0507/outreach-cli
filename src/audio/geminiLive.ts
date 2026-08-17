@@ -42,6 +42,7 @@ export class GeminiLiveSession {
   private session: Awaited<ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>> | null = null;
   private opts: GeminiLiveSessionOptions;
   private closed = false;
+  private closeReasonText: string | undefined;
 
   constructor(opts: GeminiLiveSessionOptions) {
     this.opts = opts;
@@ -71,7 +72,7 @@ export class GeminiLiveSession {
     const outputTranscription: Record<string, unknown> = {};
     if (gc.transcription.output_language_codes) outputTranscription.languageCodes = gc.transcription.output_language_codes;
 
-    this.session = await ai.live.connect({
+    const session = await ai.live.connect({
       model: gc.model,
       config: {
         responseModalities: [Modality.AUDIO],
@@ -118,8 +119,11 @@ export class GeminiLiveSession {
         onerror: (e: ErrorEvent) => {
           console.error("[gemini-live] Error:", e.error ?? e.message ?? e);
         },
-        onclose: (_e: CloseEvent) => {
-          console.log("[gemini-live] Connection closed");
+        onclose: (e: CloseEvent) => {
+          // A rejected API key, model or voice never fails connect() — it arrives
+          // here, as a close a moment later. Keep the reason so callers can report it.
+          this.closeReasonText = e?.reason || undefined;
+          console.log(`[gemini-live] Connection closed${e?.reason ? `: ${e.reason}` : ""}`);
           if (!this.closed) {
             this.closed = true;
             this.opts.onEnd();
@@ -127,6 +131,18 @@ export class GeminiLiveSession {
         },
       },
     });
+
+    // close() may have run while the handshake was in flight (a caller that gave
+    // up on a slow connect); adopting the socket now would leak it.
+    if (this.closed) {
+      try {
+        session.close();
+      } catch {
+        // ignore close errors
+      }
+      return;
+    }
+    this.session = session;
   }
 
   private handleMessage(msg: LiveServerMessage): void {
@@ -227,6 +243,11 @@ export class GeminiLiveSession {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** Server-supplied close reason, when the remote end closed the session. */
+  get closeReason(): string | undefined {
+    return this.closeReasonText;
   }
 
   close(): void {

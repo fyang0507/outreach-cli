@@ -14,7 +14,8 @@ This repository is a pure utility CLI for outbound calls, SMS/iMessage, Gmail, a
 
 ```bash
 outreach health
-outreach call init|place|listen|steer|status|latency|hangup|teardown
+outreach call init [--skip-preflight]
+outreach call place|listen|steer|status|latency|hangup|teardown
 outreach sms send|history
 outreach email send|history|search
 outreach discord post
@@ -41,8 +42,9 @@ Twilio webhooks/WebSocket -> mediaStreamsBridge.ts -> GeminiLiveSession
 
 Important behavior:
 
-- `call init` starts the daemon and tunnel.
-- `call place` pre-connects Gemini before Twilio answers.
+- `call init` starts the daemon and tunnel, then runs a preflight *inside the daemon* (`daemon.preflight` over IPC) so it validates the exact process, env, config and credentials a call will use: required `.env` variables, `config.yaml`, the rendered system instruction, the transcripts directory, Twilio auth, both caller IDs, a real Gemini Live connect, and a round trip through the public webhook URL back to this daemon's `instance_id`. Any failing check is an `INFRA_ERROR` carrying the whole report; on a fresh start init tears down only what it started and writes no `runtime.json`. `--skip-preflight` bypasses it. The preflight also runs on the "Already initialized" path — a healthy daemon is not a ready one — but there it leaves the running daemon and the existing `runtime.json` alone, so a failure has to be resolved with `teardown` + `init`. The whole run is bounded (`PREFLIGHT_BUDGET_MS`) so a stalling probe returns a partial report instead of an IPC timeout.
+- The daemon lives from `call init` until `call teardown`; there is no idle self-shutdown. Ended sessions stay listenable for an hour (and at most 100 are retained), then are reaped by the same 10s interval that runs the cost guards.
+- `call place` pre-connects Gemini before Twilio answers. At pickup the media-stream path waits for that same in-flight handshake (`PRECONNECT_HANDOVER_WAIT_MS`) instead of starting a second, colder one; it only builds a fresh session if the warm one never lands or has already closed. A pre-connect failure is a `preconnect_failed` transcript event, and an answered call left without a usable Gemini session is hung up with a `Gemini unavailable: …` reason instead of left silent — including the common case where Gemini accepts the socket and then closes it (bad key, rejected model, exhausted quota).
 - Default calls proactively greet. `--wait-for-user` keeps the agent silent until the callee speaks, then relies on Gemini automatic VAD for turn detection.
 - Calls always use Twilio answering-machine detection (async AMD via `/call-amd`).
 - The bridge sends Twilio `mark` messages after outbound turns and defers `end_call` hangup until playback drains.
@@ -56,6 +58,7 @@ Important behavior:
 | `src/commands/health.ts` | Readiness checks |
 | `src/commands/call/*.ts` | Call commands |
 | `src/daemon/server.ts` | Daemon, IPC, Twilio status/webhook handling |
+| `src/daemon/preflight.ts` | In-daemon readiness checks run by `call init` |
 | `src/daemon/mediaStreamsBridge.ts` | Realtime audio bridge, playback drain |
 | `src/audio/geminiLive.ts` | Gemini Live wrapper |
 | `src/providers/messages.ts` | Messages.app send and history |

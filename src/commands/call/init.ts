@@ -2,9 +2,13 @@ import { Command } from "commander";
 import { fork, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { outreachConfig } from "../../config.js";
+import { missingRequiredCallEnv } from "../../config.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
+import { sendToDaemon } from "../../daemon/ipc.js";
+// Type-only: importing the preflight module itself would pull the Twilio and
+// Gemini SDKs into every CLI invocation.
+import type { PreflightReport } from "../../daemon/preflight.js";
 import {
   readRuntime,
   writeRuntime,
@@ -24,6 +28,10 @@ const NGROK_API_PORT = 4040;
 const NGROK_POLL_TIMEOUT_MS = 10_000;
 const NGROK_POLL_INTERVAL_MS = 300;
 const DAEMON_HEALTH_TIMEOUT_MS = 5_000;
+// The preflight makes Twilio, Gemini and tunnel round trips inside the daemon;
+// the 10s IPC default is too tight for that. The daemon bounds the whole run well
+// inside this, so a timeout here really does mean the daemon stopped answering.
+const PREFLIGHT_IPC_TIMEOUT_MS = 30_000;
 
 function getPort(): number {
   return parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
@@ -81,6 +89,24 @@ async function pollNgrokUrl(timeoutMs: number): Promise<string> {
   );
 }
 
+/**
+ * ngrok reports the forwarded address as "http://localhost:3001" or
+ * "localhost:3001" (and, on older builds, a bare port). Substring matching on
+ * the port digits accepts "localhost:13001" for port 3001 — a tunnel pointing at
+ * someone else's process — so compare the parsed port exactly.
+ */
+function tunnelPort(addr: string): number | null {
+  const trimmed = addr.trim();
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  try {
+    const url = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
+    if (url.port) return parseInt(url.port, 10);
+    return url.protocol === "https:" ? 443 : 80;
+  } catch {
+    return null;
+  }
+}
+
 // ---- E1: Check for existing ngrok on port 4040 ----
 
 async function validateExistingNgrok(daemonPort: number): Promise<string | null> {
@@ -108,7 +134,7 @@ async function validateExistingNgrok(daemonPort: number): Promise<string | null>
 
     // Check if tunnel points to our daemon port
     const tunnelAddr = httpsTunnel.config?.addr ?? "";
-    if (tunnelAddr.includes(String(daemonPort))) {
+    if (tunnelPort(tunnelAddr) === daemonPort) {
       // Reuse existing tunnel
       return httpsTunnel.public_url;
     }
@@ -140,6 +166,52 @@ async function validateExistingRuntime(
   return { valid: true, webhookUrl: existing.webhook_url };
 }
 
+// ---- Preflight (executed inside the daemon) ----
+
+/**
+ * The daemon validates its own env, config, credentials and tunnel: the CLI
+ * process cannot observe the daemon's env snapshot or resolved config, and on the
+ * reuse path there is no fork whose state it could assume.
+ */
+async function runPreflightOverIpc(): Promise<PreflightReport> {
+  try {
+    const result = (await sendToDaemon("daemon.preflight", {}, PREFLIGHT_IPC_TIMEOUT_MS)) as
+      PreflightReport & { error?: string; message?: string };
+    if (result.error) throw new Error(`daemon rejected the preflight request: ${result.message ?? result.error}`);
+    if (!Array.isArray(result.checks)) throw new Error("daemon returned an unexpected preflight response");
+    return result;
+  } catch (err) {
+    // Report the transport failure as a failed check so the caller has one shape to read.
+    return {
+      ok: false,
+      checks: [{
+        name: "daemon_ipc",
+        ok: false,
+        status: "fail",
+        detail: (err as Error).message,
+        hint: "The daemon answers HTTP but not the preflight — an older daemon may still be running. Run 'outreach call teardown' then 'outreach call init'.",
+      }],
+    };
+  }
+}
+
+function preflightSummary(report: PreflightReport): string {
+  const failed = report.checks.filter((check) => check.status === "fail");
+  if (failed.length === 0) return "Preflight failed";
+  const detail = failed.map((check) => `${check.name}: ${check.detail ?? "failed"}`).join("; ");
+  return `Preflight failed (${failed.length} check${failed.length === 1 ? "" : "s"}) — ${detail}`;
+}
+
+/** E3: only ever kill what THIS init started — never a reused ngrok or daemon. */
+async function cleanupStartedProcesses(daemonPid?: number, ngrokPid?: number): Promise<void> {
+  if (daemonPid && isProcessRunning(daemonPid)) {
+    await killAndWait(daemonPid, 2000);
+  }
+  if (ngrokPid && isProcessRunning(ngrokPid)) {
+    await killAndWait(ngrokPid, 2000);
+  }
+}
+
 async function cleanupStaleRuntime(existing: RuntimeState): Promise<void> {
   // Kill stale processes if they're actually ours
   if (existing.daemon_pid && isOurProcess(existing.daemon_pid, "node")) {
@@ -151,67 +223,93 @@ async function cleanupStaleRuntime(existing: RuntimeState): Promise<void> {
   await deleteRuntime();
 }
 
+interface InitOptions {
+  tunnel: string;
+  webhookUrl?: string;
+  skipPreflight?: boolean;
+}
+
 export function registerInitCommand(parent: Command): void {
   parent
     .command("init")
     .description("Start tunnel and daemon for voice calls")
     .option("--tunnel <type>", "Tunnel type: ngrok or manual", "ngrok")
     .option("--webhook-url <url>", "Webhook URL (required for --tunnel manual)")
-    .action(async (opts: { tunnel: string; webhookUrl?: string }) => {
+    .option("--skip-preflight", "Skip setup validation (not recommended)")
+    .action(async (opts: InitOptions) => {
       // E7: Acquire init lock to prevent double init
       const lockAcquired = await acquireInitLock();
       if (!lockAcquired) {
         outputError(INFRA_ERROR, "Another init is already in progress");
         process.exit(INFRA_ERROR);
-        return;
       }
 
+      // doInit returns its exit code instead of exiting: process.exit() inside it
+      // would skip the release below and leave the lockfile behind on every run.
+      let code = SUCCESS;
       try {
-        await doInit(opts);
+        code = await doInit(opts);
       } finally {
         await releaseInitLock();
       }
+      process.exit(code);
     });
 }
 
-async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<void> {
-  // 1. E2: Check if already initialized — use health check, not just PID
+async function doInit(opts: InitOptions): Promise<number> {
+  // 1. Cheap local gate, before anything is spawned: a misconfigured .env should
+  //    fail in milliseconds, not after ngrok and the daemon are up.
+  const missingEnv = missingRequiredCallEnv();
+  if (missingEnv.length > 0) {
+    outputError(
+      INPUT_ERROR,
+      `Missing required variables in .env: ${missingEnv.join(", ")}`,
+      { missing_env: missingEnv },
+    );
+    return INPUT_ERROR;
+  }
+
+  // 2. E2: Check if already initialized — use health check, not just PID
   const existing = await readRuntime();
   if (existing) {
     const { valid, webhookUrl } = await validateExistingRuntime(existing);
     if (valid) {
+      // A healthy daemon is not a ready one: the tunnel may have been re-issued
+      // under it, or its config/credentials may have gone bad since it started.
+      // The daemon reports activeCalls, so the Gemini probe self-skips mid-call.
+      const report = opts.skipPreflight ? undefined : await runPreflightOverIpc();
+      if (report && !report.ok) {
+        outputError(INFRA_ERROR, preflightSummary(report), { preflight: report });
+        return INFRA_ERROR;
+      }
       outputJson({
         status: "ready",
         webhook_url: webhookUrl,
         daemon_pid: existing.daemon_pid,
         message: "Already initialized",
+        ...(report ? { preflight: report } : {}),
       });
-      process.exit(SUCCESS);
-      return;
+      return SUCCESS;
     }
     // Stale runtime — clean up before re-init
     await cleanupStaleRuntime(existing);
   }
 
-  // 2. Validate Twilio creds
-  if (!outreachConfig.TWILIO_ACCOUNT_SID || !outreachConfig.TWILIO_AUTH_TOKEN) {
-    outputError(INPUT_ERROR, "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set in .env");
-    process.exit(INPUT_ERROR);
-    return;
-  }
-
   const port = getPort();
   let webhookUrl: string;
   let ngrokPid: number | undefined;
+  // Only a tunnel this init spawned may be torn down on failure.
+  let ngrokStartedByUs = false;
 
   // 3. Start tunnel
   if (opts.tunnel === "manual") {
     if (!opts.webhookUrl) {
       outputError(INPUT_ERROR, "--webhook-url is required when using --tunnel manual");
-      process.exit(INPUT_ERROR);
-      return;
+      return INPUT_ERROR;
     }
-    webhookUrl = opts.webhookUrl;
+    // A trailing slash would make the daemon build '<url>//call-status/<id>', which
+    // Express 404s — silently dropping every Twilio callback.
+    webhookUrl = opts.webhookUrl.replace(/\/$/, "");
   } else if (opts.tunnel === "ngrok") {
     // E1: Check for existing ngrok first
     const existingUrl = await validateExistingNgrok(port);
@@ -228,8 +326,7 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
           `Port ${port} is already in use by PID ${portOwner}. ` +
             `Kill it with 'kill ${portOwner}' or use a different PORT.`,
         );
-        process.exit(INFRA_ERROR);
-        return;
+        return INFRA_ERROR;
       }
 
       // E3: Wrap ngrok spawn in try block — clean up on failure
@@ -240,23 +337,20 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
         });
         ngrokChild.unref();
         ngrokPid = ngrokChild.pid;
+        ngrokStartedByUs = true;
 
         // E5: Poll for ngrok URL instead of fixed sleep
         webhookUrl = await pollNgrokUrl(NGROK_POLL_TIMEOUT_MS);
       } catch (err) {
         // E3: Kill ngrok if it was spawned but something failed
-        if (ngrokPid && isProcessRunning(ngrokPid)) {
-          await killAndWait(ngrokPid, 2000);
-        }
+        await cleanupStartedProcesses(undefined, ngrokPid);
         outputError(INFRA_ERROR, `Failed to start ngrok: ${(err as Error).message}`);
-        process.exit(INFRA_ERROR);
-        return;
+        return INFRA_ERROR;
       }
     }
   } else {
     outputError(INPUT_ERROR, `Unknown tunnel type: ${opts.tunnel}. Use 'ngrok' or 'manual'`);
-    process.exit(INPUT_ERROR);
-    return;
+    return INPUT_ERROR;
   }
 
   // Set webhook URL in environment so daemon picks it up
@@ -287,20 +381,26 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
     // 5. Wait for daemon health
     await waitForHealth(port, DAEMON_HEALTH_TIMEOUT_MS);
   } catch (err) {
-    // E3: Clean up ngrok if daemon failed to start
-    if (ngrokPid && isProcessRunning(ngrokPid)) {
-      await killAndWait(ngrokPid, 2000);
-    }
-    // Also clean up daemon if it was partially started
-    if (daemonPid && isProcessRunning(daemonPid)) {
-      await killAndWait(daemonPid, 2000);
-    }
+    // E3: Clean up the daemon and ngrok this init started
+    await cleanupStartedProcesses(daemonPid, ngrokStartedByUs ? ngrokPid : undefined);
     outputError(INFRA_ERROR, `Daemon failed to start: ${(err as Error).message}`);
-    process.exit(INFRA_ERROR);
-    return;
+    return INFRA_ERROR;
   }
 
-  // 6. Write runtime.json
+  // 6. Preflight — run inside the daemon, so it validates (and warms) the exact
+  //    process, env, config and credentials the call will use.
+  let preflight: PreflightReport | undefined;
+  if (!opts.skipPreflight) {
+    preflight = await runPreflightOverIpc();
+    if (!preflight.ok) {
+      // Leave nothing half-started behind, and no runtime.json claiming ready.
+      await cleanupStartedProcesses(daemonPid, ngrokStartedByUs ? ngrokPid : undefined);
+      outputError(INFRA_ERROR, preflightSummary(preflight), { preflight });
+      return INFRA_ERROR;
+    }
+  }
+
+  // 7. Write runtime.json
   const state: RuntimeState = {
     daemon_pid: daemonPid,
     daemon_port: port,
@@ -313,11 +413,12 @@ async function doInit(opts: { tunnel: string; webhookUrl?: string }): Promise<vo
 
   await writeRuntime(state);
 
-  // 7. Output
+  // 8. Output
   outputJson({
     status: "ready",
     webhook_url: webhookUrl,
     daemon_pid: daemonPid,
+    ...(preflight ? { preflight } : {}),
   });
-  process.exit(SUCCESS);
+  return SUCCESS;
 }
