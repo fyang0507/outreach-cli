@@ -111,6 +111,8 @@ With `--experimental-local-vad`, this prefers the first detected remote activity
 - `summary.pre_generated_greeting_requested`: true means Gemini was asked to prepare the greeting during ringing.
 - `summary.pre_generated_greeting_audio_chunks`: greater than zero means Gemini produced greeting audio during ringing.
 - `summary.pre_generated_greeting_ended_before_stream`: true means the pre-generation session ended before Twilio opened the media stream.
+- `summary.pre_generated_greeting_generated_before_stream`: true means the greeting turn finished generating before Twilio opened the media stream. False with `..._audio_chunks` above zero means the greeting was still generating at pickup, so the rest of it normally arrives over the live session — unless the callee spoke during the handover, which ends the turn and leaves the greeting truncated at whatever had been buffered. That last case is deliberately silent in the transcript: nothing had played yet, so there was no queued audio to clear and nothing to report.
+- `summary.pre_generated_greeting_request_to_turn_complete_ms`: how long the greeting turn took to generate, timed from the request at `call_placed` — recorded only if the turn finished before the buffer was flushed at pickup. Omitted while `..._requested` is true means it had not finished even by then — still streaming on the live session, or interrupted — so absence is itself the signal, not missing data. Read this as a verdict on the greeting's own length, not as a pickup-timing test: it does not share an origin with `ring_duration_ms`, so comparing the two credits the greeting with the pre-ring dialing gap and can flag a greeting that finished comfortably before pickup. For "was it still generating at pickup?" use `..._generated_before_stream` above, which is exact. In the reported call this read 9016ms for a greeting that ran about twelve seconds of speech.
 - `summary.pre_generated_greeting_ready_before_stream`: true means audio was ready before Twilio opened the media stream.
 - `summary.pre_generated_greeting_request_to_first_generated_audio_ms`: Gemini greeting generation latency.
 - `summary.answer_to_stream_ms`: Twilio answer callback to media stream start.
@@ -124,6 +126,8 @@ With `--experimental-local-vad`, this prefers the first detected remote activity
 ## Interpreting Results
 
 If `pickup_to_audible_greeting_ms` is below about 1000ms, the pickup experience should feel much more natural.
+
+Do not compare this number against transcripts recorded before the issue #100 fix. A greeting still streaming at pickup used to leak its first chunks straight to Twilio ahead of the buffer, so the old metric could be timed from a stray mid-sentence fragment (a `-341ms` `initial_greeting_request_to_first_outbound_audio_ms` in the reported call) and read a few hundred milliseconds lower than the greeting the callee actually heard.
 
 If `assessment.status` is `borderline`, compare `assessment.likely_bottleneck` with the diagnostic fields before changing prompts or VAD. The path is improved, but not fully solved.
 

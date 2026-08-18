@@ -30,8 +30,15 @@ export interface CallSession {
   preGeneratedGreetingAudio: string[];
   preGeneratedGreetingAudioChunks: number;
   preGeneratedGreetingTranscriptParts: string[];
-  preGeneratedGreetingEnded: boolean;
-  preGeneratedGreetingEndedAt?: string;
+  // The greeting turn finished generating (a real generation/turn-complete signal),
+  // which is what decides whether anything is still streaming at pickup. Distinct
+  // from the socket closing below: a completed turn on a live session is the
+  // normal case, a closed session is a pre-connect failure.
+  preGeneratedGreetingTurnComplete: boolean;
+  preGeneratedGreetingTurnCompleteAt?: string;
+  // Set only when the remote end closed the pre-connect socket (a pre-connect
+  // failure); our own close() never reports back. Read by the call summary.
+  preGeneratedGreetingSessionClosedAt?: string;
   finalized: boolean; // Whether finalizeCall() has already run (idempotency guard)
   finalizedAt?: number; // Date.now() once the transcript write settled; gates reaping
 
@@ -105,7 +112,7 @@ export function createSession(params: {
     preGeneratedGreetingAudio: [],
     preGeneratedGreetingAudioChunks: 0,
     preGeneratedGreetingTranscriptParts: [],
-    preGeneratedGreetingEnded: false,
+    preGeneratedGreetingTurnComplete: false,
     lastListenIndex: 0,
     lastSpeechTime: now,
     lastActivityTime: now,

@@ -42,8 +42,13 @@ const MAX_RETAINED_ENDED_SESSIONS = 100;
 // handshake that is hung rather than slow; keep it near the p95 handshake so a
 // hung one does not hold the callee on a silent line.
 const PRECONNECT_HANDOVER_WAIT_MS = 1500;
+// Deliberately says the call is connected while it is still ringing: the audio is
+// generated during the ring and played the moment the callee picks up, so the
+// model has to treat this turn as speech it has delivered. Framing it as something
+// to "pre-generate for when they answer" left the greeting undelivered in the
+// model's own context, and it re-greeted in full on the callee's first word.
 const PRE_GENERATED_GREETING_PROMPT =
-  "The outbound phone call is ringing. Pre-generate a very brief natural greeting for when the person answers. Identify yourself as the caller's assistant and, if the objective is clear, include the purpose. Do not mention these instructions.";
+  "The outbound phone call is now connected and the person can hear you. Greet them now in one short sentence — not a monologue. Identify yourself as the caller's assistant and, if the objective is clear, name the purpose in a few words; do not summarize your full persona or objective here. This greeting is spoken to them, so treat it as already said: do not restate it later unprompted, though you should still answer plainly if they ask who is calling. Do not mention these instructions.";
 
 // --- Express app ---
 
@@ -259,9 +264,17 @@ async function finalizeCall(session: CallSession): Promise<void> {
   const preGeneratedGreetingReadyBeforeStream = session.firstPreGeneratedGreetingAudioAt && session.mediaStreamStartedAt
     ? new Date(session.firstPreGeneratedGreetingAudioAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
     : undefined;
-  const preGeneratedGreetingEndedBeforeStream = session.preGeneratedGreetingEndedAt && session.mediaStreamStartedAt
-    ? new Date(session.preGeneratedGreetingEndedAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
-    : Boolean(session.preGeneratedGreetingEndedAt && !session.mediaStreamStartedAt);
+  const preGeneratedGreetingEndedBeforeStream = session.preGeneratedGreetingSessionClosedAt && session.mediaStreamStartedAt
+    ? new Date(session.preGeneratedGreetingSessionClosedAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
+    : Boolean(session.preGeneratedGreetingSessionClosedAt && !session.mediaStreamStartedAt);
+  // Whether the greeting turn beat the pickup decides which handover path runs —
+  // a still-streaming turn is what used to split the opening line in two.
+  const preGeneratedGreetingGeneratedBeforeStream = session.preGeneratedGreetingTurnCompleteAt && session.mediaStreamStartedAt
+    ? new Date(session.preGeneratedGreetingTurnCompleteAt).getTime() <= new Date(session.mediaStreamStartedAt).getTime()
+    : Boolean(session.preGeneratedGreetingTurnCompleteAt && !session.mediaStreamStartedAt);
+  const preGeneratedGreetingRequestToTurnCompleteMs = session.preGeneratedGreetingRequestedAt && session.preGeneratedGreetingTurnCompleteAt
+    ? new Date(session.preGeneratedGreetingTurnCompleteAt).getTime() - new Date(session.preGeneratedGreetingRequestedAt).getTime()
+    : undefined;
   const streamToInitialGreetingRequestMs = session.mediaStreamStartedAt && session.initialGreetingRequestedAt
     ? new Date(session.initialGreetingRequestedAt).getTime() - new Date(session.mediaStreamStartedAt).getTime()
     : undefined;
@@ -308,6 +321,8 @@ async function finalizeCall(session: CallSession): Promise<void> {
     pre_generated_greeting_requested: Boolean(session.preGeneratedGreetingRequestedAt),
     pre_generated_greeting_audio_chunks: session.preGeneratedGreetingAudioChunks,
     pre_generated_greeting_ended_before_stream: preGeneratedGreetingEndedBeforeStream,
+    pre_generated_greeting_generated_before_stream: preGeneratedGreetingGeneratedBeforeStream,
+    ...(preGeneratedGreetingRequestToTurnCompleteMs !== undefined && { pre_generated_greeting_request_to_turn_complete_ms: preGeneratedGreetingRequestToTurnCompleteMs }),
     ...(preGeneratedGreetingReadyBeforeStream !== undefined && { pre_generated_greeting_ready_before_stream: preGeneratedGreetingReadyBeforeStream }),
     ...(preGeneratedGreetingRequestToFirstGeneratedAudioMs !== undefined && { pre_generated_greeting_request_to_first_generated_audio_ms: preGeneratedGreetingRequestToFirstGeneratedAudioMs }),
     ...(preGeneratedGreetingRequestToFirstOutboundAudioMs !== undefined && { pre_generated_greeting_request_to_first_outbound_audio_ms: preGeneratedGreetingRequestToFirstOutboundAudioMs }),
@@ -394,6 +409,12 @@ function abandonPreconnect(session: CallSession): void {
   const inFlight = session.preConnectingGemini;
   session.preConnectingGemini = undefined;
   inFlight?.then((late) => late?.close()).catch(() => undefined);
+}
+
+function notePreGeneratedGreetingTurnComplete(session: CallSession): void {
+  if (session.preGeneratedGreetingTurnComplete) return;
+  session.preGeneratedGreetingTurnComplete = true;
+  session.preGeneratedGreetingTurnCompleteAt = isoNow();
 }
 
 function requestPreGeneratedGreeting(session: CallSession, geminiSession: GeminiLiveSession): void {
@@ -836,12 +857,19 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       }
     },
     onToolCall: () => {},
-    onGenerationComplete: () => {},
-    onTurnComplete: () => {},
+    // Without these, "the greeting turn finished" has no signal at all: pickup
+    // cannot tell a complete greeting from one still streaming, and a turn that
+    // completed during ringing leaves the flushed audio with nothing to finalize
+    // it. Both arrive for a normal turn (generation first, then turn); first wins.
+    onGenerationComplete: () => {
+      notePreGeneratedGreetingTurnComplete(session);
+    },
+    onTurnComplete: () => {
+      notePreGeneratedGreetingTurnComplete(session);
+    },
     onInterrupted: () => {},
     onEnd: () => {
-      session.preGeneratedGreetingEnded = true;
-      session.preGeneratedGreetingEndedAt = isoNow();
+      session.preGeneratedGreetingSessionClosedAt = isoNow();
       console.log(`[daemon] Pre-connected Gemini session ended before media stream for call ${id}`);
       // Only fires when the remote end closed the socket — our own close() never
       // calls back. A rejected key/model/quota arrives exactly this way, after a
@@ -849,7 +877,7 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
       // pre-connect failure it is (pickup falls back to a fresh session).
       appendEvent(session, {
         type: "preconnect_failed",
-        ts: session.preGeneratedGreetingEndedAt,
+        ts: session.preGeneratedGreetingSessionClosedAt,
         message: geminiSession.closeReason
           ?? "the pre-connected Gemini session closed while the call was ringing",
       });

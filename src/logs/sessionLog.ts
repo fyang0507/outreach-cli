@@ -133,6 +133,8 @@ export interface CallSummaryEvent extends BaseEvent {
   pre_generated_greeting_requested?: boolean;
   pre_generated_greeting_audio_chunks?: number;
   pre_generated_greeting_ended_before_stream?: boolean;
+  pre_generated_greeting_generated_before_stream?: boolean;
+  pre_generated_greeting_request_to_turn_complete_ms?: number;
   pre_generated_greeting_ready_before_stream?: boolean;
   pre_generated_greeting_request_to_first_generated_audio_ms?: number;
   pre_generated_greeting_request_to_first_outbound_audio_ms?: number;
