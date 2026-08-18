@@ -96,6 +96,20 @@ export interface AudioClearedEvent extends BaseEvent {
   turn_id?: string;
 }
 
+/**
+ * How much of a cleared pre-generated greeting actually reached the callee, and
+ * what the bridge did about it. Written whenever the clear discarded more than the
+ * greeting's tail — including when no note was sent — because these numbers are the
+ * only evidence for whether the thresholds behind that decision are set right.
+ */
+export interface GreetingDeliveryEvent extends BaseEvent {
+  type: "greeting_delivery";
+  outcome: "re_identify_requested" | "identified" | "machine" | "hangup_draining";
+  heard_ms: number;
+  greeting_ms: number;
+  answered_by?: string;
+}
+
 export interface SpeechEvent extends BaseEvent {
   type: "speech";
   speaker: "remote" | "local";
@@ -171,6 +185,7 @@ export type TranscriptEvent =
   | DeferredHangupEvent
   | HangupTimeoutEvent
   | AudioClearedEvent
+  | GreetingDeliveryEvent
   | SpeechEvent
   | DtmfEvent
   | CallSteeredEvent
