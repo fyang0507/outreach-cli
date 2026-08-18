@@ -542,6 +542,9 @@ function handleMediaStreamConnection(ws: import("ws").WebSocket): void {
           }
         }
         if (inboundCallSid) session.callSid = inboundCallSid;
+        // The replacement stream a `send_dtmf` asked for has arrived, so the next
+        // teardown is a real call end and must finalize the transcript.
+        session.expectingStreamReconnect = false;
         session.status = "in_progress";
 
         const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
