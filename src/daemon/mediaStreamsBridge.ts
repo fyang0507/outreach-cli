@@ -29,6 +29,14 @@ interface OutboundTurn {
   markName: string;
   audioChunks: number;
   audioBytes: number;
+  // When this turn's audio reached Twilio. Gemini generates faster than realtime
+  // when healthy, so a turn whose chunks take longer to arrive than the audio takes
+  // to play has starved the playback queue, and the callee heard the gaps. Wall
+  // clock is the only way to see that — the transcript alone cannot distinguish a
+  // stalled generation from a short reply.
+  firstAudioAtMs: number | null;
+  lastAudioAtMs: number | null;
+  maxAudioGapMs: number;
   generated: boolean;
   played: boolean;
   cleared: boolean;
@@ -392,6 +400,7 @@ export class MediaStreamsBridge {
     const turn = this.ensureOutboundTurn();
     turn.audioChunks += 1;
     turn.audioBytes += Buffer.byteLength(base64Pcm24k, "base64");
+    this.noteOutboundAudioArrival(turn);
     const mulawPayload = geminiToTwilio(base64Pcm24k);
     try {
       this.twilioWs.send(JSON.stringify({
@@ -405,6 +414,37 @@ export class MediaStreamsBridge {
     }
   }
 
+  /**
+   * Measured here rather than in handleGeminiAudio: only audio that actually goes
+   * out can starve playback. Greeting audio buffered during ringing arrives while
+   * nothing is playing, and it is flushed in one burst, so its gaps mean nothing.
+   */
+  private noteOutboundAudioArrival(turn: OutboundTurn): void {
+    const nowMs = Date.now();
+    if (turn.lastAudioAtMs !== null) {
+      turn.maxAudioGapMs = Math.max(turn.maxAudioGapMs, nowMs - turn.lastAudioAtMs);
+    }
+    turn.firstAudioAtMs ??= nowMs;
+    turn.lastAudioAtMs = nowMs;
+  }
+
+  /**
+   * Playable duration versus the wall clock it took to arrive. Starvation is the
+   * excess: the callee spent that long listening to silence inside one turn.
+   */
+  private outboundTurnDelivery(turn: OutboundTurn): {
+    audio_ms: number;
+    stream_span_ms: number;
+    max_audio_gap_ms: number;
+  } | undefined {
+    if (turn.firstAudioAtMs === null || turn.lastAudioAtMs === null) return undefined;
+    return {
+      audio_ms: Math.round(turn.audioBytes / GEMINI_PCM_BYTES_PER_MS),
+      stream_span_ms: turn.lastAudioAtMs - turn.firstAudioAtMs,
+      max_audio_gap_ms: Math.round(turn.maxAudioGapMs),
+    };
+  }
+
   private ensureOutboundTurn(): OutboundTurn {
     if (this.activeOutboundTurn && !this.activeOutboundTurn.generated) {
       return this.activeOutboundTurn;
@@ -416,6 +456,9 @@ export class MediaStreamsBridge {
       markName: `${id}_played`,
       audioChunks: 0,
       audioBytes: 0,
+      firstAudioAtMs: null,
+      lastAudioAtMs: null,
+      maxAudioGapMs: 0,
       generated: false,
       played: false,
       cleared: false,
@@ -584,11 +627,24 @@ export class MediaStreamsBridge {
     if (!turn || turn.generated || turn.audioChunks === 0) return;
 
     turn.generated = true;
+    const delivery = this.outboundTurnDelivery(turn);
+    if (delivery) {
+      const starvationMs = Math.max(0, delivery.stream_span_ms - delivery.audio_ms);
+      this.session.maxOutboundAudioGapMs = Math.max(
+        this.session.maxOutboundAudioGapMs ?? 0,
+        delivery.max_audio_gap_ms,
+      );
+      this.session.maxOutboundAudioStarvationMs = Math.max(
+        this.session.maxOutboundAudioStarvationMs ?? 0,
+        starvationMs,
+      );
+    }
     this.batcher.appendDirect({
       type: "outbound_turn_generated",
       ts: isoNow(),
       turn_id: turn.id,
       reason,
+      ...(delivery ?? {}),
     });
     this.sendMark(turn.markName);
     this.tryDrainPendingHangup();

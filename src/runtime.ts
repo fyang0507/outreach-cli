@@ -2,6 +2,7 @@ import { readFile, writeFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
+import { mkdirSync, openSync, renameSync, statSync } from "node:fs";
 
 export interface RuntimeState {
   daemon_pid: number;
@@ -9,11 +10,37 @@ export interface RuntimeState {
   ngrok_pid?: number;
   webhook_url: string;
   started_at: string; // ISO timestamp
+  daemon_log?: string;
 }
 
 const OUTREACH_DIR = join(homedir(), ".outreach");
 const RUNTIME_FILE = join(OUTREACH_DIR, "runtime.json");
 const LOCK_FILE = join(OUTREACH_DIR, "init.lock");
+const DAEMON_LOG_FILE = join(OUTREACH_DIR, "daemon.log");
+/** One rotation is enough to survive a restart mid-investigation. */
+const DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Where the daemon's stdout and stderr go. Without this they are discarded, and
+ * the bridge's own logs — a Gemini socket that closed, audio arriving in bursts,
+ * a webhook that never landed — are unavailable the moment a call ends badly.
+ */
+export function daemonLogPath(): string {
+  return DAEMON_LOG_FILE;
+}
+
+/** Opens the daemon log for appending, rotating it once if it has grown large. */
+export function openDaemonLog(): number {
+  mkdirSync(OUTREACH_DIR, { recursive: true });
+  try {
+    if (statSync(DAEMON_LOG_FILE).size > DAEMON_LOG_MAX_BYTES) {
+      renameSync(DAEMON_LOG_FILE, `${DAEMON_LOG_FILE}.1`);
+    }
+  } catch {
+    // No log yet, or it cannot be stat'd — either way, just open it below.
+  }
+  return openSync(DAEMON_LOG_FILE, "a");
+}
 
 // ---- Shared process utilities (consolidated from the init/teardown commands) ----
 

@@ -65,6 +65,12 @@ export interface OutboundTurnGeneratedEvent extends BaseEvent {
   type: "outbound_turn_generated";
   turn_id: string;
   reason: string;
+  /** Playable duration of the audio in this turn. */
+  audio_ms?: number;
+  /** Wall-clock from this turn's first outbound chunk to its last. */
+  stream_span_ms?: number;
+  /** Longest wait between two consecutive chunks of this turn. */
+  max_audio_gap_ms?: number;
 }
 
 export interface OutboundTurnPlayedEvent extends BaseEvent {
@@ -166,6 +172,8 @@ export interface CallSummaryEvent extends BaseEvent {
   last_remote_audio_activity_to_first_outbound_audio_played_ms?: number;
   first_remote_speech_delay_ms?: number;
   first_response_delay_ms?: number;
+  max_outbound_audio_gap_ms?: number;
+  max_outbound_audio_starvation_ms?: number;
 }
 
 export type TranscriptEvent =
