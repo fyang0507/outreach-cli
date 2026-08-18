@@ -147,7 +147,7 @@ The README is the human overview. The packaged skill tree is the agent-facing op
 - [`skills/outreach/SKILL.md`](skills/outreach/SKILL.md) — when the utility is appropriate and the canonical command surface.
 - [`skills/outreach/call.md`](skills/outreach/call.md), [`sms.md`](skills/outreach/sms.md), [`email.md`](skills/outreach/email.md), and [`discord.md`](skills/outreach/discord.md) — channel-specific behavior and caveats.
 - [`skills/contact-operator/SKILL.md`](skills/contact-operator/SKILL.md) — a separate policy for when a headless agent should interrupt an operator; it prefers the quietest adequate channel.
-- [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md) — repository boundaries and contributor guidance.
+- [`AGENTS.md`](AGENTS.md) — repository boundaries and contributor guidance; `CLAUDE.md` is a symlink to it.
 
 For development and release checks:
 
