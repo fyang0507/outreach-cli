@@ -340,6 +340,9 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ...(lastRemoteAudioActivityToFirstOutboundAudioPlayedMs !== undefined && { last_remote_audio_activity_to_first_outbound_audio_played_ms: lastRemoteAudioActivityToFirstOutboundAudioPlayedMs }),
     ...(firstRemoteSpeechDelayMs !== undefined && { first_remote_speech_delay_ms: firstRemoteSpeechDelayMs }),
     ...(firstResponseDelayMs !== undefined && { first_response_delay_ms: firstResponseDelayMs }),
+    ...(session.maxOutboundAudioGapMs !== undefined && { max_outbound_audio_gap_ms: session.maxOutboundAudioGapMs }),
+    ...(session.maxOutboundAudioStarvationMs !== undefined
+      && { max_outbound_audio_starvation_ms: session.maxOutboundAudioStarvationMs }),
   };
   appendEvent(session, summary);
 

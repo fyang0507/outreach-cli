@@ -29,6 +29,9 @@ export interface LatencySummaryResult {
   mode: "proactive_greeting" | "wait_for_user";
   user_speech_to_audible_response_ms: number | null;
   user_speech_to_audible_response_source: string | null;
+  outbound_audio_starvation_ms: number | null;
+  outbound_audio_max_gap_ms: number | null;
+  audio_delivery: { status: string; message: string } | null;
   assessment: LatencyAssessment;
   missing_latency_milestones?: string[];
   summary_source: "call_summary" | "computed_from_events";
@@ -100,6 +103,36 @@ function userSpeechToAudibleResponse(summary: CallSummaryEvent): { value?: numbe
     };
   }
   return {};
+}
+
+// A gap this long inside a single turn is plainly audible as a stutter rather than
+// as natural phrasing.
+const AUDIO_STARVATION_AUDIBLE_MS = 300;
+
+/**
+ * Whether outbound audio kept ahead of playback. Reported separately from the
+ * latency assessment because it answers a different question: not "how long did the
+ * callee wait" but "did what they finally heard arrive in one piece". A starved turn
+ * is upstream of Twilio — generation or the path to Gemini — so it is not something
+ * the callee's signal explains.
+ */
+function assessAudioDelivery(summary: CallSummaryEvent): { status: string; message: string } | undefined {
+  const starvationMs = summary.max_outbound_audio_starvation_ms;
+  const maxGapMs = summary.max_outbound_audio_gap_ms;
+  if (starvationMs === undefined || maxGapMs === undefined) return undefined;
+  if (starvationMs >= AUDIO_STARVATION_AUDIBLE_MS) {
+    return {
+      status: "outbound_audio_starved",
+      message: `A turn's audio took ${starvationMs}ms longer to arrive than it takes to play `
+        + `(largest single gap ${maxGapMs}ms), so the callee heard silence inside a sentence. `
+        + `That is upstream of Twilio — Gemini generation or the network to it — not the phone leg.`,
+    };
+  }
+  return {
+    status: "outbound_audio_continuous",
+    message: `Outbound audio stayed ahead of playback (worst turn ${starvationMs}ms behind, `
+      + `largest single gap ${maxGapMs}ms).`,
+  };
 }
 
 function isWaitForUserSummary(summary: CallSummaryEvent): boolean {
@@ -324,6 +357,9 @@ export async function summarizeLatency(callId: string): Promise<LatencySummaryRe
     mode: isWaitForUserSummary(summary) ? "wait_for_user" : "proactive_greeting",
     user_speech_to_audible_response_ms: turnLatency.value ?? null,
     user_speech_to_audible_response_source: turnLatency.source ?? null,
+    outbound_audio_starvation_ms: summary.max_outbound_audio_starvation_ms ?? null,
+    outbound_audio_max_gap_ms: summary.max_outbound_audio_gap_ms ?? null,
+    audio_delivery: assessAudioDelivery(summary) ?? null,
     assessment: assessLatency(pickupToAudibleGreetingMs, streamStartToAudibleGreetingMs, turnLatency.value, summary, missing),
     ...(missing.length > 0 ? { missing_latency_milestones: missing } : {}),
     summary_source: existingSummary ? "call_summary" : "computed_from_events",

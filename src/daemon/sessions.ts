@@ -64,6 +64,11 @@ export interface CallSession {
   firstRemoteSpeechAt?: string;
   firstLocalResponseAt?: string;
   answeredBy?: string; // Twilio AMD result
+  // Worst outbound-audio delivery seen on this call, across every turn. A turn
+  // whose audio takes longer to arrive than it takes to play starves Twilio's
+  // queue, and the callee hears the gaps — see MediaStreamsBridge.
+  maxOutboundAudioGapMs?: number;
+  maxOutboundAudioStarvationMs?: number;
 }
 
 const sessions = new Map<string, CallSession>();

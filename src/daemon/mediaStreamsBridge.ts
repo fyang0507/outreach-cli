@@ -13,11 +13,30 @@ const FIRST_OUTBOUND_AUDIO_MARK = "first_outbound_audio";
 const REMOTE_AUDIO_RMS_THRESHOLD = 500;
 const HANGUP_DRAIN_GRACE_MS = 200;
 const HANGUP_DRAIN_TIMEOUT_MS = 7000;
+// A cleared greeting is only worth re-introducing over if the callee both missed
+// a real piece of it and never heard enough of the opening to know who is calling.
+// Below GREETING_CLIPPED_TAIL_MS the clear only trimmed the tail — whatever the
+// greeting said, they heard it. At or past GREETING_IDENTIFIED_MS they stayed with
+// it long enough for "this is <name>'s assistant, calling about …" to land, so a
+// second introduction reads as a glitch however much came after it.
+const GREETING_CLIPPED_TAIL_MS = 400;
+const GREETING_IDENTIFIED_MS = 2000;
+// Gemini sends 24kHz mono 16-bit PCM, so two bytes per sample at 24 samples/ms.
+const GEMINI_PCM_BYTES_PER_MS = 48;
 
 interface OutboundTurn {
   id: string;
   markName: string;
   audioChunks: number;
+  audioBytes: number;
+  // When this turn's audio reached Twilio. Gemini generates faster than realtime
+  // when healthy, so a turn whose chunks take longer to arrive than the audio takes
+  // to play has starved the playback queue, and the callee heard the gaps. Wall
+  // clock is the only way to see that — the transcript alone cannot distinguish a
+  // stalled generation from a short reply.
+  firstAudioAtMs: number | null;
+  lastAudioAtMs: number | null;
+  maxAudioGapMs: number;
   generated: boolean;
   played: boolean;
   cleared: boolean;
@@ -108,6 +127,17 @@ export class MediaStreamsBridge {
   // buffer — not the Twilio socket — is the outbound queue. See handleGeminiAudio.
   private greetingHandoverPending = false;
   private heldGreetingTurnOver = false;
+  // The turn the greeting flush created and the moment it was handed to Twilio, so
+  // a clear that discards the greeting can be told from one that trims its tail.
+  // The turn carries the byte count: on a fast pickup most of the greeting is still
+  // generating at flush time and streams into this same turn afterwards.
+  private flushedGreetingTurn: OutboundTurn | null = null;
+  private greetingFlushedAtMs: number | null = null;
+  // Whether the greeting ever finished generating. Only a finished greeting has a
+  // tail that a clear can trim; one the callee talked over mid-generation is short
+  // because it was cut off, which means the opposite.
+  private flushedGreetingComplete = false;
+  private greetingDeliveryReported = false;
   private outboundTurnSeq = 0;
   private activeOutboundTurn: OutboundTurn | null = null;
   private outboundTurnsByMark = new Map<string, OutboundTurn>();
@@ -316,6 +346,9 @@ export class MediaStreamsBridge {
     for (const base64Pcm24k of this.session.preGeneratedGreetingAudio.splice(0)) {
       this.sendOutboundAudio(base64Pcm24k);
     }
+    this.flushedGreetingTurn = this.activeOutboundTurn;
+    this.greetingFlushedAtMs = Date.now();
+    this.flushedGreetingComplete = this.heldGreetingTurnFinished();
     // A greeting that finished generating before the callee picked up has already
     // spent its generation/turn-complete signals on the pre-connect session, so
     // nothing is left to finalize the turn we just created: it would never be
@@ -371,6 +404,8 @@ export class MediaStreamsBridge {
     const isFirstOutboundAudio = this.noteFirstOutboundAudio();
     const turn = this.ensureOutboundTurn();
     turn.audioChunks += 1;
+    turn.audioBytes += Buffer.byteLength(base64Pcm24k, "base64");
+    this.noteOutboundAudioArrival(turn);
     const mulawPayload = geminiToTwilio(base64Pcm24k);
     try {
       this.twilioWs.send(JSON.stringify({
@@ -384,6 +419,37 @@ export class MediaStreamsBridge {
     }
   }
 
+  /**
+   * Measured here rather than in handleGeminiAudio: only audio that actually goes
+   * out can starve playback. Greeting audio buffered during ringing arrives while
+   * nothing is playing, and it is flushed in one burst, so its gaps mean nothing.
+   */
+  private noteOutboundAudioArrival(turn: OutboundTurn): void {
+    const nowMs = Date.now();
+    if (turn.lastAudioAtMs !== null) {
+      turn.maxAudioGapMs = Math.max(turn.maxAudioGapMs, nowMs - turn.lastAudioAtMs);
+    }
+    turn.firstAudioAtMs ??= nowMs;
+    turn.lastAudioAtMs = nowMs;
+  }
+
+  /**
+   * Playable duration versus the wall clock it took to arrive. Starvation is the
+   * excess: the callee spent that long listening to silence inside one turn.
+   */
+  private outboundTurnDelivery(turn: OutboundTurn): {
+    audio_ms: number;
+    stream_span_ms: number;
+    max_audio_gap_ms: number;
+  } | undefined {
+    if (turn.firstAudioAtMs === null || turn.lastAudioAtMs === null) return undefined;
+    return {
+      audio_ms: Math.round(turn.audioBytes / GEMINI_PCM_BYTES_PER_MS),
+      stream_span_ms: turn.lastAudioAtMs - turn.firstAudioAtMs,
+      max_audio_gap_ms: Math.round(turn.maxAudioGapMs),
+    };
+  }
+
   private ensureOutboundTurn(): OutboundTurn {
     if (this.activeOutboundTurn && !this.activeOutboundTurn.generated) {
       return this.activeOutboundTurn;
@@ -394,6 +460,10 @@ export class MediaStreamsBridge {
       id,
       markName: `${id}_played`,
       audioChunks: 0,
+      audioBytes: 0,
+      firstAudioAtMs: null,
+      lastAudioAtMs: null,
+      maxAudioGapMs: 0,
       generated: false,
       played: false,
       cleared: false,
@@ -405,12 +475,27 @@ export class MediaStreamsBridge {
 
   private handleGenerationComplete(): void {
     this.noteHeldGreetingTurnOver("completed");
+    this.noteFlushedGreetingComplete();
     this.finalizeActiveOutboundTurn("generation_complete");
   }
 
   private handleTurnComplete(): void {
     this.noteHeldGreetingTurnOver("completed");
+    this.noteFlushedGreetingComplete();
     this.finalizeActiveOutboundTurn("turn_complete");
+  }
+
+  /**
+   * A greeting still generating at pickup keeps streaming into its flushed turn, so
+   * its completion arrives after the handover window has closed and
+   * noteHeldGreetingTurnOver no longer records anything. Catch it here, because
+   * whether the greeting ever finished is what tells a trimmed tail from a
+   * truncation. Interrupts deliberately do not come through here.
+   */
+  private noteFlushedGreetingComplete(): void {
+    if (this.flushedGreetingTurn && this.activeOutboundTurn === this.flushedGreetingTurn) {
+      this.flushedGreetingComplete = true;
+    }
   }
 
   /**
@@ -446,6 +531,99 @@ export class MediaStreamsBridge {
     this.noteHeldGreetingTurnOver("interrupted");
     this.clearBufferedOutboundAudio("gemini_interrupted");
     this.finalizeActiveOutboundTurn("interrupted");
+    this.notifyIfGreetingWentUnheard();
+  }
+
+  /**
+   * A pre-generated greeting is the one turn where Gemini's context and the
+   * callee's ears can disagree. The turn completed on the model's side during
+   * ringing, so an interruption that clears it out of Twilio's queue leaves the
+   * model believing it introduced itself to someone who heard a fraction of a
+   * second of it — and the pre-connect prompt tells it not to repeat the greeting,
+   * so nothing re-identifies. Tell it what actually reached the line.
+   *
+   * Sent on the realtime channel: the callee is mid-sentence, and a turn barrier
+   * here would talk over them. The model folds this into its next reply.
+   */
+  private notifyIfGreetingWentUnheard(): void {
+    const greeting = this.flushedGreetingTurn;
+    const startedAtMs = this.greetingFlushedAtMs;
+    if (!greeting || startedAtMs === null || this.greetingDeliveryReported || this.cleaned) return;
+    // Nothing was discarded, so nothing was missed: an interrupt after the turn has
+    // drained finds an empty queue and clearBufferedOutboundAudio no-ops. Note that
+    // a turn's mark still comes back after a clear, so `played` says the queue
+    // emptied, not that the callee heard it — only `cleared` is load-bearing here.
+    if (!greeting.cleared) return;
+
+    // Elapsed since the flush, not since Twilio's first_outbound_audio mark: a
+    // `clear` releases every mark Twilio still had queued, so that mark can land
+    // *after* the greeting was discarded. Re-reading it per interrupt would move the
+    // start of playback forward mid-call and make a greeting the callee sat through
+    // look like one they never heard.
+    const playedMs = Date.now() - startedAtMs;
+    // The whole turn, not just what was buffered at pickup: on a fast answer most of
+    // the greeting is still generating and streams into this same turn afterwards, so
+    // the buffered slice alone understates it — the case this check exists for.
+    const greetingMs = greeting.audioBytes / GEMINI_PCM_BYTES_PER_MS;
+    const unheardMs = greetingMs - playedMs;
+    // The tail-trim guard only means anything for a greeting that finished. A callee
+    // fast enough to talk over the opening syllable kills generation too, leaving a
+    // greeting that is *entirely* opening syllable: barely anything discarded, and
+    // barely anything heard. Judged as a trimmed tail, that reads as delivered.
+    if (this.flushedGreetingComplete && unheardMs <= GREETING_CLIPPED_TAIL_MS) return;
+
+    const outcome = playedMs >= GREETING_IDENTIFIED_MS
+      ? "identified"
+      // A recording is not owed an introduction, and on a machine pickup a cleared
+      // greeting is the normal case rather than a barge-in: the outgoing message
+      // starts talking the moment the line opens.
+      : this.answeredByMachine()
+        ? "machine"
+        // A hangup already in flight is only waiting on audio to drain. Asking the
+        // model to re-identify now buys a turn spoken over the goodbye, and that
+        // pending turn holds the hangup open for the whole drain timeout. Same
+        // reasoning as sendInitialGreetingNow, which refuses to greet here.
+        : this.pendingHangup
+          ? "hangup_draining"
+          : "re_identify_requested";
+
+    // Recorded whichever way it went: the daemon's stdout is not visible to whoever
+    // placed the call, and these are the numbers that say whether the thresholds are
+    // right. 'call listen' can then show why a call did or did not re-introduce.
+    this.greetingDeliveryReported = true;
+    this.batcher.appendDirect({
+      type: "greeting_delivery",
+      ts: isoNow(),
+      outcome,
+      heard_ms: Math.max(0, Math.round(Math.min(playedMs, greetingMs))),
+      greeting_ms: Math.round(greetingMs),
+      ...(this.session.answeredBy ? { answered_by: this.session.answeredBy } : {}),
+    });
+    if (outcome !== "re_identify_requested") return;
+
+    console.log(
+      `[media-bridge] Greeting for call ${this.callId} cleared after ~${Math.max(0, Math.round(playedMs))}ms `
+      + `of ~${Math.round(greetingMs)}ms — telling the model it was not heard`,
+    );
+    const note = "System note: the other party started speaking before they could hear your greeting, "
+      + "so they do not know who is calling or why. Identify yourself briefly in your next reply, then continue.";
+    this.batcher.appendDirect({ type: "call_steered", ts: isoNow(), mode: "nudge", text: note });
+    this.gemini.steer(note);
+  }
+
+  /**
+   * Twilio AMD verdicts are human, fax, unknown, machine_start and
+   * machine_end_beep/_silence/_other. Anything it could not classify counts as a
+   * person, since a missed re-identification costs more than a wasted one.
+   *
+   * Async AMD runs `DetectMessageEnd`, so this verdict lands when the outgoing
+   * message finishes — usually after the first barge-in, and this only suppresses
+   * interrupts that arrive once it is known (the beep, or the callee's own machine
+   * talking on).
+   */
+  private answeredByMachine(): boolean {
+    const answeredBy = this.session.answeredBy;
+    return Boolean(answeredBy && (answeredBy.startsWith("machine") || answeredBy === "fax"));
   }
 
   private handleGeminiEnd(): void {
@@ -473,11 +651,24 @@ export class MediaStreamsBridge {
     if (!turn || turn.generated || turn.audioChunks === 0) return;
 
     turn.generated = true;
+    const delivery = this.outboundTurnDelivery(turn);
+    if (delivery) {
+      const starvationMs = Math.max(0, delivery.stream_span_ms - delivery.audio_ms);
+      this.session.maxOutboundAudioGapMs = Math.max(
+        this.session.maxOutboundAudioGapMs ?? 0,
+        delivery.max_audio_gap_ms,
+      );
+      this.session.maxOutboundAudioStarvationMs = Math.max(
+        this.session.maxOutboundAudioStarvationMs ?? 0,
+        starvationMs,
+      );
+    }
     this.batcher.appendDirect({
       type: "outbound_turn_generated",
       ts: isoNow(),
       turn_id: turn.id,
       reason,
+      ...(delivery ?? {}),
     });
     this.sendMark(turn.markName);
     this.tryDrainPendingHangup();

@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { fork, spawn } from "node:child_process";
+import { closeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { missingRequiredCallEnv } from "../../config.js";
@@ -12,6 +13,8 @@ import type { PreflightReport } from "../../daemon/preflight.js";
 import {
   readRuntime,
   writeRuntime,
+  daemonLogPath,
+  openDaemonLog,
   deleteRuntime,
   checkDaemonHealth,
   isProcessRunning,
@@ -358,13 +361,18 @@ async function doInit(opts: InitOptions): Promise<number> {
 
   // 4. Start daemon — wrapped in E3 try/finally for ngrok cleanup
   let daemonPid: number | undefined;
+  let daemonLogFd: number | undefined;
   try {
     const thisDir = dirname(fileURLToPath(import.meta.url));
     const serverPath = join(thisDir, "..", "..", "daemon", "server.js");
 
+    // stdio 1/2 to the log rather than "ignore": a call that goes wrong is
+    // diagnosed from the daemon's own output, and discarding it means the evidence
+    // is gone by the time anyone asks. "ipc" is required for fork().
+    daemonLogFd = openDaemonLog();
     const child = fork(serverPath, [], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", daemonLogFd, daemonLogFd, "ipc"],
       env: {
         ...process.env,
         OUTREACH_WEBHOOK_URL: webhookUrl,
@@ -380,7 +388,12 @@ async function doInit(opts: InitOptions): Promise<number> {
 
     // 5. Wait for daemon health
     await waitForHealth(port, DAEMON_HEALTH_TIMEOUT_MS);
+    // The daemon holds its own descriptor now; this one would leak for the life of
+    // the CLI process otherwise.
+    closeSync(daemonLogFd);
+    daemonLogFd = undefined;
   } catch (err) {
+    if (daemonLogFd !== undefined) closeSync(daemonLogFd);
     // E3: Clean up the daemon and ngrok this init started
     await cleanupStartedProcesses(daemonPid, ngrokStartedByUs ? ngrokPid : undefined);
     outputError(INFRA_ERROR, `Daemon failed to start: ${(err as Error).message}`);
@@ -406,6 +419,7 @@ async function doInit(opts: InitOptions): Promise<number> {
     daemon_port: port,
     webhook_url: webhookUrl,
     started_at: new Date().toISOString(),
+    daemon_log: daemonLogPath(),
   };
   if (ngrokPid !== undefined) {
     state.ngrok_pid = ngrokPid;
@@ -418,6 +432,7 @@ async function doInit(opts: InitOptions): Promise<number> {
     status: "ready",
     webhook_url: webhookUrl,
     daemon_pid: daemonPid,
+    daemon_log: daemonLogPath(),
     ...(preflight ? { preflight } : {}),
   });
   return SUCCESS;
