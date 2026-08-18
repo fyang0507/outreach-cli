@@ -133,6 +133,10 @@ export class MediaStreamsBridge {
   // generating at flush time and streams into this same turn afterwards.
   private flushedGreetingTurn: OutboundTurn | null = null;
   private greetingFlushedAtMs: number | null = null;
+  // Whether the greeting ever finished generating. Only a finished greeting has a
+  // tail that a clear can trim; one the callee talked over mid-generation is short
+  // because it was cut off, which means the opposite.
+  private flushedGreetingComplete = false;
   private greetingDeliveryReported = false;
   private outboundTurnSeq = 0;
   private activeOutboundTurn: OutboundTurn | null = null;
@@ -344,6 +348,7 @@ export class MediaStreamsBridge {
     }
     this.flushedGreetingTurn = this.activeOutboundTurn;
     this.greetingFlushedAtMs = Date.now();
+    this.flushedGreetingComplete = this.heldGreetingTurnFinished();
     // A greeting that finished generating before the callee picked up has already
     // spent its generation/turn-complete signals on the pre-connect session, so
     // nothing is left to finalize the turn we just created: it would never be
@@ -470,12 +475,27 @@ export class MediaStreamsBridge {
 
   private handleGenerationComplete(): void {
     this.noteHeldGreetingTurnOver("completed");
+    this.noteFlushedGreetingComplete();
     this.finalizeActiveOutboundTurn("generation_complete");
   }
 
   private handleTurnComplete(): void {
     this.noteHeldGreetingTurnOver("completed");
+    this.noteFlushedGreetingComplete();
     this.finalizeActiveOutboundTurn("turn_complete");
+  }
+
+  /**
+   * A greeting still generating at pickup keeps streaming into its flushed turn, so
+   * its completion arrives after the handover window has closed and
+   * noteHeldGreetingTurnOver no longer records anything. Catch it here, because
+   * whether the greeting ever finished is what tells a trimmed tail from a
+   * truncation. Interrupts deliberately do not come through here.
+   */
+  private noteFlushedGreetingComplete(): void {
+    if (this.flushedGreetingTurn && this.activeOutboundTurn === this.flushedGreetingTurn) {
+      this.flushedGreetingComplete = true;
+    }
   }
 
   /**
@@ -546,7 +566,11 @@ export class MediaStreamsBridge {
     // the buffered slice alone understates it — the case this check exists for.
     const greetingMs = greeting.audioBytes / GEMINI_PCM_BYTES_PER_MS;
     const unheardMs = greetingMs - playedMs;
-    if (unheardMs <= GREETING_CLIPPED_TAIL_MS) return;
+    // The tail-trim guard only means anything for a greeting that finished. A callee
+    // fast enough to talk over the opening syllable kills generation too, leaving a
+    // greeting that is *entirely* opening syllable: barely anything discarded, and
+    // barely anything heard. Judged as a trimmed tail, that reads as delivered.
+    if (this.flushedGreetingComplete && unheardMs <= GREETING_CLIPPED_TAIL_MS) return;
 
     const outcome = playedMs >= GREETING_IDENTIFIED_MS
       ? "identified"

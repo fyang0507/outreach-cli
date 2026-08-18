@@ -186,6 +186,53 @@ test("a barge-in after the identification landed does not re-introduce", (t) => 
   deleteSession(session.id);
 });
 
+// call_cf7deb620076: the callee answered and spoke over the first syllable, which
+// cut generation off at 261ms. Only 37ms was discarded, so a tail-trim guard reads it
+// as delivered — but they heard "Hello, I'm" and the agent never said who it was.
+test("a barge-in that truncates the greeting mid-generation still re-identifies", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const session = sessionWithGreeting(0.25);
+  session.preGeneratedGreetingTurnComplete = false;
+  session.preGeneratedGreetingTurnCompleteAt = undefined;
+  const gemini = fakeGemini();
+  const twilioWs = fakeTwilioWs();
+  const bridge = startBridge(session, gemini, twilioWs);
+
+  bridge.sendInitialGreeting();
+  t.mock.timers.tick(PAST_GREETING_DELAY_MS);
+  t.mock.timers.tick(200);
+  // No generation_complete ever arrives: the interrupt is what ended this turn.
+  gemini.callbacks.onInterrupted();
+
+  assert.equal(gemini.steerNotes.length, 1, "50ms unheard, but only 200ms was ever heard");
+  assert.deepEqual(deliveryEvents(session).map((e) => [e.outcome, e.heard_ms, e.greeting_ms]), [
+    ["re_identify_requested", 200, 250],
+  ]);
+
+  bridge.cleanup();
+  deleteSession(session.id);
+});
+
+// The same small remainder means the opposite once the greeting finished generating.
+test("a completed greeting missing only its tail still stays quiet", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const session = sessionWithGreeting(0.25);
+  const gemini = fakeGemini();
+  const twilioWs = fakeTwilioWs();
+  const bridge = startBridge(session, gemini, twilioWs);
+
+  bridge.sendInitialGreeting();
+  t.mock.timers.tick(PAST_GREETING_DELAY_MS);
+  t.mock.timers.tick(200);
+  gemini.callbacks.onInterrupted();
+
+  assert.deepEqual(gemini.steerNotes, [], "a 250ms greeting that finished is a greeting they heard");
+  assert.deepEqual(deliveryEvents(session), []);
+
+  bridge.cleanup();
+  deleteSession(session.id);
+});
+
 // The greeting was still generating at pickup, so most of it reaches Twilio after
 // the flush — as part of the same turn. Counting only the buffered slice makes a
 // call that lost ~4.6s of greeting look like it lost 400ms.
