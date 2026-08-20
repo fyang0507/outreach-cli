@@ -3,239 +3,375 @@
 Tracks #105 (media capture / transcript gaps / long-turn timeouts) and #106
 (operator question-resolution / degraded-monitoring gates).
 
+## Update — 2026-08-20
+
+An adversarial review (Opus 5) checked every citation in the first draft
+against source and against the actual incident transcript
+(`call_257cce0c2810.jsonl`) and found the draft's central thesis — "one
+frozen timestamp causes both issues" — did not survive contact with that
+transcript. This revision corrects the root-cause narrative, replaces the
+G3 fix with a materially better one the first draft never considered, fixes
+several implementation-breaking bugs in the original design (a type
+mismatch, an unbounded-liveness failure mode, an unimplementable
+dependency), and restores acceptance-criteria items that had silently
+dropped. The first draft is preserved in git history
+(`5403b25`) for anyone who wants the diff.
+
 ## Problem
 
 #105 and #106 look like separate concerns — raw-audio evidence gaps vs. an
-operator misjudging a live call — but investigation traced both to the same
-bug, plus a handful of independent gaps found along the way.
+operator misjudging a live call — and, after checking the actual evidence,
+they mostly *are* separate. They share a repo and a general theme
+(transcript/monitoring completeness), not a single root-cause bug.
 
-**The incident.** During `call_257cce0c2810`, the callee asked twice about
-Fred's pre-Indeed experience (`19:33:09`) and his most impressive capability
-(`19:33:33`) — both real questions, the first answered with an explicit
-"I don't have that" limitation, never corrected. The operator then issued two
-`call_steered` wrap-up nudges (`19:34:18`, `19:34:37`) asserting "no
-substantive response," directly contradicted by the saved transcript, and
-reported the call that way afterward.
+## What actually happened in the incident (verified against the raw transcript)
 
-## Root cause: one timestamp gates two different guards
+`call_257cce0c2810.jsonl` (all timestamps 2026-08-19):
 
-`TranscriptBatcher` (`mediaStreamsBridge.ts:49-100`) only writes a `speech`
-event on flush, and only flushes on speaker change, an explicit
-`appendDirect`, or `SILENCE_TIMEOUT_MS = 800` ms (`mediaStreamsBridge.ts:10`)
-of no new fragments (`append`, lines 58-73). `session.lastTranscriptTime` /
-`lastSpeechTime` (`sessions.ts:84-97`) only advance when that flush runs.
+| Time | Event |
+|---|---|
+| 19:33:09.821 | Callee: "can you tell me a little bit more about his experience prior to Indeed?" |
+| 19:33:10.911 | Agent replies (**1.09s** later): "I don't have the specifics on his experience before Indeed right now, but I can definitely pass that question along..." |
+| 19:33:33.350 | Callee: "...if you had to pick one, a singular one that you think is the most impressive?" |
+| 19:33:33.873 | Agent replies (**0.52s** later) |
+| 19:33:51.776 | Agent's turn 4 finishes playing. This is the last transcript activity from either party. |
+| 19:34:18.133 | `call_steered`: *"There has been no substantive response **after the capability pitch**. Please give one brief, polite closing line and end the call..."* — **26.4s** after the last activity. |
+| 19:34:37.108 | `call_steered`: second wrap-up nudge |
+| 19:34:39.235 | `call_summary` — call ends |
 
-Gemini's `outputTranscription`/`inputTranscription` fragments
-(`geminiLive.ts:157-163`) arrive continuously during one long, densely
-transcribed turn, each one resetting the 800ms timer — so during a single
-uninterrupted monologue, the batcher never flushes and the timestamp freezes
-at the turn's start. That one frozen timestamp feeds two different consumers:
+Both turns flushed in about half a second to a second — the batcher was
+never frozen during this call. And the steer text is scoped ("no
+substantive response *after the capability pitch*"), issued after a real
+26-second silence with the callee never speaking again before the call
+ended. Given what the live system could see, both steers were **factually
+defensible**, not a monitoring failure.
 
-- **#105:** `VOICEMAIL_SILENCE_MS = 90_000` (`server.ts:36`, checked at
-  `1172-1178`) compares "now" against it. A long agent monologue can trip
-  `forceHangup` mid-sentence — a false voicemail hangup during genuine,
-  active conversation. `docs/done/call-cost-guardrails.md:49` specified
-  "last time a meaningful transcript entry was added" without accounting for
-  batching lag on a single turn — a real defect in the original G3 design,
-  not just missing observability.
-- **#106:** `call listen`'s `silence_ms` field (`server.ts:964`, `Date.now()
-  - session.lastSpeechTime`) has the identical flaw. During dense
-  transcription or an IPC hiccup, this can't be told apart from genuine
-  callee silence — the most plausible mechanism behind the operator reading
-  the incident call as unresponsive.
+#106's actual complaint — "the operator... reported that the callee gave no
+substantive response, although the final transcript contained two
+substantive questions" — describes the **post-call report**, an artifact
+that lives outside this repo (wherever the calling agent writes its
+outcome), not the live `call_steered` text above. That report isn't
+recoverable now, so its exact wording can't be re-verified, but the
+transcript rules out the mechanism the first draft blamed: nothing here
+shows a monitoring signal misleading the operator mid-call. The failure — as
+best it can be reconstructed — is that the operator's final report didn't
+re-read the two earlier, successfully-answered exchanges before summarizing
+the call, exactly the check `skills/outreach/call.md:31` already asks for
+and, on this evidence, didn't get.
+
+**One thing this transcript does independently confirm is relevant to
+#105:** two real transcription gaps sit right in it — `audio_cleared` at
+19:33:02.726 (a barge-in) to the next remote speech at 19:33:09.821 is a
+7.1s hole; `audio_cleared` at 19:33:21.937 to the next remote speech at
+19:33:33.350 is an 11.4s hole. These are plausible candidates for the
+"additional risk-factor question absent from the transcript" #106
+separately mentions a human listener reported. See D7.
+
+## The real latent defect (narrower than first thought)
+
+`TranscriptBatcher` (`mediaStreamsBridge.ts:49-101`) only writes a `speech`
+event on flush: speaker change, `appendDirect`, or `SILENCE_TIMEOUT_MS =
+800` (`mediaStreamsBridge.ts:10`) of no new fragments (`append`, lines
+58-73). `lastTranscriptTime` (`sessions.ts:86-87`) only advances on flush.
+So far this matches the first draft. What the first draft missed:
+`appendDirect` always flushes first (`mediaStreamsBridge.ts:76-79`), and
+`finalizeActiveOutboundTurn` — called on every `generationComplete`,
+`turnComplete`, and `interrupted` — calls `appendDirect` at line 666. So in
+practice `lastTranscriptTime` also refreshes at the end of *every* outbound
+turn, not just at a flush caused by speaker change or the idle timer.
+
+`finalizeActiveOutboundTurn` fires when Gemini finishes **generating**, not
+when Twilio finishes **playing**. Gemini generates noticeably faster than
+realtime — already documented in this repo's own `CLAUDE.md` ("Gemini
+generates faster than realtime when healthy") — and this call measured it
+directly: turn 2 was 42.9s of audio generated in an 11.8s span (3.64x);
+turn 3, 3.75x; turn 4, 3.69x. So the window in which `lastTranscriptTime`
+can sit frozen is bounded by a turn's *generation* time, not how long the
+audio takes to play out over the phone. At a ~3.7x ratio, tripping
+`VOICEMAIL_SILENCE_MS = 90_000` (`server.ts:36`) this way needs roughly
+**5.5 minutes of audio generated in one uninterrupted turn with no
+interrupt, no turn boundary, and no `generationComplete` firing along the
+way** — a real, latent bug, but a much narrower one than "a long agent
+monologue can trip forceHangup mid-sentence." That 3.7x figure comes from
+one call, four turns, one model config — treat it as a starting estimate,
+not a constant, and don't scale test durations off it without re-measuring
+(see Live test 2).
+
+There's a second, more realistic way to freeze it, on the leg the ratio
+above doesn't touch: a genuinely long, uninterrupted turn from the
+**callee**. Callee audio isn't generated faster than realtime — it arrives
+as fast as the person talks — so if they hold the floor for 90+ seconds
+without a pause long enough to trip the 800ms idle flush and without the
+agent interjecting, `lastTranscriptTime` freezes for the real duration of
+their speech, no 3.7x cushion. This is the actual mechanism worth fixing,
+and D1 (below) was about to make it *more* likely, not less — see D1.
 
 ## Signals that already exist and are just unused
 
 | Signal | Where computed | Currently used for | Gap |
 |---|---|---|---|
-| `lastRemoteAudioActivityAt` (RMS-gated, `REMOTE_AUDIO_RMS_THRESHOLD = 500`) | `noteRemoteAudioActivity`/`rmsForMulaw`, `mediaStreamsBridge.ts:755-779`, updated on every inbound Twilio frame independent of the batcher | Two one-shot fields in `call latency` (`server.ts:293-306`) | Never exposed in `call listen`/`call status`, never feeds G2/G3 |
-| Outbound turn generation state (`activeOutboundTurn`) | `mediaStreamsBridge.ts` (private bridge field), finalized in `finalizeActiveOutboundTurn`, lines 649-675 | Audio delivery metrics only | Never exposed as a simple "agent is still talking" boolean |
+| `lastRemoteAudioActivityAt` (RMS-gated, `REMOTE_AUDIO_RMS_THRESHOLD = 500`) | `noteRemoteAudioActivity`/`rmsForMulaw`, `mediaStreamsBridge.ts:755-783`, updated on every inbound Twilio frame independent of the batcher | Two one-shot fields in `call latency` (`server.ts:302-307`) | Never exposed in `call listen`/`call status`. Deliberately not fed into any guard — see D2's `remote` caveat. |
+| Outbound turn generation state (`activeOutboundTurn`) | `mediaStreamsBridge.ts` (private bridge field), finalized in `finalizeActiveOutboundTurn`, lines 649-675 | Audio delivery metrics only | Never exposed as an "agent is still talking" signal. Not a clean boolean in practice — see D2's `local` caveat. |
 | Speaker attribution (`remote`/`local`) | Structural: `inputTranscription` vs. `outputTranscription`, `geminiLive.ts:157-163` | Already correct everywhere it's used | None — not a gap, confirmed unambiguous. Each is a permanently separate channel; there is no cross-talk to infer. |
 
-Both existing timestamps mean neither the RMS energy signal nor the
-outbound-turn-in-progress signal need to be built from scratch — they need to
-be wired to the places that currently rely on the frozen batcher timestamp
-instead.
+RMS energy and turn-generation state are real, already-computed signals
+worth wiring up — but neither is a clean drop-in fix for anything that
+currently depends on `lastTranscriptTime`; each has its own failure mode,
+detailed in D2/D3 below.
 
 ## What was ruled out
 
-- **Real VAD** (speech-vs-non-speech classification) — overkill for what
-  this needs. Energy-above-threshold ("is anything audible happening") is
-  sufficient for operator visibility; it just can't distinguish real speech
-  from hold music, which only matters for G3's original anti-voicemail
-  intent, not for the operator-visibility use case this doc is scoped to.
+- **Real VAD** (speech-vs-non-speech classification) — overkill for this
+  scope. Energy-above-threshold ("is anything audible happening") is cheap
+  and already computed, but it's a much blunter instrument than initially
+  presented — see D2's `remote` caveat before assuming it's a good stand-in
+  for "the callee is engaged."
+- **RMS energy as a G3 input** — considered and rejected: it can't
+  distinguish real callee speech from hold music, a voicemail greeting, a
+  TV, an open speakerphone, or echo, all of which clear the low
+  `REMOTE_AUDIO_RMS_THRESHOLD = 500` (~-36 dBFS) continuously. Using it to
+  suppress G3 would quietly defeat the guard's own purpose. See D3 for what
+  replaces it.
 - **Gemini's native `Transcription.finished` flag** — would have been a
   clean per-fragment finalization signal, but it's confirmed non-functional:
   [googleapis/js-genai#1429](https://github.com/googleapis/js-genai/issues/1429),
-  filed 2026-03-23, reproduced and internally filed by Google, still open.
-  The field is documented (`node_modules/@google/genai/dist/genai.d.ts:10552-10557`)
-  but the server never sets it on either transcription channel. Do not build
-  on it; the code should note the upstream issue so a future reader doesn't
-  assume it was never worth using. `turnComplete` is a real, working signal
-  but only fires once at the very end of a whole generation — it doesn't
-  give incremental segments during a multi-minute monologue.
+  opened 2026-03-23T17:03:21Z, reproduced by Google, internally filed
+  2026-03-25, still open. `finished?: boolean` is declared exactly as
+  described in the `@google/genai` package's `Transcription` type (pin the
+  citation to the type name and package version — `"@google/genai": "^1.48.0"`
+  in `package.json` — rather than a `node_modules` path, which is
+  gitignored and not stable). The issue's own workaround — flush the input
+  buffer when the first output fragment arrives, flush the output buffer on
+  `turnComplete` — is effectively what D1 already does; worth citing as
+  independent, upstream corroboration that this is the standard approach
+  given the missing native signal.
 
 ## Proposed design
 
 ### D1: Flush only on genuine turn-change, tagged with why
 
-Drop `SILENCE_TIMEOUT_MS` (`mediaStreamsBridge.ts:10`) and the `setTimeout`
-machinery in `TranscriptBatcher.append()` entirely — no punctuation
-heuristics, no idle-timer guessing. The transcript updates only when a turn
-genuinely ends:
+Unchanged from the first draft in mechanism, but its safety claim needed
+correcting and it now **depends on D3 landing first or alongside it** — see
+below.
 
-- **speaker change** — `append()`'s existing check (`pending.speaker !==
-  speaker`), unchanged.
-- **interrupted** — the flush that already happens inside
-  `handleInterrupted()` (`mediaStreamsBridge.ts:524-535`, via
-  `clearBufferedOutboundAudio`'s call to `appendDirect`, which flushes before
-  appending `audio_cleared`). This isn't a timing hack — Gemini's own
-  `interrupted` control signal (`geminiLive.ts:165-167`) is itself a
-  turn-ending event, often arriving before the first transcribed word of the
-  new speaker would.
-- **explicit structured events** — `appendDirect` (DTMF, `call_ended`, etc.),
-  unchanged.
+Drop `SILENCE_TIMEOUT_MS` (`mediaStreamsBridge.ts:10`) and the `setTimeout`
+machinery in `TranscriptBatcher.append()` entirely. The transcript updates
+only when a turn genuinely ends:
+
+- **speaker change** — `append()`'s existing check, unchanged.
+- **interrupted** — make this an *explicit* flush inside `handleInterrupted()`
+  (`mediaStreamsBridge.ts:524-535`) rather than relying on it as a side
+  effect of `clearBufferedOutboundAudio`/`finalizeActiveOutboundTurn`, both
+  of which early-return when there's no pending outbound audio
+  (`outboundTurnsByMark.size === 0` at :785, or `turn.audioChunks === 0` at
+  :651). In practice Gemini only sends `interrupted` while generating, so
+  these currently coincide — but D1 is removing the 800ms safety net, so the
+  flush trigger shouldn't be an incidental side effect of an unrelated
+  function.
+- **explicit structured events** — `appendDirect`, unchanged.
 - **call end** — `cleanup()` → `batcher.cleanup()` → `flush()`
   (`mediaStreamsBridge.ts:1025`), unchanged.
 
-Nothing internal to the live call depends on flush timing — the only
-consumers of `transcriptBuffer`/`fullTranscript` are `call listen`
-(`server.ts:967`) and finalize/summary (`server.ts:1005`); steering is
-operator-driven, not automated off recent transcript text. So this is purely
-a display simplification, with no correctness risk: the final pending turn
-of a call always flushes regardless, via the unconditional `cleanup()` call.
-
-One consequence worth being explicit about: during one long, uninterrupted
-monologue, the transcript itself still shows nothing new until the turn
-actually ends — `lastTranscriptTime` still freezes at the turn's start, same
-as today. That's fine and intentional: liveness during that stretch is D2's
-job (real, continuously-updated signals), not the transcript's. D1 no longer
-needs to double as a fix for G3 — see D3.
+**Corrected safety claim.** The first draft argued this was risk-free
+because "nothing internal to the live call depends on flush timing," citing
+only the `transcriptBuffer`/`fullTranscript` arrays. That's true of the
+arrays but false of `appendEvent`'s side effects: every flush also sets
+`lastSpeechTime`, `lastTranscriptTime` (`sessions.ts:86-87`), and
+`lastActivityTime` (`:99`) — and `lastTranscriptTime` is G3's input
+(`server.ts:1173-1176`). Today, the 800ms idle flush is the *only* thing
+that keeps `lastTranscriptTime` fresh during a long, uninterrupted **callee**
+turn with no speaker change. Removing it without also fixing G3 would make
+a real callee monologue *more* likely to false-trip the guard, not less —
+directly widening the gap identified above. D3 (below) removes G3's
+dependency on `lastTranscriptTime` entirely, which is what actually makes
+D1 safe. **Sequence D3 before or together with D1, never after.**
 
 Tag every flushed `speech` event with why it flushed:
-`flush_reason: "turn_change" | "interrupted" | "call_ended"`. Today an
-interrupted flush is silent about *why* it happened; a caller has to infer
-"this was a barge-in" from the adjacent `audio_cleared`/
-`outbound_turn_generated(reason: "interrupted")` events. This makes a
-cut-off turn self-describing without needing adjacency inference, matching
-what the audio side already tracks via `OutboundTurn.cleared`.
+`flush_reason: "turn_change" | "interrupted" | "call_ended"`.
 
-### D2: Per-side activity telemetry on `call listen`
+### D2: Per-side activity telemetry on `call listen` and `call status`
 
-Replace the flat `silence_ms` field (`server.ts:964`) with a per-side block,
-computed fresh, only inside `handleCallListen` — no new background timer.
-The underlying signals already update continuously and cheaply regardless
-(RMS per inbound frame, `activeOutboundTurn` as turns start/finalize); only
-the classification into `state` is new, and it's computed on read:
+Computed fresh, only on read — no new background timer. Two real,
+independent problems in the first draft's version of this needed fixing:
+a type bug that would have made the feature always report the worst-case
+wrong answer, and an overclaim about what the signal means.
 
 ```json
 "activity": {
-  "remote": { "last_turn_ms_ago": 4200, "state": "continuing" },
-  "local":  { "last_turn_ms_ago": 15300, "state": "silent" }
+  "remote": { "last_turn_ms_ago": 4200, "audio_on_line": "recent" },
+  "local":  { "last_turn_ms_ago": 15300, "speaking": false }
 }
 ```
 
-- `last_turn_ms_ago`: time since that side's last flushed turn (post-D1,
-  turn-granular — the transcript only updates on real turn changes now).
-- `local.state`: `activeOutboundTurn` presence, no window — exact, since we
-  generated that audio ourselves. Either a turn is actively
-  generating/playing or it isn't.
-- `remote.state`: `"continuing"` if `now - lastRemoteAudioActivityAt <=
-  ACTIVITY_LOOKBACK_MS` (proposed `5000`), else `"silent"`.
+- `last_turn_ms_ago`: time since that side's last flushed turn. This needs
+  genuinely new, per-side fields — `lastSpeechTime` (`sessions.ts`, bumped
+  for *either* speaker) can't serve this; add
+  `lastRemoteTurnFlushedAt`/`lastLocalTurnFlushedAt`, set alongside the
+  existing speaker-agnostic field wherever `appendEvent` records a `speech`
+  event.
+- **`local.speaking`** — not the raw presence of `activeOutboundTurn`.
+  `activeOutboundTurn` is only cleared when Twilio's mark comes back
+  (`mediaStreamsBridge.ts:808-809`), and `sendMark` silently no-ops when
+  `cleaned || !streamSid` (`:683`). If a mark is ever lost — a stream
+  stall, a reconnect, a dropped Twilio message — `activeOutboundTurn` stays
+  non-null for the rest of the call, so this would read `speaking: true`
+  forever. Gate on recency instead: `speaking = now - turn.lastAudioAtMs <=
+  SOME_SHORT_WINDOW` (a second or two — audio chunks arrive continuously
+  while a turn is actually generating, so a real gap is a strong signal the
+  turn ended even without its mark). This also self-corrects a cleared
+  (barged-over) turn, which today would otherwise read as still speaking
+  until its mark eventually returns.
+- **`remote.audio_on_line`** — deliberately *not* named or framed as
+  `"continuing"`/engagement. `REMOTE_AUDIO_RMS_THRESHOLD = 500` on 8kHz
+  mu-law is roughly -36 dBFS, a low bar that hold music, a voicemail
+  greeting, a TV, an open speakerphone, road noise, or an echo of our own
+  outbound audio will all clear *continuously*. On a call like that this
+  field would be permanently `"recent"` and never inform anything — not
+  stale by a few seconds, but structurally unable to answer the question an
+  operator actually has ("is the callee engaged"). Name it for what it
+  measures — raw line energy — so nobody downstream reads it as proof of
+  callee engagement: `"recent"` if `now - lastRemoteAudioActivityAt <=
+  ACTIVITY_LOOKBACK_MS`, `"quiet"` otherwise, `"unknown"` if
+  `lastRemoteAudioActivityAt` was never set (see the type/undefined fix
+  below — reporting `"quiet"` for "no data yet" would itself be a false
+  "quiet" reading on every call's first second, the exact failure mode this
+  design is trying to avoid).
+- `ACTIVITY_LOOKBACK_MS`, proposed `5000`: `lastRemoteAudioActivityAt` is
+  stored as an ISO string (`isoNow()`, `mediaStreamsBridge.ts:763`), not a
+  number — the comparison needs `Date.now() - new
+  Date(lastRemoteAudioActivityAt).getTime()`, not raw subtraction. A flat
+  window on raw audio energy can't distinguish "mid-conversation thinking
+  pause, more is coming" (observed up to ~3s of pure silence while someone
+  checks calendar availability) from "a short utterance just ended and
+  nothing else is happening" — both look identical: N seconds with no RMS
+  activity. Bias toward the longer side, because a false `"quiet"` risks
+  repeating the actual incident's failure mode (a signal read as "nothing's
+  happening" when something still might be), while a stale `"recent"` only
+  costs a few seconds of an operator waiting slightly longer before
+  concluding real silence — but be honest about the combined cost: adding
+  the documented 2-3s poll cadence on top means an operator could be
+  looking at up to ~8 real seconds of accumulated staleness before acting on
+  genuine silence, in a system whose own turn-taking VAD reacts in hundreds
+  of milliseconds. That's a real, accepted tradeoff, not something the poll
+  cadence quietly absorbs for free. This constant has no exact derivation
+  and should be tuned from real call observations (see Live test 1).
 
-**Why 5000ms, not something tighter:** a flat window on raw audio energy
-cannot distinguish "mid-conversation thinking pause, more is coming" (e.g.
-someone checking calendar availability — observed up to ~3s of pure silence
-before a filler sound resumes) from "a short utterance just ended and
-nothing else is happening." Both look identical: N seconds with no RMS
-activity. Too short a window (an early candidate was ~1.5s) reads a normal
-thinking pause as `"silent"` — a false negative, which is exactly the
-failure mode from the actual incident (the operator prematurely concluding
-"no response"). Too long a window makes `"continuing"` linger long after a
-genuinely short turn ends — stale, but only costs a few seconds of an
-operator waiting slightly longer before concluding real silence, and that
-cost is largely absorbed by the documented 2-3s poll cadence
-(`skills/outreach/call.md`). Given that asymmetry, bias toward the longer
-side: 5000ms gives margin above the observed ~3s thinking-pause case. The
-window's behavior is self-adjusting at the low end for free — early in a gap
-(elapsed time under 5s) the comparison is checking the *entire* elapsed gap,
-since there's nothing further back to look at; only once the gap exceeds 5s
-does it matter that older activity has aged out. No separate "early call"
-branch is needed. This constant has no exact derivation and should be
-tuned from real call observations later; it's deliberately conservative for
-now given the cost asymmetry.
+### D3: Fix G3 by gating on fragment *arrival*, not flush
 
-This gives the operator exactly: "callee's last full turn was 4s ago, and
-they're still making sound since" vs. "...and it's gone quiet" — the
-distinction #106 needs between monitoring-degraded and genuinely-silent.
+Replaces the first draft's `activeOutboundTurn`-gated design entirely — a
+materially better fix the first draft never considered.
 
-### D3: Fix G3's local leg only — leave the remote leg alone
+The defect is that `lastTranscriptTime` is stamped at *flush* time, which
+can lag far behind when transcription content actually arrived. Fix it at
+the source: add `session.lastTranscriptFragmentAt`, stamped inside
+`handleGeminiTranscript` (`mediaStreamsBridge.ts:380-387`) on *every*
+fragment from either channel, before it ever reaches the batcher. Gate G3
+on this instead of `lastTranscriptTime`:
 
-Gate the 90s guard on `activeOutboundTurn` for its "audio still flowing"
-leg, in addition to (not instead of) the existing `lastTranscriptTime`
-check: if the agent is actively mid-turn, never fire G3. That's unambiguous
-— it's audio we generated ourselves, definitely not voicemail or hold
-music — and it fully fixes the scenario this whole doc set out to
-reproduce: a long *agent* monologue false-tripping the guard.
+- Fixes **both** legs uniformly — local and remote — with one field and
+  about three lines, not the local-only patch the first draft settled for.
+- Preserves G3's original anti-voicemail semantics exactly, and for free:
+  Gemini's own ASR is already doing the speech-vs-non-speech
+  discrimination RMS can't provide. A voicemail greeting followed by dead
+  air, or hold music with no recognizable speech, still produces no
+  transcription fragments and still trips the guard at 90s, same as today.
+- Immune to whatever D1 does to flush cadence, because it never touches the
+  batcher at all — this is what makes D1 safe to ship (see D1).
+- Doesn't need the `activeOutboundTurn`-recency fallback the first draft's
+  design required, and doesn't inherit that mechanism's lost-mark failure
+  mode.
 
-Deliberately **not** using `lastRemoteAudioActivityAt` here, even though D2
-computes it: RMS energy can't tell a real, long *callee* monologue apart
-from hold music or a voicemail greeting looping audio — that discrimination
-is G3's entire original purpose (`docs/done/call-cost-guardrails.md`, G3).
-Feeding the same energy signal into the guard would silently defeat the one
-thing it exists to catch. So a genuinely long, uninterrupted callee turn
-with no interruption remains a known, accepted gap in G3 — same category as
-the "no VAD" trade-off above — rather than something this doc's remote-side
-telemetry should be repurposed to paper over. If real incidents later show
-that gap matters, revisit with a purpose-built check then; don't preempt it
-by weakening G3 now.
+No VAD, no RMS, no new capture — just moving one timestamp write earlier in
+the pipeline.
 
 ### D4: `call_ended` on Twilio-initiated teardown
 
-`call_ended` is only ever appended inside `endTwilioCall`
-(`mediaStreamsBridge.ts:959-980`), guarded by an idempotency check. Every
-direct `cleanup()` call — Twilio `stop` event (line 733), WS `close` (line
-229), and a few internal paths (lines 646, 995, 998) — bypasses it entirely.
-The incident transcript has no `call_ended` at all as a result, so neither
-the operator nor a later reader can tell whether a wrap-up steer landed, was
-ignored, or was moot because the callee had already hung up. Fix: append
-`call_ended` from the `cleanup()` path too, with a reason distinguishing
-Twilio-initiated teardown from an explicit hangup.
+The gap is real — confirmed in `~/.outreach/daemon.log` for the incident:
+the call ended via Twilio's `stop` event → `cleanup()`, and no
+`call_ended` event exists anywhere in that transcript. But the first
+draft's description of *where* the event is appended today was wrong, and
+missed a real ordering hazard in the fix.
 
-### D5: Non-destructive `call listen` cursor
+`call_ended` is appended in three places, not one:
+`endTwilioCall` (`mediaStreamsBridge.ts:972-979`), **guarded** by
+`!fullTranscript.some(e => e.type === "call_ended")`; `forceHangup`
+(`server.ts:372-378`), **unguarded**; `handleCallHangup`
+(`server.ts:1057-1063`), **unguarded**. The actual bypass set — direct
+`cleanup()` calls that append nothing at all — is the WS `close` handler
+(`mediaStreamsBridge.ts:229`), the Twilio `stop` handler (`:733`), and
+`handleGeminiEnd` (`server.ts:646`).
 
-`handleCallListen` (`server.ts:958-978`) advances `session.lastListenIndex`
-unconditionally before the response is confirmed delivered. If the 10s IPC
-round trip (`ipc.ts:4`) times out after the daemon computes the response,
-those entries are gone from future `listen` calls forever (they survive only
-in `fullTranscript`, used by `finalizeCall`/summary, never re-served by
-`listen`). Replace with sequence-numbered acknowledged reads plus a
-non-destructive peek, so a dropped response doesn't permanently lose
-transcript coverage.
+Fix: append `call_ended` from inside `cleanup()` too, reusing the same
+`fullTranscript.some(...)` idempotency check `endTwilioCall` already uses —
+that alone prevents a double `call_ended` on the `forceHangup`/
+`handleCallHangup` paths, which already append their own unguarded and then
+call `cleanup()` afterward. **Ordering matters**: `cleanup()` calls
+`batcher.cleanup()` (line 1025) *before* the two guards that decide whether
+this is actually the end of the call — `session.bridge !== this` (a newer
+bridge already owns the call, line 1039) and `session.expectingStreamReconnect`
+(a `send_dtmf` stream swap in flight, line 1053). The new `call_ended`
+append must sit **after** both of those `return`s, alongside where
+`session.status = "ended"` is set (line 1059), not next to the unconditional
+`batcher.cleanup()` call. Appending it earlier would write a mid-call
+`call_ended` on every DTMF reconnect and every superseded-bridge handoff —
+exactly the premature-finalization failure `CLAUDE.md`'s "Call Internals"
+section already documents for this exact code path. (`CallEndedEvent.reason`
+is already a free-form string, `sessionLog.ts:137-140` — no type change
+needed here.)
 
-### D6: Skill doc updates (`skills/outreach/call.md`)
+### D5: `call listen` needs a real full-read path, and the false hint fixed
 
-The doc already says (line 31) to use "the final transcript and summary" as
-evidence — the incident violated that instruction, so part of the fix is
-procedural, not just new capability. No new outreach-cli code — the
-judgment involved ("was this question really answered") is inherently
-semantic, can only be made once the call is over, and the operator doing
-the reading is itself an LLM already capable of it; mechanizing it as a
-deterministic heuristic inside this repo would both overstep the CLAUDE.md
-utility boundary ("no reply watchers, no callback agents") and do the
-judgment worse than the operator already can.
+Expanded from the first draft, and now load-bearing for D6.
 
-- Define "monitoring degraded" (D2's `state: "continuing"` with no new
-  turn) vs. "callee silent" (`state: "silent"`) explicitly, replacing the
-  current undifferentiated silence read.
+Two separate problems, not one:
+
+1. **Destructive cursor.** `handleCallListen` (`server.ts:958-979`) advances
+   `session.lastListenIndex` unconditionally before the response is
+   confirmed delivered. If the 10s IPC round trip (`ipc.ts:4`) times out
+   after the daemon computes the response, those entries are gone from
+   future `listen` calls forever (they survive only in `fullTranscript`,
+   used by `finalizeCall`/summary, never re-served by `listen`). Fix with
+   sequence-numbered acknowledged reads plus a non-destructive peek —
+   `finalizeCall` already preserves both buffers (`server.ts:355-359`), so
+   this needs no new storage.
+2. **There is no full-read capability at all, and `call status` claims
+   there is.** `handleCallListen` only ever returns
+   `transcriptBuffer.slice(lastListenIndex)` — an incremental slice. There
+   is no `--since 0` / full-transcript mode. Yet `handleCallStatus`
+   (`server.ts:1028`) tells a caller: *"Call has ended. Use `outreach call
+   listen --id X` to get the full transcript."* That's false today — running
+   `call listen` again after the call ended returns nothing, since the
+   cursor is already past the end. `skills/outreach/call.md` never
+   documents an alternative either (grepped for `transcripts|jsonl|full
+   transcript` — no hits). This is independently a more plausible mechanism
+   for a bad final report than anything else in this doc: an operator
+   trying to do exactly what D6 requires — re-read the full transcript
+   before reporting — hits a tool that can't do that and either gets an
+   empty result or has to reconstruct the conversation from memory.
+
+Fix: add a real full/`--since <seq>` read mode to `call listen`, and correct
+the `call status` hint to match what the tool can actually do. **D6
+hard-depends on this** — it isn't optional infrastructure, it's the
+capability D6 assumes already exists.
+
+### D6: Skill doc updates (`skills/outreach/call.md`) — likely the single most important fix here
+
+On the incident evidence, this is not one of several equally-weighted
+fixes — it's the one most directly aimed at what actually went wrong. No
+new outreach-cli reasoning code: the judgment involved ("was this question
+really answered") is inherently semantic, can only be made once the call is
+over, and the operator doing the reading is itself an LLM already capable
+of it. **Hard-depends on D5** — the instruction below is only followable
+once a real full-transcript read exists.
+
+- Define `audio_on_line`/`speaking` (D2) honestly, including their
+  limitations (line-energy, not engagement; recency-gated, not exact) —
+  don't let the skill doc imply either is proof the callee is responsive.
 - Add a pre-call factual-dossier convention (permitted claims, sources,
   honest fallback) and an unknown-question fallback line so the agent says
   it will verify rather than inventing or permanently deferring.
-- Require a final-transcript loose-end check before reporting any outcome —
-  a re-check step, not a new capability, since the instruction to use the
-  final transcript already existed and wasn't followed. Require the
-  operator to produce, from the transcript it already gets via
-  `call listen`, a structured loose-end list before reporting any outcome:
+- Require, before reporting any outcome, a full-transcript read (via D5)
+  and a structured loose-end list:
 
   ```
   callee question | voice-agent answer/limitation | evidence completeness | required next action
@@ -243,150 +379,180 @@ judgment worse than the operator already can.
 
   A loose end is a substantive callee question that got no answer, got an
   explicit "I don't have that," has no confirmed resolution by call end, or
-  sits in a transcript-completeness gap (aided by D1's clean turn boundaries
-  and D4's reliable `call_ended`, which make the transcript itself more
-  trustworthy). Delivery to the originating task/workflow is the operator's
-  responsibility per #106, not this repo's — `outreach` stays a transport
-  utility and never touches the canonical task record itself.
+  sits in a transcript-completeness gap (aided by D1/D3's more reliable
+  transcript and D4/D7's more complete evidence). This directly matches
+  #106's acceptance criterion for a deterministic simulated-call test — see
+  the test plan below, which the first draft never wrote.
+- Add a documented hook for persisting the outcome: `skills/contact-operator/`
+  is the natural home for "the calling workflow updates its own canonical
+  task record" (`outreach` never touches it directly, per `CLAUDE.md`'s
+  transport-utility boundary) — the first draft said delivery was "the
+  operator's responsibility" without saying where that responsibility is
+  documented. Point to it explicitly.
+
+### D7: `transcription_gap` event (new — evidence-driven)
+
+Not in the first draft; added because the incident transcript itself
+contains two concrete examples of exactly what #105 asks for
+(`transcription_gap`, work item 2): 7.1s and 11.4s holes between an
+`audio_cleared` (barge-in) event and the next remote speech landing. These
+are the most plausible source of the "additional risk-factor question
+absent from the transcript" a human listener reported per #106.
+
+Log a `transcription_gap` event whenever the time between an `audio_cleared`
+event and the next `speech` event on the interrupting side exceeds a
+threshold (a few seconds — tune against real barge-in timing, not a guess).
+Cheap, purely additive, and gives D6's loose-end check a concrete signal for
+"evidence completeness" beyond "was there a `call_ended`."
 
 ## Deferred, explicitly out of scope for this doc
 
 - **Raw audio capture** (inbound/outbound persistence) and **Twilio
   dual-channel recording** — #105's acceptance criteria items on recoverable
-  audio need an explicit consent/retention/privacy design decision before any
-  code; not bundled here.
+  audio need an explicit consent/retention/privacy design decision before
+  any code; not bundled here.
 - **Real VAD** — ruled out above.
 - **Explicit cross-talk/overlap duration** in the transcript — a genuine
   barge-in has a real physical window where both parties' audio was present
-  on the line (whatever Twilio already played before a `clear` message
-  landed isn't un-played), but the transcript is a strictly sequential event
-  list with no duration/overlap fields, and reconstructing actual overlap
-  needs raw audio timing. Tracked under the raw-audio-capture deferral above,
-  not solved by D1-D6.
+  on the line, but the transcript is a strictly sequential event list with
+  no duration/overlap fields, and reconstructing actual overlap needs raw
+  audio timing. Tracked under the raw-audio-capture deferral above.
+- **#105's "Long Live connection" (~10-minute Gemini connection lifetime)
+  and "Long audio-only Live session" (~15-minute limit) test-matrix rows.**
+  The first draft silently dropped these. They're real, explicitly
+  requested by #105, and untestable statically — they need a dedicated,
+  costed, extended-duration live session against the real Gemini Live API,
+  independent of anything else in this doc. Deferred here, not solved, so
+  it isn't silently lost a second time.
 
-## Unit test plan: reproduce the long-monologue false trip
+## Unit test plan
 
-This is the fake-harness, mocked-timer version of "recreate the experience
-with a long monologue": have the voice agent produce a multi-minute
-continuous reply and watch the G3 guard's decision. See "Live-call
-validation" below for the real-provider counterpart.
+Renamed from "reproduce the long-monologue false trip" — that framing no
+longer fits once D3 replaces the flush-dependent fix. G2 was never in scope
+here; only G3 is addressed by this doc.
 
-1. Extract the G2/G3 predicate out of `server.ts` into a pure, testable
+1. Extract the G3 predicate out of `server.ts` into a pure, testable
    function — today it lives inline in a module with import-time side
-   effects (starts the HTTP server and IPC socket), so no existing unit test
-   imports it.
-2. Add a case to `tests/unit/` reusing `tests/unit/helpers/bridgeHarness.mjs`
-   (fake Twilio WS + fake Gemini session + mocked timers, already used by
-   `outbound-audio-delivery.test.mjs` for multi-chunk turns): drive
-   `gemini.callbacks.onTranscript("local", ...)` for >90s of mocked time with
-   no speaker change, confirming `lastTranscriptTime` stays frozen at the
-   turn's start throughout — expected under the simplified D1, not a bug to
-   fix there.
-   - **Before D3:** assert the extracted G3 predicate would fire on the
-     frozen timestamp alone — the red test reproducing the bug.
-   - **After D3:** assert the predicate no longer fires once it's gated on
-     `activeOutboundTurn` too, despite `lastTranscriptTime` still being
-     frozen. Add a separate case confirming a long, uninterrupted *callee*
-     monologue with no matching agent turn still trips the guard —
-     documenting the accepted gap from D3, not a regression.
-3. Add a case asserting an interrupt mid-monologue produces a `speech` event
-   with `flush_reason: "interrupted"`, not `"turn_change"`.
-4. Add a case asserting `call listen`'s `activity.local` reports
-   `"continuing"` during a long agent turn with no flushed turn yet (exact,
-   via `activeOutboundTurn`).
-5. Add a case asserting `call listen`'s `activity.remote` reports
-   `"continuing"` through a ~3-4s gap in RMS activity (the thinking-pause
-   case) and `"silent"` once the gap exceeds `ACTIVITY_LOOKBACK_MS`.
+   effects (`ipcServer.listen`/`httpServer.listen` called at module scope),
+   so no existing unit test imports it. Also extract D2's activity
+   classifier (the `remote`/`local` state logic) into an importable
+   function for the same reason — the first draft's plan to unit-test
+   `call listen`'s `activity` block directly against `server.ts` wasn't
+   actually writable.
+2. Add a case to `tests/unit/` reusing `tests/unit/helpers/bridgeHarness.mjs`:
+   call `handleGeminiTranscript`-equivalent fragment delivery (via
+   `gemini.callbacks.onTranscript`) repeatedly with no speaker change for
+   >90s of mocked time, and separately confirm audio chunks/`generationComplete`
+   interleave realistically rather than testing `onTranscript` in isolation
+   (a fragment-only drive doesn't exercise the real production path).
+   - **Before D3:** assert `lastTranscriptTime` stays frozen at the turn's
+     start and the extracted G3 predicate would fire — the red test.
+   - **After D3:** assert `lastTranscriptFragmentAt` advances on every
+     fragment regardless of flush state, and the predicate no longer fires.
+   - Add a case with genuinely no fragments for 90+s (true dead air) and
+     confirm the predicate *still* fires — proving D3 doesn't accidentally
+     defeat G3's real purpose.
+3. Add a case asserting an interrupt mid-turn produces a `speech` event with
+   `flush_reason: "interrupted"`, not `"turn_change"`, using D1's explicit
+   flush (not the incidental one).
+4. Add cases for the extracted D2 classifier: `local.speaking` flips to
+   `false` when a turn's last audio chunk ages out, independent of whether
+   its mark ever returns (the lost-mark case). `remote.audio_on_line` reads
+   `"unknown"` before any RMS activity has ever been recorded, `"recent"`
+   through a ~3-4s gap (the thinking-pause case), and `"quiet"` once the gap
+   exceeds `ACTIVITY_LOOKBACK_MS`.
+5. Add a case for D4 reusing `tests/unit/stream-reconnect.test.mjs`'s
+   existing DTMF-reconnect harness: confirm `cleanup()` during
+   `expectingStreamReconnect` does **not** append `call_ended`, and that a
+   real call end does, exactly once, even when `forceHangup`/
+   `handleCallHangup` already appended one.
 
 ## Live-call validation (manual)
 
-The unit tests above prove the logic against mocked timers and a fake
-Gemini/Twilio; they can't prove the fix holds against real provider timing,
-real ASR behavior, or real human pauses. Run these after D1-D3 land, against
-a controlled test number or consenting operator, matching #105's own request
-for a long-turn/timeout test matrix under real conditions rather than
-simulated ones. `tests/integration/` is already the manual/shell-script home
-for this kind of test in the repo.
+Run after D1-D4 and D7 land and unit tests are green, against a controlled
+test number or consenting operator, matching #105's own request for a
+long-turn/timeout test matrix under real conditions. `tests/integration/`
+is the existing manual/shell-script home for this.
 
 ### Live test 1: normal conversation stays correct, and real silence reads correctly
 
-Hold an ordinary back-and-forth call, but deliberately include one short
-natural pause (~3s — e.g. "let me check my calendar") and one clearly longer,
-genuine silence (well past `ACTIVITY_LOOKBACK_MS`, e.g. 10s+) where the
-callee intentionally stops responding. Poll `call listen` throughout,
-including immediately after each deliberate pause.
+Hold an ordinary back-and-forth call with one short natural pause (~3s) and
+one clearly longer, genuine silence (10s+) where the callee intentionally
+stops responding. Poll `call listen` throughout.
 
 Assert: transcript entries land at real turn boundaries with correct
-`flush_reason` values, matching what was actually said (no fragmentation, no
-dropped turns vs. D1's simplified flush); `activity.remote.state` reads
-`"continuing"` through the short pause and only flips to `"silent"` after
-the longer one, within roughly `ACTIVITY_LOOKBACK_MS` of the callee actually
-stopping; no guard misfires anywhere in the daemon log; the final transcript
-and `call_summary` match what was actually said. This is also the first real
-tuning point for `ACTIVITY_LOOKBACK_MS = 5000` — adjust it if real pauses
-show it reading wrong in either direction.
+`flush_reason`; `activity.remote.audio_on_line` reads `"recent"` through
+the short pause and only flips to `"quiet"` after the longer one, within
+roughly `ACTIVITY_LOOKBACK_MS`; no guard misfires; the full-read path (D5)
+returns the complete transcript after the call ends, matching what was
+actually said. First real tuning point for `ACTIVITY_LOOKBACK_MS = 5000`.
 
 ### Live test 2: a long monologue is identified and allowed to play out
 
-Once connected, steer or prompt the agent into a long, continuous,
-uninterrupted reply, reusing #105's own proposed durations (90s, 3m, and
-ideally 7m) with the callee staying connected and not interrupting.
+Given the corrected math above, a moderate-length monologue (90s-3m of
+*played* audio) is very unlikely to have been at real risk even before this
+fix, since it likely generates in well under 90s of wall-clock time at a
+~3.7x ratio last measured on this call — **re-measure that ratio on this
+run rather than assuming it holds**, since it came from one call/config.
+Run it anyway as a real-world confirmation, but the case that actually
+stresses D3 is longer: aim for 5-7 minutes of played audio, and separately
+run a true-dead-air case (both sides silent, e.g. ringing into voicemail)
+to confirm G3 still correctly fires there — proving the fix doesn't quietly
+disable the guard's real purpose.
 
-Assert: the call is not force-hung-up mid-monologue (no G3 `forceHangup`/"no
-conversational activity detected" in the daemon log or transcript);
-`call status` reports `in_progress` throughout; `activity.local.state` reads
-`"continuing"` for the full duration when polled mid-turn; the monologue's
-full text lands in the transcript once it genuinely ends, tagged
-`flush_reason: "turn_change"` (or `"call_ended"` if the call ends right
-after); total call duration is not truncated near the 90s mark. This is the
-direct, real-provider version of "recreate the experience" from the top of
-this doc, and produces the measured-duration evidence #105's acceptance
-criteria ask for.
+Assert: no G3 `forceHangup` in the daemon log during the long monologue;
+`activity.local.speaking` reads `true` throughout when polled mid-turn;
+`call status` reports `in_progress` throughout; the dead-air case still
+gets force-hung-up at ~90s with the voicemail reason.
 
 ## Implementation order
 
-1. **D2** — wire up the already-existing `lastRemoteAudioActivityAt`/
-   `activeOutboundTurn` signals as `call listen` telemetry. Independent of
-   D1; the highest-leverage piece since it's almost entirely plumbing.
-2. **D3** — fix G3's local leg using `activeOutboundTurn`. Depends on D2's
-   plumbing for the field, not on D1's flush behavior, and does not touch
-   G3's remote leg.
-3. **Test plan steps 1-2** — red test against current G3 behavior, green
-   after D3 lands.
-4. **D1** — simplify the batcher to flush only on turn-change, drop the idle
-   timer, add `flush_reason`. Independent of D2/D3 — a transcript
-   cleanliness/evidence improvement, not a guard fix.
-5. **D4** — `call_ended` on Twilio-initiated teardown. Small, independent,
-   closes an evidence gap relevant to both issues.
-6. **D5** — non-destructive `call listen` cursor. Independent, can slot in
-   anytime.
+Reordered from the first draft: the highest-confidence, most load-bearing
+fixes first, telemetry after the things it depends on are true.
+
+1. **D5** — full-read `call listen` + fix the false `call status` hint.
+   Foundational: D6 cannot be followed without it, and it's independently a
+   more plausible cause of the actual incident than anything the first
+   draft prioritized.
+2. **D3** — fix G3 via fragment-arrival timestamps. Independent of D1 and
+   D2; the correct, narrow fix for the one real latent guard bug found.
+3. **D7** — `transcription_gap` event. Cheap, evidence-driven, independent.
+4. **D2** — activity telemetry, with the corrected types/semantics/recency
+   gating.
+5. **D1** — simplify the batcher to flush only on turn-change. Safe to ship
+   now that D3 has removed G3's dependency on flush cadence.
+6. **D4** — `call_ended` on Twilio-initiated teardown, with the ordering
+   fix relative to the DTMF/superseded-bridge guards.
 7. **D6** — skill doc updates, including the structured loose-end
-   requirement. Sequenced last since it references D2's `state` field
-   directly.
-8. **Live-call validation** — both live tests, run once D1-D3 are in and the
-   unit tests are green. Confirms the fix against real provider timing and
-   real human pauses, and is the first real tuning point for
-   `ACTIVITY_LOOKBACK_MS`.
+   requirement and the `skills/contact-operator/` hook. Depends on D5.
+8. Unit tests, interleaved with the corresponding design item per the test
+   plan above.
+9. **Live-call validation** — both live tests.
 
 ## Changes needed
 
 | File | Change |
 |---|---|
-| `src/daemon/mediaStreamsBridge.ts` | D1: remove `SILENCE_TIMEOUT_MS`/idle-flush timer from `TranscriptBatcher`; add `flush_reason` (`turn_change`/`interrupted`/`call_ended`) to `speech` events. D4: append `call_ended` from `cleanup()`. |
+| `src/daemon/mediaStreamsBridge.ts` | D1: remove `SILENCE_TIMEOUT_MS`/idle-flush timer; add `flush_reason`; make the interrupted flush explicit in `handleInterrupted`. D3: stamp `lastTranscriptFragmentAt` in `handleGeminiTranscript`. D4: append `call_ended` in `cleanup()`, after the `expectingStreamReconnect`/superseded-bridge guards, reusing the idempotency check. |
 | `src/audio/geminiLive.ts` | Note the upstream `Transcription.finished` bug inline so it isn't silently relied on later. |
-| `src/logs/sessionLog.ts` | Add `flush_reason` to the `speech` event type; add `call_ended` reason variants. |
-| `src/daemon/sessions.ts` | Expose `activeOutboundTurn` presence (used by D2 `local` and D3) and `lastRemoteAudioActivityAt` read access (used by D2 `remote` only, not D3). |
-| `src/daemon/server.ts` | D2: `activity` block in `handleCallListen`, replacing `silence_ms`; define `ACTIVITY_LOOKBACK_MS = 5000`. D3: extract the G3 predicate and add the `activeOutboundTurn` escape hatch, leaving the remote leg unchanged. D5: sequence-numbered/non-destructive listen cursor. |
-| `tests/unit/` | New long-monologue and interrupt-tagging cases per test plan, reusing `helpers/bridgeHarness.mjs`. |
-| `skills/outreach/call.md` | D6: monitoring-degraded vs. silent definitions, factual-dossier convention, required structured loose-end check before reporting outcome. |
+| `src/logs/sessionLog.ts` | Add `flush_reason` to the `speech` event type. Add `transcription_gap` event type (D7). (`call_ended.reason` needs no change — already a free-form string.) |
+| `src/daemon/sessions.ts` | Add `lastTranscriptFragmentAt` (D3), `lastRemoteTurnFlushedAt`/`lastLocalTurnFlushedAt` (D2, genuinely new — not derivable from the existing speaker-agnostic `lastSpeechTime`). |
+| `src/daemon/server.ts` | D2: `activity` block in `handleCallListen`/`handleCallStatus`, replacing `silence_ms` (a breaking output-contract change — call it out). D3: extract and fix the G3 predicate to use `lastTranscriptFragmentAt`. D5: full-read mode + fix the `:1028` hint. |
+| `src/commands/call/listen.ts` | D5: new CLI flag for the full/`--since <seq>` read mode. |
+| `tests/unit/` | New cases per the unit test plan, reusing `helpers/bridgeHarness.mjs` and `stream-reconnect.test.mjs`. |
+| `skills/outreach/call.md` | D6: honest `audio_on_line`/`speaking` definitions, factual-dossier convention, required full-transcript loose-end check before reporting outcome. |
+| `skills/contact-operator/` | D6: documented hook for persisting outcome/loose-end to the calling workflow's own canonical record. |
+| `CLAUDE.md` | D1/D2/D4/D5 all change behavior documented under "Call Internals" and "Command Surface" — update alongside implementation, per this repo's own "keep documentation here" convention. |
 
 ## Acceptance criteria mapping
 
-| #105/#106 acceptance criterion | Status after this doc |
+| #105/#106 acceptance criterion (full text, not truncated) | Status after this doc |
 |---|---|
-| Long-turn tests publish measured turn duration, transcript coverage, which timeout fired | Covered by the test plan |
-| Repo documents tested provider/local timeout boundaries | Covered — this doc plus the js-genai#1429 reference |
-| Loose ends delivered as machine-readable data to the originating task | Covered by D6 — the operator's own structured report, not new CLI code |
-| Empty/delayed poll is "monitoring degraded," not proof of silence | Covered by D2/D6 |
+| "Long-turn tests publish measured turn duration, audio bytes/duration, Twilio marks, clear events, transcript coverage, call-end reason, and which timeout (if any) fired" | Covered by the unit + live test plans |
+| "The repo documents the tested provider and local timeout boundaries, including any uncertainty that remains" | **Not covered.** The 3.7x generation ratio is measured but from one call; the ~10-min/~15-min Gemini session limits are explicitly deferred, untested. Don't mark this done until those live sessions actually run. |
+| "A post-call report identifies every audio/transcript mismatch and does not claim transcript completeness when a gap exists" | Partially covered by D7 (`transcription_gap`) and D6 (loose-end evidence-completeness field); no code claims blanket completeness anywhere already, so no new false claim to remove |
+| Loose ends delivered as machine-readable data to the originating task | Covered by D6 — the operator's own structured report via the documented `skills/contact-operator/` hook, not new CLI code |
+| Empty/delayed poll is "monitoring degraded," not proof of silence | Covered by D2/D6, with the corrected honest naming (`audio_on_line`, not "engaged") |
+| A deterministic simulated-call test (factual follow-up + missing poll + later transcript containing the question → emits an unresolved loose end, not "no response") | Covered by D6's structured loose-end requirement; add this exact scenario as an eval of the skill doc, not a `tests/unit/*.test.mjs` case — it's operator/prompt behavior, not TypeScript code |
 | A known spoken test phrase can be recovered from raw inbound audio even when mistranscribed | **Not covered** — needs the deferred raw-audio-capture decision |
 | Twilio dual-channel recording prototype with consent/retention design | **Not covered** — deferred, needs a policy decision first |
