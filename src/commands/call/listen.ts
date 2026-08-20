@@ -12,7 +12,7 @@ interface ListenOptions {
 export function registerListenCommand(parent: Command): void {
   parent
     .command("listen")
-    .description("Get transcript of what the other party has said")
+    .description("Get the call transcript (full, or new entries since --since)")
     .requiredOption("--id <callId>", "Call ID")
     .option(
       "--since <seq>",
