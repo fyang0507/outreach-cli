@@ -56,8 +56,10 @@ class TranscriptBatcher {
   private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: string } | null = null;
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   // Set when audio_cleared fires (always the remote side interrupting local audio)
-  // and resolved by the next speech on that same side, whichever comes first — see
-  // TRANSCRIPTION_GAP_THRESHOLD_MS.
+  // and resolved by the next remote speech, however much later that lands — an
+  // intervening local turn does not reset it, since the point is whether the
+  // callee's own words made it into the transcript, not whether the agent replied
+  // in between. See TRANSCRIPTION_GAP_THRESHOLD_MS.
   private pendingInterruptClearedAtMs: number | null = null;
 
   constructor(session: CallSession) {
