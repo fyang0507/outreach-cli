@@ -4,10 +4,9 @@ import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { mulawToPcm16, twilioToGemini, geminiToTwilio } from "../audio/transcode.js";
 import { appendEvent, type CallSession } from "./sessions.js";
 import { isoNow } from "../logs/sessionLog.js";
-import type { TranscriptEvent } from "../logs/sessionLog.js";
+import type { TranscriptEvent, SpeechFlushReason } from "../logs/sessionLog.js";
 import type { GeminiConfig } from "../appConfig.js";
 
-const SILENCE_TIMEOUT_MS = 800;
 const INITIAL_GREETING_DELAY_MS = 350;
 const FIRST_OUTBOUND_AUDIO_MARK = "first_outbound_audio";
 const REMOTE_AUDIO_RMS_THRESHOLD = 500;
@@ -55,12 +54,15 @@ interface OutboundTurn {
 
 /**
  * Batches per-word transcript fragments into turn-level entries.
- * Flushes on speaker change, silence timeout, or explicit cleanup.
+ * Flushes only when a turn genuinely ends — speaker change, an explicit
+ * interrupt, an explicit structured event, or call end — never on a timer.
+ * G3 (the voicemail-silence guard) does not depend on this: it reads
+ * `lastTranscriptFragmentAt`, stamped on every fragment as it arrives, so a
+ * long uninterrupted turn sitting unflushed here can't freeze that clock.
  */
 class TranscriptBatcher {
   private session: CallSession;
   private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: string } | null = null;
-  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   // Set when audio_cleared fires (always the remote side interrupting local audio)
   // and resolved by the next remote speech, however much later that lands — an
   // intervening local turn does not reset it, since the point is whether the
@@ -75,7 +77,7 @@ class TranscriptBatcher {
   append(speaker: "remote" | "local", text: string, ts: string): void {
     // Speaker change — flush previous buffer first
     if (this.pending && this.pending.speaker !== speaker) {
-      this.flush();
+      this.flush("turn_change");
     }
 
     if (!this.pending) {
@@ -90,26 +92,18 @@ class TranscriptBatcher {
     }
 
     this.pending.textParts.push(text);
-
-    // Reset silence timer
-    if (this.silenceTimer) clearTimeout(this.silenceTimer);
-    this.silenceTimer = setTimeout(() => this.flush(), SILENCE_TIMEOUT_MS);
   }
 
   /** Flush pending buffer before appending a structured event (DTMF, call_ended, etc.). */
   appendDirect(event: TranscriptEvent): void {
-    this.flush();
+    this.flush("turn_change");
     appendEvent(this.session, event);
     if (event.type === "audio_cleared") {
       this.pendingInterruptClearedAtMs = Date.parse(event.ts);
     }
   }
 
-  flush(): void {
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
+  flush(reason: SpeechFlushReason): void {
     if (!this.pending) return;
 
     const text = this.pending.textParts.join("");
@@ -118,12 +112,13 @@ class TranscriptBatcher {
       speaker: this.pending.speaker,
       text,
       ts: this.pending.firstTs,
+      flush_reason: reason,
     });
     this.pending = null;
   }
 
   cleanup(): void {
-    this.flush();
+    this.flush("call_ended");
   }
 }
 
@@ -372,6 +367,7 @@ export class MediaStreamsBridge {
         speaker: "local",
         text: transcript,
         ts: this.session.initialGreetingRequestedAt,
+        flush_reason: "turn_change",
       });
     }
 
@@ -564,6 +560,13 @@ export class MediaStreamsBridge {
     // over though, and an interrupted turn gets no generation/turn-complete
     // signal, so record it or the flush leaves its turn unfinalized forever.
     this.noteHeldGreetingTurnOver("interrupted");
+    // Explicit and unconditional: clearBufferedOutboundAudio and
+    // finalizeActiveOutboundTurn below both early-return when there is no
+    // outbound audio in flight (outboundTurnsByMark.size === 0, or
+    // turn.audioChunks === 0), so a pending remote turn interrupted mid-sentence
+    // with nothing of ours queued would otherwise never get flushed at all —
+    // there is no idle timer left to catch it.
+    this.batcher.flush("interrupted");
     this.clearBufferedOutboundAudio("gemini_interrupted");
     this.finalizeActiveOutboundTurn("interrupted");
     this.notifyIfGreetingWentUnheard();

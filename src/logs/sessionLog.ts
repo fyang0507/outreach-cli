@@ -116,10 +116,16 @@ export interface GreetingDeliveryEvent extends BaseEvent {
   answered_by?: string;
 }
 
+// TranscriptBatcher only ever flushes a pending turn at one of these genuine
+// boundaries — there is no idle-timeout flush — so every "speech" event can say
+// exactly which one produced it.
+export type SpeechFlushReason = "turn_change" | "interrupted" | "call_ended";
+
 export interface SpeechEvent extends BaseEvent {
   type: "speech";
   speaker: "remote" | "local";
   text: string;
+  flush_reason: SpeechFlushReason;
 }
 
 /**
