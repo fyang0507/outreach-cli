@@ -1100,6 +1100,20 @@ export class MediaStreamsBridge {
     // Mark session ended
     this.session.status = "ended";
 
+    // Twilio-initiated teardowns (WS close, Twilio `stop`, Gemini ending the
+    // session) reach here without ever calling endTwilioCall/forceHangup/
+    // handleCallHangup, so without this the transcript can end with no call_ended
+    // event at all. Reuses their own idempotency check, so a path that already
+    // appended one before calling cleanup() does not get a second.
+    if (!this.session.fullTranscript.some((event) => event.type === "call_ended")) {
+      this.batcher.appendDirect({
+        type: "call_ended",
+        ts: isoNow(),
+        reason: "media stream closed",
+        duration_ms: Date.now() - this.session.startTime,
+      });
+    }
+
     // Notify server to finalize the transcript.
     if (this.onCleanup) {
       this.onCleanup();

@@ -88,6 +88,10 @@ test("a stream teardown awaiting a DTMF reconnect does not end or finalize the c
   assert.equal(session.status, "in_progress", "the call is still up, playing digits");
   assert.equal(session.fullTranscript.length, 1, "history stays on the session for the next bridge");
   assert.ok(gemini.isClosed, "this bridge's Gemini session is still torn down");
+  assert.ok(
+    !session.fullTranscript.some((e) => e.type === "call_ended"),
+    "a DTMF reconnect is not the end of the call",
+  );
 
   deleteSession(session.id);
 });
@@ -103,6 +107,35 @@ test("an ordinary stream teardown still ends and finalizes the call", () => {
 
   assert.equal(finalizeCalls, 1);
   assert.equal(session.status, "ended");
+  const callEndedEvents = session.fullTranscript.filter((e) => e.type === "call_ended");
+  assert.equal(callEndedEvents.length, 1, "a Twilio-initiated teardown must still leave a call_ended event");
+
+  deleteSession(session.id);
+});
+
+test("cleanup() does not double up call_ended when a hangup path already appended one", () => {
+  const session = midCallSession();
+  let finalizeCalls = 0;
+  const gemini = fakeGemini();
+  const twilioWs = fakeTwilioWs();
+  const bridge = startBridge(session, gemini, twilioWs, () => { finalizeCalls += 1; });
+
+  // Simulates forceHangup/handleCallHangup, both of which append call_ended
+  // themselves before calling cleanup().
+  session.fullTranscript.push({
+    type: "call_ended",
+    ts: new Date().toISOString(),
+    reason: "hangup command",
+    duration_ms: 1000,
+  });
+
+  bridge.cleanup();
+
+  assert.equal(finalizeCalls, 1);
+  assert.equal(session.status, "ended");
+  const callEndedEvents = session.fullTranscript.filter((e) => e.type === "call_ended");
+  assert.equal(callEndedEvents.length, 1, "cleanup() must reuse the existing call_ended, not append a second");
+  assert.equal(callEndedEvents[0].reason, "hangup command", "the original, more specific reason must survive");
 
   deleteSession(session.id);
 });
