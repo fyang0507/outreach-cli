@@ -22,6 +22,7 @@ import { readRuntime } from "../runtime.js";
 import { loadAppConfig } from "../appConfig.js";
 import type { AppConfig } from "../appConfig.js";
 import { runPreflight } from "./preflight.js";
+import { CALL_INACTIVITY_MS, isVoicemailSilence } from "./callGuards.js";
 
 // --- Constants ---
 
@@ -32,8 +33,6 @@ const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const INSTANCE_ID = randomBytes(8).toString("hex");
 const PID_FILE = "/tmp/outreach-daemon.pid";
 const SOCKET_PATH = "/tmp/outreach-daemon.sock";
-const CALL_INACTIVITY_MS = 60 * 1000; // 60 seconds
-const VOICEMAIL_SILENCE_MS = 90 * 1000; // 90 seconds without transcript = likely voicemail/hold
 const SESSION_RETENTION_MS = 60 * 60 * 1000; // ended sessions stay listenable for an hour
 const MAX_RETAINED_ENDED_SESSIONS = 100;
 // At pickup, waiting on the in-flight preconnect handshake strictly dominates
@@ -1181,10 +1180,7 @@ const activityInterval = setInterval(() => {
     }
 
     // G3: Voicemail/hold music detection — audio flowing but no transcript
-    if (
-      now - session.lastActivityTime < CALL_INACTIVITY_MS &&
-      now - session.lastTranscriptTime > VOICEMAIL_SILENCE_MS
-    ) {
+    if (isVoicemailSilence(session, now)) {
       forceHangup(session, `Call ${session.id} — no conversational activity detected (likely voicemail/hold music) — auto-hangup`);
     }
   }

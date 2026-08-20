@@ -15,6 +15,10 @@ export interface CallSession {
   lastSpeechTime: number;
   lastActivityTime: number;
   lastTranscriptTime: number;
+  // Stamped on every transcript fragment from either channel, before it reaches the
+  // batcher — unlike lastTranscriptTime (flush-gated), this can't sit frozen for the
+  // length of an uninterrupted turn. G3's actual input; see MediaStreamsBridge.
+  lastTranscriptFragmentAt: number;
   maxDurationMs?: number;
   waitForUserBeforeGreeting?: boolean;
   streamSid?: string;
@@ -121,6 +125,7 @@ export function createSession(params: {
     lastSpeechTime: now,
     lastActivityTime: now,
     lastTranscriptTime: now,
+    lastTranscriptFragmentAt: now,
   };
   sessions.set(session.id, session);
   return session;

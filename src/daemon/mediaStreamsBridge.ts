@@ -379,6 +379,9 @@ export class MediaStreamsBridge {
   /** Local transcript follows the audio: buffered while the greeting is held. */
   private handleGeminiTranscript(speaker: "remote" | "local", text: string): void {
     if (this.cleaned) return;
+    // Stamped on arrival, ahead of the batcher, so G3 sees this fragment even if it
+    // sits in TranscriptBatcher's pending buffer for the rest of a long turn.
+    this.session.lastTranscriptFragmentAt = Date.now();
     if (speaker === "local" && this.greetingHandoverPending) {
       this.session.preGeneratedGreetingTranscriptParts.push(text);
       return;
