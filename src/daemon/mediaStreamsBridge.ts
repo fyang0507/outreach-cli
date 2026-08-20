@@ -24,8 +24,14 @@ const GREETING_IDENTIFIED_MS = 2000;
 // A barge-in clears the agent's buffered audio the moment Gemini reports the
 // interrupt, but transcription of what the interrupting side actually said can lag
 // well behind that: 7.1s and 11.4s in one real call (`call_257cce0c2810.jsonl`).
-// Tune against real barge-in timing, not this guess.
-const TRANSCRIPTION_GAP_THRESHOLD_MS = 3000;
+// Measured against 31 audio_cleared -> next-remote-speech intervals across 21 real
+// calls in that same transcripts directory: min 1574ms, p25 2265, median 3968,
+// p75 6040, p90 9355, max 32246. Ordinary barge-in transcription lag is already a
+// few seconds — the median alone is ~4s — so a low threshold fires on routine
+// barge-ins and is useless as an evidence-completeness signal. Set at ~p75 to flag
+// the genuinely large gaps (the 7.1s/11.4s class this event exists for) while
+// excluding most ordinary ones.
+const TRANSCRIPTION_GAP_THRESHOLD_MS = 6000;
 // Gemini sends 24kHz mono 16-bit PCM, so two bytes per sample at 24 samples/ms.
 const GEMINI_PCM_BYTES_PER_MS = 48;
 

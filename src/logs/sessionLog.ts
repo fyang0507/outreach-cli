@@ -131,7 +131,7 @@ export interface SpeechEvent extends BaseEvent {
  */
 export interface TranscriptionGapEvent extends BaseEvent {
   type: "transcription_gap";
-  speaker: "remote" | "local";
+  speaker: "remote";
   gap_ms: number;
 }
 
