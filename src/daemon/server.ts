@@ -23,6 +23,7 @@ import { loadAppConfig } from "../appConfig.js";
 import type { AppConfig } from "../appConfig.js";
 import { runPreflight } from "./preflight.js";
 import { CALL_INACTIVITY_MS, isVoicemailSilence } from "./callGuards.js";
+import { computeActivity } from "./callActivity.js";
 
 // --- Constants ---
 
@@ -976,7 +977,7 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
 
   const entries = session.fullTranscript.slice(since);
   session.lastActivityTime = Date.now();
-  const silenceMs = Date.now() - session.lastSpeechTime;
+  const activity = currentActivity(session, Date.now());
   const summary = latestCallSummary(session);
 
   return {
@@ -984,7 +985,7 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
     status: session.status,
     transcript: entries,
     next_since: session.fullTranscript.length,
-    silence_ms: silenceMs,
+    activity,
     ...(summary ? { summary } : {}),
   };
 }
@@ -1009,6 +1010,13 @@ async function handleCallSteer(params: Record<string, unknown>): Promise<object>
   appendEvent(session, { type: "call_steered", ts: isoNow(), mode, text });
 
   return { id, status: "steered", mode };
+}
+
+function currentActivity(session: CallSession, now: number) {
+  const localLastAudioAtMs = session.bridge instanceof MediaStreamsBridge
+    ? session.bridge.activeOutboundTurnLastAudioAtMs()
+    : null;
+  return computeActivity(session, localLastAudioAtMs, now);
 }
 
 function latestCallSummary(session: CallSession): TranscriptEvent | undefined {
@@ -1046,6 +1054,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
     from: session.from,
     to: session.to,
     hint,
+    activity: currentActivity(session, Date.now()),
     ...(summary ? { summary } : {}),
   };
 }

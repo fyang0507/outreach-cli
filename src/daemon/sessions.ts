@@ -12,12 +12,17 @@ export interface CallSession {
   startTime: number;
   fullTranscript: TranscriptEvent[];
   ws?: WebSocket;
-  lastSpeechTime: number;
   lastActivityTime: number;
   // Stamped on every transcript fragment from either channel, before it reaches the
   // batcher, so it can't sit frozen for the length of an uninterrupted turn the way
   // a flush-gated timestamp would. G3's actual input; see MediaStreamsBridge.
   lastTranscriptFragmentAt: number;
+  // Per-side turn-flush timestamps for `call listen`/`call status`'s `activity`
+  // block — kept separately per speaker because "how long has *this* side been
+  // quiet" can't be answered by a single speaker-agnostic timestamp; see
+  // callActivity.ts.
+  lastRemoteTurnFlushedAt?: number;
+  lastLocalTurnFlushedAt?: number;
   maxDurationMs?: number;
   waitForUserBeforeGreeting?: boolean;
   streamSid?: string;
@@ -83,7 +88,11 @@ export function appendEvent(
   // Update speech/activity tracking only for speech events
   if (event.type === "speech") {
     const speech = event as SpeechEvent;
-    session.lastSpeechTime = Date.now();
+    if (speech.speaker === "remote") {
+      session.lastRemoteTurnFlushedAt = Date.now();
+    } else {
+      session.lastLocalTurnFlushedAt = Date.now();
+    }
 
     // Track milestone: first remote speech after answer
     if (speech.speaker === "remote" && !session.firstRemoteSpeechAt) {
@@ -120,7 +129,6 @@ export function createSession(params: {
     preGeneratedGreetingAudioChunks: 0,
     preGeneratedGreetingTranscriptParts: [],
     preGeneratedGreetingTurnComplete: false,
-    lastSpeechTime: now,
     lastActivityTime: now,
     lastTranscriptFragmentAt: now,
   };

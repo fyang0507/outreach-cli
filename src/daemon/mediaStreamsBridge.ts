@@ -291,6 +291,11 @@ export class MediaStreamsBridge {
     else this.gemini.steer(text);
   }
 
+  /** Read by `call listen`/`call status`'s `activity.local.speaking` — see callActivity.ts. */
+  activeOutboundTurnLastAudioAtMs(): number | null {
+    return this.activeOutboundTurn?.lastAudioAtMs ?? null;
+  }
+
   sendInitialGreeting(): void {
     if (this.initialGreetingSent || this.cleaned) return;
     this.initialGreetingSent = true;
