@@ -6,6 +6,7 @@ import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 
 interface ListenOptions {
   id: string;
+  since?: string;
 }
 
 export function registerListenCommand(parent: Command): void {
@@ -13,6 +14,10 @@ export function registerListenCommand(parent: Command): void {
     .command("listen")
     .description("Get transcript of what the other party has said")
     .requiredOption("--id <callId>", "Call ID")
+    .option(
+      "--since <seq>",
+      "Only return entries at or after this sequence number (a previous response's next_since); omit for the full transcript",
+    )
     .action(async (opts: ListenOptions) => {
       try {
         await requireRuntime();
@@ -22,9 +27,20 @@ export function registerListenCommand(parent: Command): void {
         return;
       }
 
+      let since: number | undefined;
+      if (opts.since !== undefined) {
+        since = Number(opts.since);
+        if (!Number.isInteger(since) || since < 0) {
+          outputError(INPUT_ERROR, "--since must be a non-negative integer");
+          process.exit(INPUT_ERROR);
+          return;
+        }
+      }
+
       try {
         const result = await sendToDaemon("call.listen", {
           id: opts.id,
+          ...(since !== undefined ? { since } : {}),
         });
 
         const res = result as { error?: string; message?: string };

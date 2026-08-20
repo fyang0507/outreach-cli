@@ -354,9 +354,8 @@ async function finalizeCall(session: CallSession): Promise<void> {
     session.finalizedAt = Date.now();
     // The greeting audio is base64 24kHz PCM (~200KB for a 3s greeting) and is
     // never drained for a call that was not answered. The transcript is on disk
-    // now, so nothing downstream needs either buffer. transcriptBuffer and
-    // fullTranscript stay: a final `call listen` reads the tail of one and
-    // status/listen summaries read the other.
+    // now, so nothing downstream needs the audio buffers, but fullTranscript
+    // stays: a final `call listen` and status/listen summaries both read it.
     session.preGeneratedGreetingAudio = [];
     session.preGeneratedGreetingTranscriptParts = [];
   }
@@ -956,16 +955,27 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
   }
 }
 
+// `fullTranscript` is append-only for the life of a session (finalizeCall keeps it
+// after the call ends), so its array index doubles as a stable sequence number.
+// A read here never mutates that cursor — it's a peek, not a consume — so an IPC
+// timeout after the daemon has computed the response can never drop entries from a
+// later listen: the caller just asks again with the same `since` and gets them.
+// Omitting `since` (or passing 0) reads the transcript from the start; a caller
+// polling during a live call carries `next_since` forward as `--since` to read only
+// what's new since its last read.
 async function handleCallListen(params: Record<string, unknown>): Promise<object> {
   const id = params.id as string;
+  const rawSince = params.since;
+  const since = typeof rawSince === "number" && Number.isFinite(rawSince) && rawSince > 0
+    ? Math.trunc(rawSince)
+    : 0;
 
   const session = getSession(id);
   if (!session) {
     return { error: "session_not_found", message: `No session with id ${id}` };
   }
 
-  const newEntries = session.transcriptBuffer.slice(session.lastListenIndex);
-  session.lastListenIndex = session.transcriptBuffer.length;
+  const entries = session.fullTranscript.slice(since);
   session.lastActivityTime = Date.now();
   const silenceMs = Date.now() - session.lastSpeechTime;
   const summary = latestCallSummary(session);
@@ -973,7 +983,8 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
   return {
     id,
     status: session.status,
-    transcript: newEntries,
+    transcript: entries,
+    next_since: session.fullTranscript.length,
     silence_ms: silenceMs,
     ...(summary ? { summary } : {}),
   };
@@ -1026,7 +1037,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
 
   const hint = session.status === "ended"
     ? `Call has ended. Use 'outreach call listen --id ${id}' to get the full transcript.`
-    : `Call is still active. Use 'outreach call listen --id ${id}' to get the transcript so far.`;
+    : `Call is still active. Use 'outreach call listen --id ${id}' for the full transcript so far, or add '--since <seq>' (the previous response's next_since) to read only what's new.`;
 
   return {
     id,

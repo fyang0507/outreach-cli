@@ -10,10 +10,8 @@ export interface CallSession {
   from: string;
   to: string;
   startTime: number;
-  transcriptBuffer: TranscriptEvent[];
   fullTranscript: TranscriptEvent[];
   ws?: WebSocket;
-  lastListenIndex: number;
   lastSpeechTime: number;
   lastActivityTime: number;
   lastTranscriptTime: number;
@@ -77,7 +75,6 @@ export function appendEvent(
   session: CallSession,
   event: TranscriptEvent,
 ): void {
-  session.transcriptBuffer.push(event);
   session.fullTranscript.push(event);
 
   // Update speech/activity tracking only for speech events
@@ -116,13 +113,11 @@ export function createSession(params: {
     from: params.from,
     to: params.to,
     startTime: now,
-    transcriptBuffer: [],
     fullTranscript: [],
     preGeneratedGreetingAudio: [],
     preGeneratedGreetingAudioChunks: 0,
     preGeneratedGreetingTranscriptParts: [],
     preGeneratedGreetingTurnComplete: false,
-    lastListenIndex: 0,
     lastSpeechTime: now,
     lastActivityTime: now,
     lastTranscriptTime: now,
