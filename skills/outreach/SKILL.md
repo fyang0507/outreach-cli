@@ -25,7 +25,7 @@ outreach health
 
 outreach call init [--skip-preflight]
 outreach call place (--to <number> | --call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>]
-outreach call listen --id <callId>
+outreach call listen --id <callId> [--since <seq>]
 outreach call steer --id <callId> --text <note> [--mode nudge|say]
 outreach call status --id <callId>
 outreach call hangup --id <callId>

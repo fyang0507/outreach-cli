@@ -136,7 +136,7 @@ With an immortal daemon the session map would grow for the life of the process, 
 - `finalizeCall` stamps `session.finalizedAt` and frees `preGeneratedGreetingAudio` / `preGeneratedGreetingTranscriptParts` in a `finally` around the transcript write. The greeting audio is base64 24kHz PCM (~200KB for a 3s greeting) and is never drained for a call that was not answered. The `finally` matters: a failed write would otherwise leave `finalizedAt` unset forever, i.e. an un-reapable session — the exact leak this closes.
 - `reapEndedSessions()` runs on the existing 10s interval (`server.ts:1083`). It drops ended sessions older than `SESSION_RETENTION_MS` (1h), and above `MAX_RETAINED_ENDED_SESSIONS` (100) drops the oldest first.
 - It never touches a session whose status is not `"ended"`, and never one whose transcript write is still in flight (finalized but no `finalizedAt`). A session that ended *without* finalizing — e.g. Twilio rejected the placement — ages out on `lastActivityTime` instead.
-- `transcriptBuffer` / `fullTranscript` are deliberately retained: a final `call listen` reads the tail of one and the status/listen summaries read the other.
+- `fullTranscript` is deliberately retained (there is no separate cursor buffer): a final `call listen` reads it in full, and the status/listen summaries read it too.
 
 Dead code removed in the same pass: `src/daemon/lifecycle.ts` (zero importers, and it contained a competing auto-forking `ensureDaemon` that forked a daemon with no webhook URL) and `getSessionByCallSid`.
 
