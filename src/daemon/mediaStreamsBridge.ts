@@ -21,6 +21,11 @@ const HANGUP_DRAIN_TIMEOUT_MS = 7000;
 // second introduction reads as a glitch however much came after it.
 const GREETING_CLIPPED_TAIL_MS = 400;
 const GREETING_IDENTIFIED_MS = 2000;
+// A barge-in clears the agent's buffered audio the moment Gemini reports the
+// interrupt, but transcription of what the interrupting side actually said can lag
+// well behind that: 7.1s and 11.4s in one real call (`call_257cce0c2810.jsonl`).
+// Tune against real barge-in timing, not this guess.
+const TRANSCRIPTION_GAP_THRESHOLD_MS = 3000;
 // Gemini sends 24kHz mono 16-bit PCM, so two bytes per sample at 24 samples/ms.
 const GEMINI_PCM_BYTES_PER_MS = 48;
 
@@ -50,6 +55,10 @@ class TranscriptBatcher {
   private session: CallSession;
   private pending: { speaker: "remote" | "local"; textParts: string[]; firstTs: string } | null = null;
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set when audio_cleared fires (always the remote side interrupting local audio)
+  // and resolved by the next speech on that same side, whichever comes first — see
+  // TRANSCRIPTION_GAP_THRESHOLD_MS.
+  private pendingInterruptClearedAtMs: number | null = null;
 
   constructor(session: CallSession) {
     this.session = session;
@@ -63,6 +72,13 @@ class TranscriptBatcher {
 
     if (!this.pending) {
       this.pending = { speaker, textParts: [], firstTs: ts };
+      if (speaker === "remote" && this.pendingInterruptClearedAtMs !== null) {
+        const gapMs = Date.parse(ts) - this.pendingInterruptClearedAtMs;
+        this.pendingInterruptClearedAtMs = null;
+        if (gapMs > TRANSCRIPTION_GAP_THRESHOLD_MS) {
+          appendEvent(this.session, { type: "transcription_gap", speaker, gap_ms: gapMs, ts });
+        }
+      }
     }
 
     this.pending.textParts.push(text);
@@ -76,6 +92,9 @@ class TranscriptBatcher {
   appendDirect(event: TranscriptEvent): void {
     this.flush();
     appendEvent(this.session, event);
+    if (event.type === "audio_cleared") {
+      this.pendingInterruptClearedAtMs = Date.parse(event.ts);
+    }
   }
 
   flush(): void {

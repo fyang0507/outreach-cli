@@ -122,6 +122,19 @@ export interface SpeechEvent extends BaseEvent {
   text: string;
 }
 
+/**
+ * A barge-in clears the agent's buffered audio, but Gemini's own transcription of
+ * what the interrupting side said can land well after that moment — 7.1s and 11.4s
+ * in one real call (`call_257cce0c2810.jsonl`). A hole that size is a plausible
+ * place for real speech to be missing from the transcript with nothing else in the
+ * call showing a fault, so it is recorded even though nothing here is actually lost.
+ */
+export interface TranscriptionGapEvent extends BaseEvent {
+  type: "transcription_gap";
+  speaker: "remote" | "local";
+  gap_ms: number;
+}
+
 export interface DtmfEvent extends BaseEvent {
   type: "dtmf";
   digits: string;
@@ -195,6 +208,7 @@ export type TranscriptEvent =
   | AudioClearedEvent
   | GreetingDeliveryEvent
   | SpeechEvent
+  | TranscriptionGapEvent
   | DtmfEvent
   | CallSteeredEvent
   | CallEndedEvent
