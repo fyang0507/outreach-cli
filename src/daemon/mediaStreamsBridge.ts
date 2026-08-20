@@ -96,6 +96,10 @@ class TranscriptBatcher {
 
   /** Flush pending buffer before appending a structured event (DTMF, call_ended, etc.). */
   appendDirect(event: TranscriptEvent): void {
+    // Always "turn_change": a structured event is itself a turn boundary, even when
+    // the caller's own reason is something else (e.g. endTwilioCall's call_ended
+    // append flushes the preceding speech turn as turn_change, not call_ended —
+    // only cleanup()'s own flush gets that tag).
     this.flush("turn_change");
     appendEvent(this.session, event);
     if (event.type === "audio_cleared") {

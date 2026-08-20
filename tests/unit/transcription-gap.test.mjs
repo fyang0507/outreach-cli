@@ -14,6 +14,10 @@ function gapEvents(session) {
   return session.fullTranscript.filter((e) => e.type === "transcription_gap");
 }
 
+function speechEvents(session) {
+  return session.fullTranscript.filter((e) => e.type === "speech");
+}
+
 // call_257cce0c2810: a barge-in cleared the agent's audio, but the remote speech
 // that caused it did not land in the transcript until 7.1s/11.4s later — a hole
 // large enough for a real question to go missing without anything else in the call
@@ -76,6 +80,9 @@ test("an interrupt with no buffered audio to clear never logs a transcription_ga
 
 // The pending clear is consumed the moment the first remote speech resolves it, so
 // a second remote turn later in the same call has nothing left to measure against.
+// The intervening local turn gives the second remote turn a genuine speaker-change
+// boundary (D1 no longer flushes on an idle timer), so it lands as its own speech
+// event rather than merging into the first remote turn's still-open pending buffer.
 test("a resolved clear does not produce a gap for a later, unrelated remote turn", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const session = answeredSession();
@@ -88,12 +95,14 @@ test("a resolved clear does not produce a gap for a later, unrelated remote turn
   t.mock.timers.tick(7100);
   gemini.callbacks.onTranscript("remote", "can you tell me more about his experience?");
 
+  gemini.callbacks.onTranscript("local", "sure, here's some background");
   t.mock.timers.tick(20000);
   gemini.callbacks.onTranscript("remote", "hello, are you still there?");
+  bridge.cleanup();
 
   assert.deepEqual(gapEvents(session).map((e) => [e.speaker, e.gap_ms]), [["remote", 7100]]);
+  assert.equal(speechEvents(session).length, 3);
 
-  bridge.cleanup();
   deleteSession(session.id);
 });
 
