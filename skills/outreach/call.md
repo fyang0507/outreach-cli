@@ -88,7 +88,7 @@ Once the call is answered, treat it as a foreground task and attend continuously
 }
 ```
 
-`audio_cleared` isn't resolved until a `speech` (remote) entry with the real content eventually lands — see "Reporting the Outcome" below for what it means if one never does.
+`audio_cleared` isn't resolved until a `speech` (remote) entry with the real content eventually lands.
 
 **Genuine silence**, for contrast — the only combination that actually means the line's gone quiet:
 
