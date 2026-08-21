@@ -11,6 +11,12 @@ export interface CallSession {
   to: string;
   startTime: number;
   fullTranscript: TranscriptEvent[];
+  // Raw mu-law 8kHz bytes for the life of the call, in both directions, for
+  // record-keeping/audit only (no STT). Span a `send_dtmf` bridge swap the same
+  // way fullTranscript does, since they live on the session, not the bridge.
+  // Written once in finalizeCall, then cleared.
+  remoteAudioChunks: Buffer[];
+  localAudioChunks: Buffer[];
   ws?: WebSocket;
   lastActivityTime: number;
   // Stamped on every transcript fragment from either channel, before it reaches the
@@ -125,6 +131,8 @@ export function createSession(params: {
     to: params.to,
     startTime: now,
     fullTranscript: [],
+    remoteAudioChunks: [],
+    localAudioChunks: [],
     preGeneratedGreetingAudio: [],
     preGeneratedGreetingAudioChunks: 0,
     preGeneratedGreetingTranscriptParts: [],

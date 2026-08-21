@@ -13,8 +13,9 @@ import { WebSocketServer, type RawData } from "ws";
 import twilio from "twilio";
 import { generateCallId, createSession, getSession, deleteSession, listSessions, appendEvent } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { writeTranscript, ensureDataDirs, isoNow } from "../logs/sessionLog.js";
+import { writeTranscript, ensureDataDirs, isoNow, remoteAudioPath, localAudioPath } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
+import { buildMulawWav } from "../audio/wavWriter.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
@@ -306,6 +307,36 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ? new Date(session.firstOutboundAudioPlayedAt).getTime() - new Date(session.lastRemoteAudioActivityAt).getTime()
     : undefined;
 
+  // Raw audio, record-keeping only (no STT): written once here, mirroring the
+  // transcript's own write-once-in-finalizeCall pattern. A disk failure here must
+  // never block the transcript write or call finalization.
+  let remoteAudioFilePath: string | undefined;
+  let localAudioFilePath: string | undefined;
+  let remoteAudioMs: number | undefined;
+  let localAudioMs: number | undefined;
+  try {
+    await ensureDataDirs();
+    if (session.remoteAudioChunks.length > 0) {
+      const remoteBytes = Buffer.concat(session.remoteAudioChunks);
+      const path = await remoteAudioPath(session.id);
+      await writeFile(path, buildMulawWav(remoteBytes));
+      remoteAudioFilePath = path;
+      remoteAudioMs = remoteBytes.length / 8;
+    }
+    if (session.localAudioChunks.length > 0) {
+      const localBytes = Buffer.concat(session.localAudioChunks);
+      const path = await localAudioPath(session.id);
+      await writeFile(path, buildMulawWav(localBytes));
+      localAudioFilePath = path;
+      localAudioMs = localBytes.length / 8;
+    }
+  } catch (err) {
+    console.error(`[server] Failed to write call audio for ${session.id}:`, err);
+  } finally {
+    session.remoteAudioChunks = [];
+    session.localAudioChunks = [];
+  }
+
   const summary: TranscriptEvent = {
     type: "call_summary",
     ts: isoNow(),
@@ -343,6 +374,10 @@ async function finalizeCall(session: CallSession): Promise<void> {
     ...(session.maxOutboundAudioGapMs !== undefined && { max_outbound_audio_gap_ms: session.maxOutboundAudioGapMs }),
     ...(session.maxOutboundAudioStarvationMs !== undefined
       && { max_outbound_audio_starvation_ms: session.maxOutboundAudioStarvationMs }),
+    ...(remoteAudioFilePath !== undefined && { remote_audio_path: remoteAudioFilePath }),
+    ...(localAudioFilePath !== undefined && { local_audio_path: localAudioFilePath }),
+    ...(remoteAudioMs !== undefined && { remote_audio_ms: remoteAudioMs }),
+    ...(localAudioMs !== undefined && { local_audio_ms: localAudioMs }),
   };
   appendEvent(session, summary);
 

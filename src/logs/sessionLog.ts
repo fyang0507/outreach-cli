@@ -193,6 +193,10 @@ export interface CallSummaryEvent extends BaseEvent {
   first_response_delay_ms?: number;
   max_outbound_audio_gap_ms?: number;
   max_outbound_audio_starvation_ms?: number;
+  remote_audio_path?: string;
+  local_audio_path?: string;
+  remote_audio_ms?: number;
+  local_audio_ms?: number;
 }
 
 export type TranscriptEvent =
@@ -227,6 +231,14 @@ async function transcriptsDir(): Promise<string> {
 
 export async function transcriptPath(callId: string): Promise<string> {
   return join(await transcriptsDir(), `${callId}.jsonl`);
+}
+
+export async function remoteAudioPath(callId: string): Promise<string> {
+  return join(await transcriptsDir(), `${callId}.remote.wav`);
+}
+
+export async function localAudioPath(callId: string): Promise<string> {
+  return join(await transcriptsDir(), `${callId}.local.wav`);
 }
 
 export async function latestTranscriptCallId(): Promise<string | null> {

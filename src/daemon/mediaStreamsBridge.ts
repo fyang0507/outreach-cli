@@ -443,6 +443,7 @@ export class MediaStreamsBridge {
     this.noteOutboundAudioArrival(turn);
     const mulawPayload = geminiToTwilio(base64Pcm24k);
     try {
+      this.session.localAudioChunks.push(Buffer.from(mulawPayload, "base64"));
       this.twilioWs.send(JSON.stringify({
         event: "media",
         streamSid: this.session.streamSid,
@@ -765,6 +766,7 @@ export class MediaStreamsBridge {
         if (msg.media?.payload) {
           this.session.lastActivityTime = Date.now();
           this.noteRemoteAudioActivity(msg.media.payload);
+          this.session.remoteAudioChunks.push(Buffer.from(msg.media.payload, "base64"));
           const pcm16k = twilioToGemini(msg.media.payload);
           this.gemini.sendAudio(pcm16k);
         }
