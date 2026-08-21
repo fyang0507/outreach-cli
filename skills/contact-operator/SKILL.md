@@ -59,7 +59,7 @@ Use `--silent` for low-priority digests or routine progress that should not push
 
 ## Recording the Outcome
 
-Placing the call or posting the update is not the end of this skill's responsibility. `outreach` has no campaign, contact, or task model of its own — it is a transport utility and will not remember why this contact happened. Once a call reaches `"ended"` (see `.agents/skills/outreach/call.md`'s reporting requirements for the required full-transcript read and loose-end check first), or once a Discord update is posted, write the outcome — including any loose ends — back into whatever record started this task: the issue, the ticket, the run's own task queue entry. That record, not the outreach transcript, is this skill's canonical home for the result.
+Placing the call or posting the update is not the end of this skill's responsibility. `outreach` has no campaign, contact, or task model of its own — it is a transport utility and will not remember why this contact happened. Once a call reaches `"ended"` (see `.agents/skills/outreach/call.md`'s reporting requirements for the required full-transcript read first), or once a Discord update is posted, write the outcome — including any loose ends — back into whatever record started this task: the issue, the ticket, the run's own task queue entry. That record, not the outreach transcript, is this skill's canonical home for the result.
 
 ## Boundaries
 

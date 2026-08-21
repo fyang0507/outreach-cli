@@ -75,7 +75,7 @@ Once the call is answered, treat it as a foreground task and attend continuously
 }
 ```
 
-`outbound_turn_generated` is audio-delivery telemetry (feeds `call latency`), not part of the loose-end judgment — `speech` + `audio_cleared` is the whole story for what happened. Poll again while they're still talking and it looks just like the monologue case, but on the *remote* side:
+`outbound_turn_generated` is audio-delivery telemetry (feeds `call latency`), not substantive content — `speech` + `audio_cleared` is the whole story for what happened. Poll again while they're still talking and it looks just like the monologue case, but on the *remote* side:
 
 ```jsonc
 {
@@ -109,7 +109,7 @@ Read each new turn immediately for factual questions, corrections, decisions, or
 
 If the callee disputes a claim the voice agent made, that is a blocking open item: resolve it with a `steer` before the call is done, even if the conversation has already moved to wrap-up — don't let it lapse just because the call is ending.
 
-Use the final transcript and summary as evidence for whether the objective was achieved. Treat ringing, voicemail, no-answer, and ambiguous partial information as distinct outcomes rather than assuming success. Before writing that assessment down, see "Reporting the Outcome" below — the required check happens after the call ends, not while it's still live.
+Use the final transcript and summary as evidence for whether the objective was achieved. Treat ringing, voicemail, no-answer, and ambiguous partial information as distinct outcomes rather than assuming success. Before writing that assessment down, see "Reporting the Outcome" below — that full-transcript read happens after the call ends, not while it's still live.
 
 Infrastructure failure is an explicit outcome, not dead air: if the voice model cannot be reached the daemon hangs up and the transcript carries a `call_ended` reason of "Gemini unavailable". That call reached the callee with silence and no conversation happened, so it is a retryable failure, not an attempt. A `preconnect_failed` entry on its own is not that — the daemon recovers by connecting a fresh session — so read it as a latency note unless the call also ended for that reason.
 
