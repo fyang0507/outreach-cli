@@ -43,6 +43,21 @@ export interface PreconnectFailedEvent extends BaseEvent {
   message: string;
 }
 
+/**
+ * A real runtime exception on either socket that this repo previously only
+ * logged server-side (`console.error`) with nothing recorded for `call
+ * listen`/`call status` to surface. `fatal: false` (from either socket's
+ * `onerror`) means the anomaly is noted but the call continues on its own.
+ * `fatal: true` is only ever appended by `handleGeminiEnd()` immediately
+ * before it hangs up the call — Gemini's session cannot continue.
+ */
+export interface RuntimeErrorEvent extends BaseEvent {
+  type: "runtime_error";
+  subsystem: "gemini" | "twilio_ws";
+  message: string;
+  fatal: boolean;
+}
+
 export interface PreconnectHandoverEvent extends BaseEvent {
   type: "preconnect_handover";
   outcome: "warm" | "handover" | "fresh_fallback" | "none";
@@ -193,6 +208,7 @@ export type TranscriptEvent =
   | AmdResultEvent
   | MediaStreamStartedEvent
   | PreconnectFailedEvent
+  | RuntimeErrorEvent
   | PreconnectHandoverEvent
   | FirstOutboundAudioEvent
   | FirstOutboundAudioPlayedEvent

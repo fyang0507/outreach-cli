@@ -20,6 +20,8 @@ export function fakeTwilioWs() {
     sent,
     on(event, cb) { handlers[event] = cb; },
     sendTwilioEvent(msg) { handlers.message?.(JSON.stringify(msg)); },
+    /** Fires a raw WS event (e.g. "error", "close") the bridge registered via on(). */
+    emit(event, payload) { handlers[event]?.(payload); },
     send(raw) { sent.push(JSON.parse(raw)); },
     close() {},
     cleared() { return sent.filter((m) => m.event === "clear").length; },

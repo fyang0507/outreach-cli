@@ -105,13 +105,31 @@ Once the call is answered, treat it as a foreground task and attend continuously
 
 Both sides idle *and* no line energy on the callee's side — climbing `last_turn_ms_ago` by itself proves nothing, as the two cases above show; it's only silence once `audio_on_line`/`speaking` agree there's nothing live to explain it. `audio_on_line: "unknown"` means no line energy has been recorded yet at all (normally just the first moment of a call); never read it as `"quiet"`.
 
+**A runtime error, fatal — the call is over.** This is the daemon's own infrastructure failing mid-call, not the callee:
+
+```jsonc
+{
+  "transcript": [
+    { "type": "runtime_error", "subsystem": "gemini", "message": "quota exhausted", "fatal": true, "ts": "..." },
+    { "type": "call_ended", "reason": "Call call_abc123 — Gemini unavailable: quota exhausted", "duration_ms": 41200, "ts": "..." }
+  ],
+  "next_since": 19,
+  "activity": {
+    "remote": { "last_turn_ms_ago": 12000, "audio_on_line": "quiet" },
+    "local":  { "last_turn_ms_ago": 30500, "speaking": false }
+  }
+}
+```
+
+`fatal: false` (either `subsystem`) just means the anomaly was logged — note it, keep monitoring, no action needed unless it recurs. `fatal: true` only ever comes from the daemon already having hung up (or being about to) with a "Gemini unavailable" reason — this is the same infrastructure-failure outcome described below, not a new outcome category to reason about separately.
+
 Read each new turn immediately for factual questions, corrections, decisions, or signs that the voice agent lacks information. When the callee asks a real question the voice agent cannot answer, look up the answer from available context or tools at once and send it with `steer`. The voice agent may move to a non-blocking topic while you search, but the unresolved question remains your responsibility until you provide the answer or steer an honest limitation and concrete next step.
 
 If the callee disputes a claim the voice agent made, that is a blocking open item: resolve it with a `steer` before the call is done, even if the conversation has already moved to wrap-up — don't let it lapse just because the call is ending.
 
 Use the final transcript and summary as evidence for whether the objective was achieved. Treat ringing, voicemail, no-answer, and ambiguous partial information as distinct outcomes rather than assuming success. Before writing that assessment down, see "Reporting the Outcome" below — that full-transcript read happens after the call ends, not while it's still live.
 
-Infrastructure failure is an explicit outcome, not dead air: if the voice model cannot be reached the daemon hangs up and the transcript carries a `call_ended` reason of "Gemini unavailable". That call reached the callee with silence and no conversation happened, so it is a retryable failure, not an attempt. A `preconnect_failed` entry on its own is not that — the daemon recovers by connecting a fresh session — so read it as a latency note unless the call also ended for that reason.
+Infrastructure failure is an explicit outcome, not dead air: if the voice model cannot be reached the daemon hangs up and the transcript carries a `call_ended` reason of "Gemini unavailable". That call reached the callee with silence and no conversation happened, so it is a retryable failure, not an attempt. A `runtime_error` entry with `fatal: true` is what precedes and explains that — it's the daemon recording that Gemini's session died before it hangs up, not a separate thing to reconcile against the `call_ended` reason. A `preconnect_failed` entry on its own is not that — the daemon recovers by connecting a fresh session — so read it as a latency note unless the call also ended for that reason.
 
 The voice agent has its own `end_call` tool and is expected to use it for ordinary conclusions — objective met, natural wrap-up, callee hangs up, no progress after multiple attempts. Do not preempt that by hanging up from the operator side for routine call management. Hang up only for something seriously wrong that the voice agent itself shouldn't be trusted to resolve — e.g. it's disclosing private/sensitive information it shouldn't, a prompt-injection or security-breach attempt is succeeding.
 

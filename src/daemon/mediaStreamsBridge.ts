@@ -181,6 +181,9 @@ export class MediaStreamsBridge {
         onInterrupted: () => {
           this.handleInterrupted();
         },
+        onError: (message: string) => {
+          this.handleGeminiError(message);
+        },
         onEnd: () => {
           this.handleGeminiEnd();
         },
@@ -208,6 +211,9 @@ export class MediaStreamsBridge {
         onInterrupted: () => {
           this.handleInterrupted();
         },
+        onError: (message: string) => {
+          this.handleGeminiError(message);
+        },
         onEnd: () => {
           this.handleGeminiEnd();
         },
@@ -230,6 +236,7 @@ export class MediaStreamsBridge {
 
     this.twilioWs.on("error", (err) => {
       console.error(`[media-bridge] Twilio WS error for call ${this.callId}:`, err.message);
+      this.batcher.appendDirect({ type: "runtime_error", ts: isoNow(), subsystem: "twilio_ws", message: err.message, fatal: false });
     });
   }
 
@@ -648,24 +655,34 @@ export class MediaStreamsBridge {
     return Boolean(answeredBy && (answeredBy.startsWith("machine") || answeredBy === "fax"));
   }
 
+  /**
+   * A Gemini WS error that doesn't (necessarily) close the session — logged so
+   * `call listen`/`call status` see it, but not itself a reason to hang up. A
+   * subsequent `onEnd` still runs its own path and decides that.
+   */
+  private handleGeminiError(message: string): void {
+    this.batcher.appendDirect({ type: "runtime_error", ts: isoNow(), subsystem: "gemini", message, fatal: false });
+  }
+
+  /**
+   * `onEnd` only ever fires for a remote/unexpected closure: `GeminiLiveSession.close()`
+   * sets `closed = true` synchronously before closing the socket, and `onclose`'s own
+   * guard (`if (!this.closed)`) skips `onEnd` whenever the daemon closed the session
+   * itself. So every call here — whether or not the callee ever heard any audio — is a
+   * genuine anomaly: Gemini's session died on its own (invalid API key, a rejected
+   * model/voice, an exhausted quota, a mid-call drop) and the call cannot continue.
+   * Plain cleanup() would write a transcript with no error marker at all, and the
+   * silent failed call would read as "the callee said nothing" or "the call just ended".
+   */
   private handleGeminiEnd(): void {
     console.log(`[media-bridge] Gemini session ended for call ${this.callId}`);
     if (this.pendingHangup || this.pendingOutboundTurn()) {
       this.tryDrainPendingHangup();
       return;
     }
-    // An invalid API key, a rejected model/voice and an exhausted quota all
-    // survive connect() and arrive as a close moments later, so a Gemini setup
-    // failure looks like a session that ended before the callee heard anything.
-    // Plain cleanup() would write a transcript with no error marker at all, and
-    // the silent failed call would read as "the callee said nothing".
-    if (!this.session.firstOutboundAudioAt) {
-      const detail = this.gemini.closeReason ?? "the Live session closed before producing any audio";
-      this.batcher.appendDirect({ type: "preconnect_failed", ts: isoNow(), message: detail });
-      this.endTwilioCall(`Call ${this.callId} — Gemini unavailable: ${detail}`);
-      return;
-    }
-    this.cleanup();
+    const detail = this.gemini.closeReason ?? "the Live session closed unexpectedly";
+    this.batcher.appendDirect({ type: "runtime_error", ts: isoNow(), subsystem: "gemini", message: detail, fatal: true });
+    this.endTwilioCall(`Call ${this.callId} — Gemini unavailable: ${detail}`);
   }
 
   private finalizeActiveOutboundTurn(reason: string): void {

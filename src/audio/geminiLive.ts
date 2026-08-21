@@ -11,6 +11,7 @@ export interface GeminiLiveSessionOptions {
   onGenerationComplete?: () => void;
   onTurnComplete?: () => void;
   onInterrupted?: () => void;
+  onError?: (message: string) => void;
   onEnd: () => void;
 }
 
@@ -118,6 +119,7 @@ export class GeminiLiveSession {
         },
         onerror: (e: ErrorEvent) => {
           console.error("[gemini-live] Error:", e.error ?? e.message ?? e);
+          this.opts.onError?.(String(e.error ?? e.message ?? e));
         },
         onclose: (e: CloseEvent) => {
           // A rejected API key, model or voice never fails connect() — it arrives
@@ -230,6 +232,7 @@ export class GeminiLiveSession {
     onGenerationComplete?: GeminiLiveSessionOptions["onGenerationComplete"];
     onTurnComplete?: GeminiLiveSessionOptions["onTurnComplete"];
     onInterrupted?: GeminiLiveSessionOptions["onInterrupted"];
+    onError?: GeminiLiveSessionOptions["onError"];
     onEnd: GeminiLiveSessionOptions["onEnd"];
   }): void {
     this.opts.onAudio = cbs.onAudio;
@@ -238,6 +241,7 @@ export class GeminiLiveSession {
     this.opts.onGenerationComplete = cbs.onGenerationComplete;
     this.opts.onTurnComplete = cbs.onTurnComplete;
     this.opts.onInterrupted = cbs.onInterrupted;
+    this.opts.onError = cbs.onError;
     this.opts.onEnd = cbs.onEnd;
   }
 
