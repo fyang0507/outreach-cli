@@ -36,6 +36,8 @@ Once the call is answered, treat it as a foreground task and attend continuously
 
 Use all four fields to judge whether a poll is stale, never as a stand-in for reading what was actually said.
 
+Every `speech` entry also carries a `flush_reason`: `"turn_change"` is the ordinary case (the other side started talking, or an explicit event closed the turn). `"interrupted"` means this turn was cut off by a barge-in — if it's the agent's own turn, the text is whatever it managed to say before being talked over, not its full intended line, so don't treat it as a complete statement. `"call_ended"` means the turn was still open when the call ended and got flushed as-is; treat it the same way as `"interrupted"` — possibly incomplete, not a natural stopping point.
+
 Read each new turn immediately for factual questions, corrections, decisions, or signs that the voice agent lacks information. When the callee asks a real question the voice agent cannot answer, look up the answer from available context or tools at once and send it with `steer`. The voice agent may move to a non-blocking topic while you search, but the unresolved question remains your responsibility until you provide the answer or steer an honest limitation and concrete next step.
 
 If the callee disputes a claim the voice agent made, that is a blocking open item: resolve it with a `steer` before the call is done, even if the conversation has already moved to wrap-up — don't let it lapse just because the call is ending.
