@@ -14,10 +14,9 @@ export interface CallSession {
   ws?: WebSocket;
   lastSpeechTime: number;
   lastActivityTime: number;
-  lastTranscriptTime: number;
   // Stamped on every transcript fragment from either channel, before it reaches the
-  // batcher — unlike lastTranscriptTime (flush-gated), this can't sit frozen for the
-  // length of an uninterrupted turn. G3's actual input; see MediaStreamsBridge.
+  // batcher, so it can't sit frozen for the length of an uninterrupted turn the way
+  // a flush-gated timestamp would. G3's actual input; see MediaStreamsBridge.
   lastTranscriptFragmentAt: number;
   maxDurationMs?: number;
   waitForUserBeforeGreeting?: boolean;
@@ -85,7 +84,6 @@ export function appendEvent(
   if (event.type === "speech") {
     const speech = event as SpeechEvent;
     session.lastSpeechTime = Date.now();
-    session.lastTranscriptTime = Date.now();
 
     // Track milestone: first remote speech after answer
     if (speech.speaker === "remote" && !session.firstRemoteSpeechAt) {
@@ -124,7 +122,6 @@ export function createSession(params: {
     preGeneratedGreetingTurnComplete: false,
     lastSpeechTime: now,
     lastActivityTime: now,
-    lastTranscriptTime: now,
     lastTranscriptFragmentAt: now,
   };
   sessions.set(session.id, session);
