@@ -286,3 +286,23 @@ export async function readTranscript(callId: string): Promise<TranscriptEvent[]>
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as TranscriptEvent);
 }
+
+/**
+ * The last call_summary in fullTranscript, if any. Pass `omitIfVisibleIn` (a
+ * `call listen` response's own `transcript` slice) to get `undefined` back
+ * when that slice already reaches the summary — the field exists to
+ * guarantee visibility when `--since` narrows past it, not to repeat what's
+ * already in `transcript`.
+ */
+export function latestCallSummary(
+  fullTranscript: TranscriptEvent[],
+  omitIfVisibleIn?: TranscriptEvent[],
+): TranscriptEvent | undefined {
+  for (let i = fullTranscript.length - 1; i >= 0; i--) {
+    const event = fullTranscript[i];
+    if (event?.type === "call_summary") {
+      return omitIfVisibleIn?.includes(event) ? undefined : event;
+    }
+  }
+  return undefined;
+}

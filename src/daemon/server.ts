@@ -13,7 +13,7 @@ import { WebSocketServer, type RawData } from "ws";
 import twilio from "twilio";
 import { generateCallId, createSession, getSession, deleteSession, listSessions, appendEvent } from "./sessions.js";
 import type { CallSession } from "./sessions.js";
-import { writeTranscript, ensureDataDirs, isoNow, remoteAudioPath, localAudioPath } from "../logs/sessionLog.js";
+import { writeTranscript, ensureDataDirs, isoNow, remoteAudioPath, localAudioPath, latestCallSummary } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
 import { buildMulawWav, MULAW_8K_BYTES_PER_MS } from "../audio/wavWriter.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
@@ -1023,7 +1023,7 @@ async function handleCallListen(params: Record<string, unknown>): Promise<object
   const entries = session.fullTranscript.slice(since);
   session.lastActivityTime = Date.now();
   const activity = currentActivity(session, Date.now());
-  const summary = latestCallSummary(session);
+  const summary = latestCallSummary(session.fullTranscript, entries);
 
   return {
     id,
@@ -1064,14 +1064,6 @@ function currentActivity(session: CallSession, now: number) {
   return computeActivity(session, localLastAudioAtMs, now);
 }
 
-function latestCallSummary(session: CallSession): TranscriptEvent | undefined {
-  for (let i = session.fullTranscript.length - 1; i >= 0; i--) {
-    const event = session.fullTranscript[i];
-    if (event?.type === "call_summary") return event;
-  }
-  return undefined;
-}
-
 async function handleCallStatus(params: Record<string, unknown>): Promise<object> {
   const id = params.id as string;
 
@@ -1079,7 +1071,7 @@ async function handleCallStatus(params: Record<string, unknown>): Promise<object
   if (!session) {
     return { error: "session_not_found", message: `No session with id ${id}` };
   }
-  const summary = latestCallSummary(session);
+  const summary = latestCallSummary(session.fullTranscript);
 
   const statusToPhase: Record<string, string> = {
     ringing: "ringing",
