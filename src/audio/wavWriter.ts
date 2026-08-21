@@ -1,3 +1,6 @@
+// Mono, 8-bit, 8kHz: one byte per sample, 8 samples/ms.
+export const MULAW_8K_BYTES_PER_MS = 8;
+
 /**
  * Minimal, spec-correct mono WAV wrapping 8-bit mu-law 8kHz audio directly — no
  * transcoding. Built purely for record-keeping playback (see docs/plan/
@@ -5,8 +8,8 @@
  * carries the cbSize field a non-PCM format requires, and a "fact" chunk
  * carries the sample count, also required for non-PCM formats.
  */
-export function buildMulawWav(mulawBytes: Buffer): Buffer {
-  const dataSize = mulawBytes.length;
+export function buildMulawWav(mulawChunks: Buffer[]): Buffer {
+  const dataSize = mulawChunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const header = Buffer.alloc(58);
   let offset = 0;
 
@@ -48,5 +51,5 @@ export function buildMulawWav(mulawBytes: Buffer): Buffer {
   header.writeUInt32LE(dataSize, offset); // dataSize
   offset += 4;
 
-  return Buffer.concat([header, mulawBytes]);
+  return Buffer.concat([header, ...mulawChunks]);
 }

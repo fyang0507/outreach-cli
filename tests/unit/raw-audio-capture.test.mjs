@@ -19,7 +19,7 @@ import {
 
 test("buildMulawWav produces a spec-correct header", () => {
   const mulawBytes = Buffer.from([1, 2, 3, 4, 5]);
-  const wav = buildMulawWav(mulawBytes);
+  const wav = buildMulawWav([mulawBytes]);
 
   assert.equal(wav.toString("ascii", 0, 4), "RIFF");
   assert.equal(wav.readUInt32LE(4), wav.length - 8, "RIFF chunkSize excludes RIFF+chunkSize fields");
@@ -43,12 +43,21 @@ test("buildMulawWav produces a spec-correct header", () => {
 });
 
 test("buildMulawWav handles an empty buffer without throwing", () => {
-  const wav = buildMulawWav(Buffer.alloc(0));
+  const wav = buildMulawWav([Buffer.alloc(0)]);
 
   assert.equal(wav.length, 58, "header only, no data");
   assert.equal(wav.readUInt32LE(4), wav.length - 8);
   assert.equal(wav.readUInt32LE(46), 0, "sampleLength");
   assert.equal(wav.readUInt32LE(54), 0, "dataSize");
+});
+
+test("buildMulawWav concatenates multiple chunks without a separate flatten pass", () => {
+  const chunks = [Buffer.from([1, 2, 3]), Buffer.from([4, 5]), Buffer.from([6])];
+  const wav = buildMulawWav(chunks);
+
+  assert.equal(wav.readUInt32LE(46), 6, "sampleLength sums every chunk");
+  assert.equal(wav.readUInt32LE(54), 6, "dataSize sums every chunk");
+  assert.deepEqual(wav.subarray(58), Buffer.from([1, 2, 3, 4, 5, 6]));
 });
 
 test("inbound media frames land in session.remoteAudioChunks in order", (t) => {

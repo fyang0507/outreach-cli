@@ -15,7 +15,7 @@ import { generateCallId, createSession, getSession, deleteSession, listSessions,
 import type { CallSession } from "./sessions.js";
 import { writeTranscript, ensureDataDirs, isoNow, remoteAudioPath, localAudioPath } from "../logs/sessionLog.js";
 import type { TranscriptEvent } from "../logs/sessionLog.js";
-import { buildMulawWav } from "../audio/wavWriter.js";
+import { buildMulawWav, MULAW_8K_BYTES_PER_MS } from "../audio/wavWriter.js";
 import { MediaStreamsBridge } from "./mediaStreamsBridge.js";
 import { GeminiLiveSession } from "../audio/geminiLive.js";
 import { buildSystemInstruction } from "../audio/systemInstruction.js";
@@ -222,6 +222,19 @@ function logCallCost(session: CallSession): void {
   }));
 }
 
+/** Write one side's raw call audio to disk, record-keeping only (no STT). */
+async function writeCallAudioSide(
+  chunks: Buffer[],
+  pathFor: (callId: string) => Promise<string>,
+  callId: string,
+): Promise<{ path: string; ms: number } | undefined> {
+  if (chunks.length === 0) return undefined;
+  const path = await pathFor(callId);
+  await writeFile(path, buildMulawWav(chunks));
+  const bytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  return { path, ms: bytes / MULAW_8K_BYTES_PER_MS };
+}
+
 /**
  * Write the call transcript when a call ends.
  * Called from all call-end paths (forceHangup, handleCallHangup, bridge cleanup).
@@ -315,20 +328,17 @@ async function finalizeCall(session: CallSession): Promise<void> {
   let remoteAudioMs: number | undefined;
   let localAudioMs: number | undefined;
   try {
-    await ensureDataDirs();
-    if (session.remoteAudioChunks.length > 0) {
-      const remoteBytes = Buffer.concat(session.remoteAudioChunks);
-      const path = await remoteAudioPath(session.id);
-      await writeFile(path, buildMulawWav(remoteBytes));
-      remoteAudioFilePath = path;
-      remoteAudioMs = remoteBytes.length / 8;
+    const [remoteAudio, localAudio] = await Promise.all([
+      writeCallAudioSide(session.remoteAudioChunks, remoteAudioPath, session.id),
+      writeCallAudioSide(session.localAudioChunks, localAudioPath, session.id),
+    ]);
+    if (remoteAudio) {
+      remoteAudioFilePath = remoteAudio.path;
+      remoteAudioMs = remoteAudio.ms;
     }
-    if (session.localAudioChunks.length > 0) {
-      const localBytes = Buffer.concat(session.localAudioChunks);
-      const path = await localAudioPath(session.id);
-      await writeFile(path, buildMulawWav(localBytes));
-      localAudioFilePath = path;
-      localAudioMs = localBytes.length / 8;
+    if (localAudio) {
+      localAudioFilePath = localAudio.path;
+      localAudioMs = localAudio.ms;
     }
   } catch (err) {
     console.error(`[server] Failed to write call audio for ${session.id}:`, err);
