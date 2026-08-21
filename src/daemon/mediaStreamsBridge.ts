@@ -998,6 +998,20 @@ export class MediaStreamsBridge {
     }, HANGUP_DRAIN_GRACE_MS);
   }
 
+  // Shared by every call-ending path (endTwilioCall, cleanup()) so a path that
+  // already appended one before another runs does not get a second.
+  private appendCallEndedIfMissing(reason: string): void {
+    if (this.session.fullTranscript.some((event) => event.type === "call_ended")) {
+      return;
+    }
+    this.batcher.appendDirect({
+      type: "call_ended",
+      ts: isoNow(),
+      reason,
+      duration_ms: Date.now() - this.session.startTime,
+    });
+  }
+
   private endTwilioCall(reason: string): void {
     // Ending the call outranks a DTMF reconnect: no further stream is coming, and
     // the transcript has to be finalized by the cleanup this schedules.
@@ -1011,14 +1025,7 @@ export class MediaStreamsBridge {
       this.hangupGraceTimer = null;
     }
 
-    if (!this.session.fullTranscript.some((event) => event.type === "call_ended")) {
-      this.batcher.appendDirect({
-        type: "call_ended",
-        ts: isoNow(),
-        reason,
-        duration_ms: Date.now() - this.session.startTime,
-      });
-    }
+    this.appendCallEndedIfMissing(reason);
 
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -1103,16 +1110,8 @@ export class MediaStreamsBridge {
     // Twilio-initiated teardowns (WS close, Twilio `stop`, Gemini ending the
     // session) reach here without ever calling endTwilioCall/forceHangup/
     // handleCallHangup, so without this the transcript can end with no call_ended
-    // event at all. Reuses their own idempotency check, so a path that already
-    // appended one before calling cleanup() does not get a second.
-    if (!this.session.fullTranscript.some((event) => event.type === "call_ended")) {
-      this.batcher.appendDirect({
-        type: "call_ended",
-        ts: isoNow(),
-        reason: "media stream closed",
-        duration_ms: Date.now() - this.session.startTime,
-      });
-    }
+    // event at all.
+    this.appendCallEndedIfMissing("media stream closed");
 
     // Notify server to finalize the transcript.
     if (this.onCleanup) {
