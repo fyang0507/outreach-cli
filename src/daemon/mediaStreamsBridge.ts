@@ -443,7 +443,6 @@ export class MediaStreamsBridge {
     this.noteOutboundAudioArrival(turn);
     const mulawPayload = geminiToTwilio(base64Pcm24k);
     try {
-      this.session.localAudioChunks.push(Buffer.from(mulawPayload, "base64"));
       this.twilioWs.send(JSON.stringify({
         event: "media",
         streamSid: this.session.streamSid,
@@ -452,6 +451,13 @@ export class MediaStreamsBridge {
       if (isFirstOutboundAudio) this.sendMark(FIRST_OUTBOUND_AUDIO_MARK);
     } catch {
       // Twilio WS may have closed
+    }
+    // Record-keeping only: isolated from the send above so a capture failure
+    // can never suppress delivery of live call audio to the callee.
+    try {
+      this.session.localAudioChunks.push(Buffer.from(mulawPayload, "base64"));
+    } catch (err) {
+      console.error(`[media-bridge] failed to capture outbound audio for ${this.session.id}:`, err);
     }
   }
 
@@ -766,7 +772,13 @@ export class MediaStreamsBridge {
         if (msg.media?.payload) {
           this.session.lastActivityTime = Date.now();
           this.noteRemoteAudioActivity(msg.media.payload);
-          this.session.remoteAudioChunks.push(Buffer.from(msg.media.payload, "base64"));
+          // Record-keeping only: isolated in its own try/catch so a capture
+          // failure can never skip forwarding this frame's audio to Gemini.
+          try {
+            this.session.remoteAudioChunks.push(Buffer.from(msg.media.payload, "base64"));
+          } catch (err) {
+            console.error(`[media-bridge] failed to capture inbound audio for ${this.session.id}:`, err);
+          }
           const pcm16k = twilioToGemini(msg.media.payload);
           this.gemini.sendAudio(pcm16k);
         }
