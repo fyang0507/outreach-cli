@@ -9,6 +9,7 @@ import { loadAppConfig } from "../appConfig.js";
 import { readRuntime, checkDaemonHealth, isProcessRunning } from "../runtime.js";
 import { checkGmailAuth } from "../providers/gmail.js";
 import { checkDiscordAuth } from "../providers/discord.js";
+import { checkContactsAccess, type ContactsAccessReport } from "../providers/contacts.js";
 import { outputJson } from "../output.js";
 import { SUCCESS } from "../exitCodes.js";
 
@@ -153,6 +154,14 @@ async function checkDiscord(): Promise<Record<string, unknown>> {
   return checkDiscordAuth();
 }
 
+// ---- Contacts checks ----
+
+async function checkContacts(): Promise<ContactsAccessReport> {
+  // Synchronous and non-throwing: reports store count and deduped contact
+  // count, or an unreadable/missing-store hint.
+  return checkContactsAccess();
+}
+
 // ---- Health command ----
 
 export function registerHealthCommand(program: Command): void {
@@ -160,12 +169,13 @@ export function registerHealthCommand(program: Command): void {
     .command("health")
     .description("Check readiness of all channels")
     .action(async () => {
-      const [dataRepo, call, sms, email, discord] = await Promise.all([
+      const [dataRepo, call, sms, email, discord, contacts] = await Promise.all([
         checkDataRepo(),
         checkCall(),
         checkSms(),
         checkGmailAuth(),
         checkDiscord(),
+        checkContacts(),
       ]);
 
       outputJson({
@@ -174,6 +184,7 @@ export function registerHealthCommand(program: Command): void {
         sms,
         email,
         discord,
+        contacts,
       });
       process.exit(SUCCESS);
     });

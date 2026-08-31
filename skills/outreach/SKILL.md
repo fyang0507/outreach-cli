@@ -1,6 +1,6 @@
 ---
 name: outreach
-description: Utility interface for outbound calls, SMS/iMessage, Gmail, Discord posting, and per-channel history/search. Use when an agent already knows the recipient and message or call objective.
+description: Utility interface for outbound calls, SMS/iMessage, Gmail, Discord posting, per-channel history/search, and local Contacts lookup. Use when an agent already knows the recipient and message or call objective, or needs to resolve a name or company to a phone number or email address.
 ---
 
 Use `outreach` when an agent already has the recipient and the message or call objective. Run `outreach health` first when channel readiness is unknown.
@@ -13,6 +13,7 @@ Load a channel note only when channel behavior matters, not just to copy command
 - [sms.md](./sms.md) - iMessage-first behavior, send semantics, and Messages history caveats
 - [email.md](./email.md) - Gmail reply threading, search-vs-history choice, and auth caveats
 - [discord.md](./discord.md) - Discord read and operational caveats
+- [contacts.md](./contacts.md) - local Contacts lookup, match confidence, and resolution-before-send
 
 ## Boundary
 
@@ -42,6 +43,8 @@ outreach discord post --body <text> [--channel <id|name>] [--silent]
 outreach discord channels list
 outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 outreach discord history --channel <id|name> [--limit <n>] [--after <messageId>] [--before <messageId>] [--since <iso>] [--count]
+
+outreach contacts find --query <text> [--limit <n>] [--verbose]
 ```
 
 All output is JSON. Single-quote objectives, bodies, subjects, and Gmail queries so the shell does not expand `$`, backticks, or `!`. Gotcha: if the whole command is itself wrapped as `zsh -lc '...'`, do not put apostrophes or contractions inside single-quoted inner arguments. Use double-quoted inner values for long free-text call objectives/personas/hangup conditions, or call `outreach` directly when PATH is already available.
