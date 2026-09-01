@@ -24,7 +24,7 @@ const program = new Command();
 program
   .name("outreach")
   .description("Outreach utility CLI — calls, SMS/iMessage, email, Discord, contacts")
-  .version("4.7.0");
+  .version("4.8.0");
 
 // --- top-level commands ---
 registerHealthCommand(program);
