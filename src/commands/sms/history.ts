@@ -40,6 +40,7 @@ export function registerHistoryCommand(parent: Command): void {
       }
 
       outputJson(payload);
-      process.exit(SUCCESS);
+      // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+      process.exitCode = SUCCESS;
     });
 }

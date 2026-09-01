@@ -30,7 +30,8 @@ export function registerPostCommand(parent: Command): void {
             chunks: messages.length,
             silent: Boolean(opts.silent),
           });
-          process.exit(SUCCESS);
+          // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+          process.exitCode = SUCCESS;
         } catch (err) {
           outputError(OPERATION_FAILED, (err as Error).message);
           process.exit(OPERATION_FAILED);

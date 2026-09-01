@@ -108,7 +108,8 @@ export function registerSendCommand(parent: Command): void {
           status: sendResult.status,
           service: sendResult.service,
         });
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
       },
     );
 }

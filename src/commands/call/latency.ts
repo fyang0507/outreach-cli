@@ -393,7 +393,8 @@ export function registerLatencyCommand(parent: Command): void {
           return;
         }
         outputJson(await summarizeLatency(callId));
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
       } catch (err) {
         const nodeErr = err as NodeJS.ErrnoException;
         if (nodeErr.code === "ENOENT") {

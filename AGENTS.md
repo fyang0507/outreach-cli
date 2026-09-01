@@ -10,6 +10,7 @@ This repository is a pure utility CLI for outbound calls, SMS/iMessage, Gmail, D
 - Do not add generic wrappers around filesystem data. Agents can read/write their own workflow data directly.
 - Prefer explicit channel identifiers: phone numbers, email addresses, Gmail message IDs, and Gmail thread IDs.
 - Keep command output JSON-only via `outputJson()` / `outputError()`.
+- End a success path with `process.exitCode = SUCCESS`, never `process.exit(SUCCESS)`. When stdout is a pipe the write is async and `process.exit()` does not wait for it to drain, so a payload past the pipe buffer (64KB on macOS) reaches the caller truncated mid-string with exit 0 — unparseable JSON wearing a success code, the worst failure shape a JSON-only CLI has. Redirecting to a file hides this, because file writes are synchronous. `outputError()` paths keep their immediate `process.exit()`: those payloads are one short line. `call init` is the one success path that still exits explicitly — it `fork()`s the daemon with an `"ipc"` stdio channel, and that channel holds the parent's event loop open even after `child.unref()`, so a natural exit would hang the CLI on its own daemon; its payload is bounded. `tests/unit/stdout-flush.test.mjs` holds the whole command surface to this, including commands that need live credentials.
 - Keep TypeScript ESM imports with `.js` extensions.
 - Do not reintroduce `outreach setup`; config/workspace files are external inputs.
 
@@ -44,9 +45,28 @@ outreach discord channels list
 outreach discord channels create --name <name> [--topic <text>] [--category <id|name>]
 outreach discord history --channel <id|name> [--limit <n>] [--after <messageId>] \
   [--before <messageId>] [--since <iso>] [--count]
+
+outreach contacts find --query <text> [--limit <n>] [--verbose]
 ```
 
 `call steer --mode nudge` (the default) folds a realtime hint into the agent's own voice without restarting its turn; `--mode say` forces a verbatim turn.
+
+`contacts find` reads the local macOS Contacts stores (`~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb`, plus the legacy top-level `AddressBook-v22.abcddb` beside `Sources`, read-only, deduped across stores) and routes on the query's shape: a phone number matches on longest shared digit suffix, an address on canonicalized email, everything else is fuzzy text over name, organization, job title, phone and email. A structured route that finds nothing falls back to text. Array order is the rank. Zero matches (including an empty query) is an ordinary result with `count: 0` and exit 0; missing stores, and stores that are all unreadable, are an `INFRA_ERROR`. `--verbose` adds `kind`/`route`, per-match `score` and `matched_on`, and makes notes both searchable and visible.
+
+Ranking details worth knowing before changing them:
+
+- The text score is the plain (untrimmed) mean of exactly four voters — Jaro-Winkler, token-sort, Dice over character bigrams, and substring containment — each taken as the contact's best searchable atom under that voter. The voter set and the aggregation are measured, not incidental; `tests/unit/contacts.test.mjs` recomputes a real score from the primitives so a swapped voter or a trimmed mean fails the suite.
+- Text matches below `MIN_TEXT_SCORE` (0.25) are not reported at all. Jaro-Winkler is non-zero for essentially any pair of non-empty strings, so without a floor a nonsense query fills the whole `--limit` with ~0.1-scored noise instead of answering "no". Measured on a real book, nonsense tops out around 0.16 while a typo'd real query scores ~0.67.
+- `confidence` is `high` for text scores >= 0.5, for an exact or local-part-equal email, and for a phone query that is both fully covered by a stored number's tail *and* at least seven digits long. A bare last-four is always `low`: plenty of unrelated numbers end in the same four digits, so covering the whole query proves nothing there.
+- On `text_fallback`, a hit whose evidence is *only* the field the structured route just rejected is capped at `low` (`capFallbackConfidence`). The phone route is exact — a number either shares a subscriber tail or it does not — but the text fallback then scores the query's digits against the phone atoms as characters, so one mistyped digit used to return a *different* contact's number at `high`, the value the skill doc calls safe to dial directly, while the same query fully covered by a stored number correctly returned `low`. Only same-field evidence is capped: a fallback that matched the contact's name (`ashley.parker@nowhere.example`, or `90210` inside an organization name) is a legitimate `high`. The score is left alone; this is a confidence rule, not a second floor.
+- A stored number's trailing extension (`(201) 820-1234 ext. 56`, `x56`, `, 56`) is split off before `normalizePhone` and reported as a separate `extension` field. Folding it into the digits produced `+201820123456` — not the contact's number, valid-looking as an Egyptian one, and a tail the phone route could never match. Two extensions behind one main number are two endpoints, so the per-record phone union keys on number *and* extension.
+- The email substring tier needs a local part of at least three characters and scores by how much of the stored local the query covered. `a@nowhere.example` used to return every contact with an "a" in its address at a flat 0.7 — a field of exact ties is not the rank the output contract promises, and it hid the text fallback that answers better.
+- The email route compares dot-insensitive local parts whenever the two domains differ, because dot handling is a per-provider rule: a stored `charles.devore@gmail.com` canonicalizes to a dotless local, and without this the correctly-spelled `charles.devore@newcompany.example` would miss while the misspelled `charlesdevore@…` hit. Within one domain the canonical local still rules, so `dcole@example.com` stays a different mailbox from `d.cole@example.com`.
+- The 60-candidate bigram prefilter is a speed knob, never a result cap: `findContacts` raises it to at least the caller's `limit`, and a query too short to have a bigram (one character) skips it entirely rather than falling back to load order.
+- Duplicate phone/email rows are unioned per record, not only across stores — a single AddressBook record really can hold the same number twice.
+- Records with no `ZEXTERNALUUID` fall back to a `name|organization` dedupe key, but two rows sharing that key *inside one store* stay two contacts. Cross-store it is the stale mirror the key exists to fold; within a store it is two cards in the user's own Contacts.app, and merging them hands back one contact carrying two strangers' phone numbers.
+- One unreadable store is skipped, not fatal: `loadContacts` collects it into `options.unreadable`, `contacts find` reports it as `unreadable_sources`, and `health` reports the contacts it *could* read rather than 0. Only losing every store throws. The Full Disk Access hint is attached to permission errors alone (`EPERM`/`EACCES`/`SQLITE_CANTOPEN`); a corrupt or truncated store says so instead, rather than sending the operator to grant a permission they already have.
+- The legacy top-level `AddressBook-v22.abcddb` is read last, after the per-account sources, so live data wins every conflicting field. It holds 0 `ABCDContact` rows on this machine while its own `Z_PRIMARYKEY` high-water mark records 7797 historical `ABCDRecord`s — it was the primary before the move to `Sources/`, and a machine that never migrated would otherwise be indistinguishable from an empty address book.
 
 ## Configuration Model
 
@@ -55,6 +75,7 @@ outreach discord history --channel <id|name> [--limit <n>] [--after <messageId>]
 - The daemon's stdout and stderr go to `~/.outreach/daemon.log` (path echoed by `call init` and recorded in `runtime.json`), rotated once at 10MB. Without it the bridge's own logs are discarded, and a call that went wrong cannot be diagnosed after the fact.
 - `outreach.config.dev.yaml` is a gitignored local dev escape hatch next to the CLI, and the only place `data_repo_path` is meaningful.
 - Resolution order: `OUTREACH_DATA_REPO`, dev config, walk-up for `.agents/workspace.yaml`.
+- `OUTREACH_CONTACTS_SOURCES_DIR` overrides the AddressBook `Sources` directory `contacts find` reads (and with it the legacy top-level store, which is resolved as its parent directory's `AddressBook-v22.abcddb`). It exists so the command can be exercised against fixture stores instead of the machine's own Contacts; leave it unset in normal use.
 - Call transcripts are written under `<data_repo>/outreach/transcripts/`.
 
 ## Call Internals
@@ -98,6 +119,7 @@ Important behavior:
 | `src/commands/sms/*.ts` | SMS/iMessage send and history |
 | `src/commands/email/*.ts` | Gmail send/history/search |
 | `src/commands/discord/*.ts` | Discord post, channels, history |
+| `src/commands/contacts/find.ts` | Local Contacts search |
 | `src/daemon/server.ts` | Daemon, IPC, Twilio status/webhook handling |
 | `src/daemon/ipc.ts`, `src/runtime.ts` | Unix socket protocol and `runtime.json` |
 | `src/daemon/sessions.ts` | In-memory call sessions and retention |
@@ -113,6 +135,14 @@ Important behavior:
 | `src/providers/messages.ts` | Messages.app send and history |
 | `src/providers/gmail.ts`, `src/providers/googleAuth.ts` | Gmail API operations and OAuth2 tokens |
 | `src/providers/discord.ts` | Discord bot REST: channel list/create, message post, channel history read |
+| `src/providers/contacts/index.ts` | Public surface of the contacts subsystem, plus the `outreach health` probe |
+| `src/providers/contacts/types.ts` | Shared contact/store data model and `ContactsAccessError` |
+| `src/providers/contacts/stores.ts` | AddressBook store discovery and per-store SQLite reading (schema traps 1-3) |
+| `src/providers/contacts/dedupe.ts` | Cross-store merge into one contact list (schema trap 4), `loadContacts` |
+| `src/providers/contacts/searchIndex.ts` | The searchable projection of a contact: atoms, bigrams, structured keys |
+| `src/providers/contacts/routes.ts` | Query classification and the phone/email/text ranking routes |
+| `src/providers/contacts/search.ts` | The router over those routes: fallback, confidence cap, limit |
+| `src/providers/contacts/similarity.ts` | Pure similarity/normalization helpers (no fs/sqlite) used by the contacts routes |
 | `src/logs/sessionLog.ts` | Transcript read/write and latency event types |
 | `skills/outreach/*.md` | Sharable agent-facing docs |
 | `skills/contact-operator/*.md` | Sharable proactive operator contact policy |

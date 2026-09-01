@@ -74,7 +74,8 @@ export function registerSendCommand(parent: Command): void {
           thread_id: result.threadId,
           status: "sent",
         });
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
       },
     );
 }

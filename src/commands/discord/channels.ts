@@ -27,7 +27,8 @@ export function registerChannelsCommand(parent: Command): void {
           .filter((c) => c.type === TEXT_CHANNEL)
           .map((c) => ({ id: c.id, name: c.name, type: c.type }));
         outputJson({ channels: text });
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
       } catch (err) {
         outputError(OPERATION_FAILED, (err as Error).message);
         process.exit(OPERATION_FAILED);
@@ -56,7 +57,7 @@ export function registerChannelsCommand(parent: Command): void {
               channel: { id: existing.id, name: existing.name },
               existed: true,
             });
-            process.exit(SUCCESS);
+            process.exitCode = SUCCESS;
             return;
           }
 
@@ -93,7 +94,7 @@ export function registerChannelsCommand(parent: Command): void {
             categoryId,
           });
           outputJson({ channel: { id: created.id, name: created.name } });
-          process.exit(SUCCESS);
+          process.exitCode = SUCCESS;
         } catch (err) {
           outputError(OPERATION_FAILED, (err as Error).message);
           process.exit(OPERATION_FAILED);
