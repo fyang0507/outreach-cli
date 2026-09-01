@@ -2,9 +2,9 @@
 
 [![Agent-native](https://img.shields.io/badge/design-agent--native-8A2BE2)](skills/outreach/SKILL.md) [![Works with](https://img.shields.io/badge/works%20with-Codex%20%C2%B7%20Claude%20Code-black)](skills/outreach/SKILL.md) [![Interface](https://img.shields.io/badge/interface-explicit%20JSON%20commands-0F766E)](#command-map) [![Platform](https://img.shields.io/badge/platform-macOS--first-silver?logo=apple&logoColor=white)](#requirements)
 
-**A deliberately narrow interface for reaching real people once an agent or operator has already decided what to say, to whom, and why.** It provides calls, iMessage/SMS, Gmail, Discord, and per-channel history—not a campaign engine dressed up as a CLI.
+**A deliberately narrow interface for reaching real people once an agent or operator has already decided what to say, to whom, and why.** It provides calls, iMessage/SMS, Gmail, Discord, per-channel history, and lookup against the Mac's own Contacts—not a campaign engine dressed up as a CLI.
 
-The distinction matters. Outreach takes care of the channel mechanics that are awkward or unsafe to rebuild in every workflow: authenticated Gmail threading, Messages.app delivery checks, a live voice-call bridge, and a small JSON-shaped surface an agent can use predictably. It does not decide who deserves a message, infer consent, maintain a contact database, or quietly chase a reply.
+The distinction matters. Outreach takes care of the channel mechanics that are awkward or unsafe to rebuild in every workflow: authenticated Gmail threading, Messages.app delivery checks, a live voice-call bridge, and a small JSON-shaped surface an agent can use predictably. It does not decide who deserves a message, infer consent, keep contact records of its own, or quietly chase a reply.
 
 > **The operating rule:** decide and record the work in the workflow layer; use `outreach` only for the explicit communication action or the channel-specific evidence needed to make that decision.
 
@@ -15,9 +15,12 @@ The distinction matters. Outreach takes care of the channel mechanics that are a
 | Checks whether each channel is ready | Contact selection, consent, and the reason to reach out |
 | Sends one explicit message, email, Discord post, or voice call | Contact records, campaigns, and durable workflow state |
 | Reads the requested SMS thread, Gmail thread/search, Discord history, or live-call state | Cross-channel briefings, interpretation, and follow-up policy |
+| Resolves a name, company, number, or address against the Mac's Contacts, read-only | Deciding which of the returned matches is the right person |
 | Manages the local voice daemon and records call transcripts | Retries, reply watchers, timers, and scheduling (for example, through [Sundial](https://github.com/fyang0507/sundial)) |
 
-There are intentionally no campaign commands, contacts, calendar actions, `outreach context`, polling loops, callback agents, or local campaign files. An agent can read and write its own workflow state directly; this tool should stay a sharp boundary around communication infrastructure.
+There are intentionally no campaign commands, contact records, calendar actions, `outreach context`, polling loops, callback agents, or local campaign files. An agent can read and write its own workflow state directly; this tool should stay a sharp boundary around communication infrastructure.
+
+`contacts find` is a lookup, not an address book. It reads the Contacts database macOS already maintains, never writes to it, and stores nothing of its own—the same shape as reading an SMS thread or a Gmail search. It is also deliberately a *separate step* from sending: no command takes a contact instead of an identifier, so resolution happens first and every send still carries an explicit, logged phone number or address.
 
 ## Architecture in one glance
 
@@ -28,6 +31,7 @@ flowchart LR
     B --> D["Messages.app<br/>iMessage / SMS"]
     B --> E["Gmail API"]
     B --> F["Discord API"]
+    B --> H["Contacts.app store<br/>read-only lookup"]
     A -. "state, consent, follow-up" .-> G["Workflow / data repo / scheduler"]
     B -. "call transcripts + Gmail OAuth token" .-> G
 ```
@@ -40,7 +44,8 @@ This is communication infrastructure, so its constraints are part of the product
 
 - **No implicit outreach.** A send, post, or call happens only through an explicit command with a recipient and content/objective. The CLI has no automated follow-up or reply-watching loop.
 - **Read narrowly.** SMS history is scoped to one phone number; Gmail reads/searches use the requested address, thread, or Gmail query. Address-mode Gmail history returns snippets unless `--verbose` is requested.
-- **Check before acting.** `outreach health` reports readiness for the data repo, call daemon, Messages, Gmail, and Discord without creating a workspace or sending anything.
+- **Resolve, then send—as two steps.** `contacts find` reads the local Contacts store read-only and returns matches ranked best-first; it never writes to Contacts and never sends anything. Because no send command accepts a contact in place of an identifier, a resolution mistake cannot silently become a message to the wrong person. Check each match's `confidence` before acting: `low` means the evidence was weak (a bare last-four several people share, an email matched only on a substring), and it warrants confirming rather than dialing.
+- **Check before acting.** `outreach health` reports readiness for the data repo, call daemon, Messages, Gmail, Discord, and Contacts without creating a workspace or sending anything.
 - **Treat identity as shareable voice context.** The fields under `identity` in `outreach/config.yaml` can be supplied to the voice agent. Put only information you would be comfortable having the assistant say. Its call instruction forbids pretending to be human and requires it to identify as the operator's assistant when asked.
 - **Keep secrets out of source control.** Credentials live in the ignored `.env` file. The Gmail OAuth token is stored in `<data-repo>/outreach/gmail-token.json`, outside this checkout; protect that data repo accordingly. Never put tokens, personal message history, or real recipient details in issues, examples, or commits.
 - **Use delivery state honestly.** When `--service` is omitted, SMS selects iMessage or SMS from recent local history (unknown recipients default to SMS), then probes Messages.app's outcome. A failure or timeout is not an invitation to blindly resend.
@@ -49,6 +54,7 @@ This is communication infrastructure, so its constraints are part of the product
 
 - A current Node.js runtime (the dependency graph requires Node.js 20 or newer) and npm.
 - macOS for the Messages.app channel. SMS history needs Full Disk Access for the terminal/agent host; sending needs the relevant macOS accessibility permission. Messages.app must be signed in.
+- `contacts find` reads the local Contacts stores and needs that same Full Disk Access grant—no additional permission, and no Contacts (`kTCCServiceAddressBook`) consent prompt. Only contacts synced to this Mac are visible.
 - Optional channel credentials only for the channels you enable: Twilio + a Google Generative AI key for calls, Gmail OAuth credentials for email, and a Discord bot token/guild for Discord. Voice calls use a local `ngrok` tunnel by default, or a manually supplied public webhook URL.
 - An existing data repository for application configuration and call/Gmail artifacts. Outreach deliberately does not scaffold or manage that repository.
 
@@ -136,6 +142,7 @@ Operational command results are JSON, making them safe to compose into an agent 
 | SMS / iMessage | `sms send --to <number> --body <text> [--service iMessage\|SMS]`<br>`sms history --phone <number> [--limit <n>]` | Defaults to history-informed service selection; messages are sent through Messages.app. |
 | Gmail | `email send --subject <text> --body <text> (--to <address>\|--reply-to-id <messageId>) [--cc <addresses>] [--bcc <addresses>] [--no-reply-all] [--attach <paths...>]`<br>`email history (--address <email>\|--thread-id <threadId>) [--limit <n>] [--verbose]`<br>`email search --query <gmail-query> [--limit <n>]` | `--reply-to-id` preserves Gmail threading and defaults to reply-all. |
 | Discord | `discord post --body <text> [--channel <id\|name>] [--silent]`<br>`discord channels list`<br>`discord channels create --name <name> [--topic <text>] [--category <id\|name>]`<br>`discord history --channel <id\|name> [--limit <n>] [--after <messageId>] [--before <messageId>] [--since <iso>] [--count]` | Intended for operational updates, not a reply-watching loop. |
+| Contacts | `contacts find --query <text> [--limit <n>] [--verbose]` | One query field, routed by shape: digits match on phone-number suffix, an `@` on canonicalized email, anything else is fuzzy text over name, organization, and job title. Read-only; array order is the rank. |
 | Voice calls | `call init [--tunnel ngrok\|manual] [--webhook-url <url>] [--skip-preflight]` · `call place (--to <number>\|--call-operator) --objective <text> [--from-twilio] [--persona <text>] [--hangup-when <text>] [--max-duration <seconds>] [--wait-for-user]`<br>`call listen --id <callId> [--since <seq>]` · `call steer --id <callId> --text <note> [--mode nudge\|say]` · `call status --id <callId>` · `call hangup --id <callId>` · `call latency (--id <callId>\|--latest)` · `call teardown [--force]` | `init` validates env, config, Twilio, caller IDs, Gemini, and the tunnel before reporting ready, and fails instead if any of it is broken. Calls use the local daemon until teardown. `steer` is a live-session control, not a background agent. |
 
 When passing long free text through a shell, quote it so the shell does not expand `$`, backticks, or `!`. If the entire command is itself wrapped in `zsh -lc '…'`, use double-quoted inner values for text containing apostrophes, or run `outreach` directly when its `PATH` is already initialized.
@@ -145,7 +152,7 @@ When passing long free text through a shell, quote it so the shell does not expa
 The README is the human overview. The packaged skill tree is the agent-facing operating manual:
 
 - [`skills/outreach/SKILL.md`](skills/outreach/SKILL.md) — when the utility is appropriate and the canonical command surface.
-- [`skills/outreach/call.md`](skills/outreach/call.md), [`sms.md`](skills/outreach/sms.md), [`email.md`](skills/outreach/email.md), and [`discord.md`](skills/outreach/discord.md) — channel-specific behavior and caveats.
+- [`skills/outreach/call.md`](skills/outreach/call.md), [`sms.md`](skills/outreach/sms.md), [`email.md`](skills/outreach/email.md), [`discord.md`](skills/outreach/discord.md), and [`contacts.md`](skills/outreach/contacts.md) — channel-specific behavior and caveats.
 - [`skills/contact-operator/SKILL.md`](skills/contact-operator/SKILL.md) — a separate policy for when a headless agent should interrupt an operator; it prefers the quietest adequate channel.
 - [`AGENTS.md`](AGENTS.md) — repository boundaries and contributor guidance; `CLAUDE.md` is a symlink to it.
 
@@ -158,6 +165,7 @@ node dist/cli.js health
 node dist/cli.js call place --help
 node dist/cli.js sms send --help
 node dist/cli.js email send --help
+node dist/cli.js contacts find --help
 npm pack --dry-run
 ```
 
