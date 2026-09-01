@@ -3,7 +3,7 @@
  *
  * Deliberately free of filesystem and SQLite access so unit tests can drive
  * every scoring decision directly, without a real AddressBook on the machine.
- * `contacts.ts` owns the data model; this file owns the arithmetic.
+ * `types.ts` owns the data model; this file owns the arithmetic.
  */
 
 // --- Normalization ---

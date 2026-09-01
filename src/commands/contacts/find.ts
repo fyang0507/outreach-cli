@@ -9,7 +9,7 @@ import {
   ContactsAccessError,
   type ContactMatch,
   type ContactStoreFailure,
-} from "../../providers/contacts.js";
+} from "../../providers/contacts/index.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
 

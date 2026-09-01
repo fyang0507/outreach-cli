@@ -9,7 +9,7 @@ import { loadAppConfig } from "../appConfig.js";
 import { readRuntime, checkDaemonHealth, isProcessRunning } from "../runtime.js";
 import { checkGmailAuth } from "../providers/gmail.js";
 import { checkDiscordAuth } from "../providers/discord.js";
-import { checkContactsAccess, type ContactsAccessReport } from "../providers/contacts.js";
+import { checkContactsAccess, type ContactsAccessReport } from "../providers/contacts/index.js";
 import { outputJson } from "../output.js";
 import { SUCCESS } from "../exitCodes.js";
 

@@ -18,7 +18,7 @@ import {
   matchText,
   splitExtension,
   storePaths,
-} from "../../dist/providers/contacts.js";
+} from "../../dist/providers/contacts/index.js";
 import {
   TEXT_SIMILARITIES,
   canonicalizeEmail,
@@ -35,7 +35,7 @@ import {
   sharedSuffixLength,
   tokenSort,
   tokens,
-} from "../../dist/providers/contactMatch.js";
+} from "../../dist/providers/contacts/similarity.js";
 
 // --- Fixture stores ---
 //

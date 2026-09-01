@@ -135,8 +135,14 @@ Important behavior:
 | `src/providers/messages.ts` | Messages.app send and history |
 | `src/providers/gmail.ts`, `src/providers/googleAuth.ts` | Gmail API operations and OAuth2 tokens |
 | `src/providers/discord.ts` | Discord bot REST: channel list/create, message post, channel history read |
-| `src/providers/contacts.ts` | AddressBook store discovery/load, cross-store dedup, query routing and ranking |
-| `src/providers/contactMatch.ts` | Pure similarity/normalization helpers (no fs/sqlite) used by the contacts routes |
+| `src/providers/contacts/index.ts` | Public surface of the contacts subsystem, plus the `outreach health` probe |
+| `src/providers/contacts/types.ts` | Shared contact/store data model and `ContactsAccessError` |
+| `src/providers/contacts/stores.ts` | AddressBook store discovery and per-store SQLite reading (schema traps 1-3) |
+| `src/providers/contacts/dedupe.ts` | Cross-store merge into one contact list (schema trap 4), `loadContacts` |
+| `src/providers/contacts/searchIndex.ts` | The searchable projection of a contact: atoms, bigrams, structured keys |
+| `src/providers/contacts/routes.ts` | Query classification and the phone/email/text ranking routes |
+| `src/providers/contacts/search.ts` | The router over those routes: fallback, confidence cap, limit |
+| `src/providers/contacts/similarity.ts` | Pure similarity/normalization helpers (no fs/sqlite) used by the contacts routes |
 | `src/logs/sessionLog.ts` | Transcript read/write and latency event types |
 | `skills/outreach/*.md` | Sharable agent-facing docs |
 | `skills/contact-operator/*.md` | Sharable proactive operator contact policy |
