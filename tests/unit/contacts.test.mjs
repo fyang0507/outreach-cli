@@ -169,6 +169,19 @@ function createTopLevelStore(root, spec) {
   return { source: "top-level", path };
 }
 
+/**
+ * A store at an arbitrary schema generation, for the version-tolerance tests.
+ * `AddressBook-v22` is a generation, not a fixed name, so discovery matches
+ * `AddressBook-v<N>.abcddb` and prefers the highest N it finds.
+ */
+function createStoreAtVersion(sourcesDir, source, version, spec) {
+  const dir = join(sourcesDir, source);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `AddressBook-v${version}.abcddb`);
+  writeStore(path, spec);
+  return { source, path };
+}
+
 /** A file that exists where a store belongs but is not a database. */
 function createDamagedStore(sourcesDir, source) {
   mkdirSync(join(sourcesDir, source), { recursive: true });
@@ -1626,4 +1639,88 @@ test("contacts find reports an unreadable store as INFRA_ERROR", () => {
     assert.equal(run.stdout, "");
     assert.equal(JSON.parse(run.stderr).error, 2);
   });
+});
+
+
+// --- Store discovery is schema-generation tolerant ---
+
+test("a store at a newer schema generation is still discovered", () => {
+  const root = mkdtempSync(join(tmpdir(), "outreach-contacts-test-"));
+  const sourcesDir = join(root, "Sources");
+  mkdirSync(sourcesDir, { recursive: true });
+  try {
+    // Only a v23 store exists: hardcoding "AddressBook-v22.abcddb" would make a
+    // populated address book look empty.
+    createStoreAtVersion(sourcesDir, "future", 23, {
+      source: "future",
+      records: [
+        { pk: 1, ZFIRSTNAME: "Nova", ZLASTNAME: "Vega", ZEXTERNALUUID: "u-nova" },
+      ],
+    });
+
+    const stores = storePaths(sourcesDir);
+    assert.equal(stores.length, 1);
+    assert.match(stores[0].path, /AddressBook-v23\.abcddb$/);
+
+    const contacts = loadContacts({ stores });
+    assert.equal(contacts.length, 1);
+    assert.equal(contacts[0].name, "Nova Vega");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("when two generations sit side by side the newest one wins", () => {
+  const root = mkdtempSync(join(tmpdir(), "outreach-contacts-test-"));
+  const sourcesDir = join(root, "Sources");
+  mkdirSync(sourcesDir, { recursive: true });
+  try {
+    // A migrated account can leave the old store behind. Reading both would
+    // double every contact that was migrated.
+    createStoreAtVersion(sourcesDir, "migrated", 22, {
+      source: "migrated",
+      records: [
+        { pk: 1, ZFIRSTNAME: "Stale", ZLASTNAME: "Copy", ZEXTERNALUUID: "u-stale" },
+      ],
+    });
+    createStoreAtVersion(sourcesDir, "migrated", 23, {
+      source: "migrated",
+      records: [
+        { pk: 1, ZFIRSTNAME: "Fresh", ZLASTNAME: "Copy", ZEXTERNALUUID: "u-fresh" },
+      ],
+    });
+
+    const stores = storePaths(sourcesDir);
+    assert.equal(stores.length, 1, "one store per source directory, not one per generation");
+    assert.match(stores[0].path, /AddressBook-v23\.abcddb$/);
+
+    const names = loadContacts({ stores }).map((contact) => contact.name);
+    assert.deepEqual(names, ["Fresh Copy"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a file that only resembles a store filename is ignored", () => {
+  const root = mkdtempSync(join(tmpdir(), "outreach-contacts-test-"));
+  const sourcesDir = join(root, "Sources");
+  const dir = join(sourcesDir, "noise");
+  mkdirSync(dir, { recursive: true });
+  try {
+    // The -shm/-wal sidecars and backups live beside the store; matching them
+    // would open a non-database as a database.
+    for (const name of [
+      "AddressBook-v22.abcddb-wal",
+      "AddressBook-v22.abcddb-shm",
+      "AddressBook-v22.abcddb.backup",
+      "AddressBook.abcddb",
+      "AddressBook-vX.abcddb",
+    ]) {
+      writeFileSync(join(dir, name), "not a database");
+    }
+
+    assert.deepEqual(storePaths(sourcesDir), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

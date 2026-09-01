@@ -181,7 +181,14 @@ export class ContactsAccessError extends Error {
 
 const ADDRESS_BOOK_DIR = join(homedir(), "Library", "Application Support", "AddressBook");
 const DEFAULT_SOURCES_DIR = join(ADDRESS_BOOK_DIR, "Sources");
-const STORE_FILENAME = "AddressBook-v22.abcddb";
+/**
+ * `v22` is a schema generation, not a fixed name. Apple last bumped it in macOS
+ * 10.8 and it has held for over a decade, but hardcoding it means a future bump
+ * would make a Mac full of contacts look like an empty address book — the
+ * feature would report "no stores" rather than fail, which is the worst shape
+ * for this to break in. Any generation is matched and the highest wins.
+ */
+const STORE_FILENAME_PATTERN = /^AddressBook-v(\d+)\.abcddb$/;
 
 /**
  * Where to look for stores. `OUTREACH_CONTACTS_SOURCES_DIR` overrides the real
@@ -259,14 +266,44 @@ const MIN_TEXT_SCORE = 0.25;
  * answered the question — the same failure `MIN_TEXT_SCORE` exists to prevent.
  */
 const MIN_EMAIL_SUBSTRING_LOCAL = 3;
-/** Width of the index n-grams; a query shorter than this cannot be prefiltered. */
+/**
+ * Width of the n-grams on both sides of the prefilter. The index's atom grams
+ * and the query's grams must be the same width or every overlap is 0 and the
+ * candidate cut silently falls back to load order, so both sides read this.
+ * A query shorter than this cannot be prefiltered at all; see `matchText`.
+ */
 const GRAM_SIZE = 2;
 
 // --- Store discovery ---
 
 /**
- * Every `Sources/<uuid>/AddressBook-v22.abcddb` under `sourcesDir`, followed by
- * the legacy top-level `AddressBook-v22.abcddb` that sits beside `Sources`.
+ * The newest-generation store file directly inside `dir`, or null if there is
+ * none. A directory that cannot be listed counts as holding no store rather
+ * than as an error: one unreadable account directory must not hide the others,
+ * and `loadContacts` already reports per-store read failures.
+ */
+function findStoreFile(dir: string): string | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return null;
+  }
+
+  let best: { name: string; version: number } | null = null;
+  for (const name of entries) {
+    const match = STORE_FILENAME_PATTERN.exec(name);
+    if (!match) continue;
+    const version = Number(match[1]);
+    if (!best || version > best.version) best = { name, version };
+  }
+
+  return best ? join(dir, best.name) : null;
+}
+
+/**
+ * Every `Sources/<uuid>/AddressBook-v<N>.abcddb` under `sourcesDir`, followed by
+ * the legacy top-level store that sits beside `Sources`.
  *
  * The top-level store is the pre-Sources primary. On this machine it holds 0
  * `ABCDContact` rows while its own `Z_PRIMARYKEY` still records a high-water
@@ -293,13 +330,13 @@ export function storePaths(sourcesDir: string = contactsSourcesDir()): ContactSt
     }
 
     for (const source of entries) {
-      const path = join(sourcesDir, source, STORE_FILENAME);
-      if (existsSync(path)) stores.push({ source, path });
+      const path = findStoreFile(join(sourcesDir, source));
+      if (path) stores.push({ source, path });
     }
   }
 
-  const topLevel = join(dirname(sourcesDir), STORE_FILENAME);
-  if (existsSync(topLevel)) stores.push({ source: TOP_LEVEL_STORE_SOURCE, path: topLevel });
+  const topLevel = findStoreFile(dirname(sourcesDir));
+  if (topLevel) stores.push({ source: TOP_LEVEL_STORE_SOURCE, path: topLevel });
 
   return stores;
 }
@@ -684,7 +721,7 @@ export function buildContactIndex(
 
     const grams = new Set<string>();
     for (const atom of atoms) {
-      for (const gram of ngrams(atom.value, 2)) grams.add(gram);
+      for (const gram of ngrams(atom.value, GRAM_SIZE)) grams.add(gram);
     }
 
     return {
@@ -1022,7 +1059,7 @@ export function checkContactsAccess(
       ok: false,
       stores: 0,
       contacts: 0,
-      hint: `No Contacts stores found under ${sourcesDir}. Open Contacts.app once to create one, and grant Full Disk Access to the terminal/Codex app for contact search.`,
+      hint: `No Contacts stores found under ${sourcesDir}. Open Contacts.app once to create one, and grant Full Disk Access to the terminal/Codex app for contact search. Stores are matched as AddressBook-v<N>.abcddb; if Contacts is populated and this persists, macOS may have changed the store layout.`,
     };
   }
 
