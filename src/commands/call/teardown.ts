@@ -33,7 +33,8 @@ export function registerTeardownCommand(parent: Command): void {
       const state = await readRuntime();
       if (!state) {
         outputJson({ status: "stopped" });
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
         return;
       }
 
@@ -78,6 +79,6 @@ export function registerTeardownCommand(parent: Command): void {
       await cleanupFiles();
 
       outputJson({ status: "stopped" });
-      process.exit(SUCCESS);
+      process.exitCode = SUCCESS;
     });
 }

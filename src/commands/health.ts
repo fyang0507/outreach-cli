@@ -186,6 +186,7 @@ export function registerHealthCommand(program: Command): void {
         discord,
         contacts,
       });
-      process.exit(SUCCESS);
+      // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+      process.exitCode = SUCCESS;
     });
 }

@@ -155,12 +155,7 @@ export function registerFindCommand(parent: Command): void {
       payload.matches = result.matches.map((match) => serialize(match, verbose));
 
       outputJson(payload);
-      // Deliberately not `process.exit(SUCCESS)`: exit() does not wait for an
-      // async stdout write to drain, so a payload larger than the pipe buffer
-      // (64KB on macOS) reached the caller truncated mid-string — valid-looking
-      // exit 0, unparseable JSON. Setting the code lets node exit once stdout
-      // has flushed. The error paths above keep their immediate exit: those
-      // payloads are one short line.
+      // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
       process.exitCode = SUCCESS;
     });
 }

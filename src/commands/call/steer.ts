@@ -55,7 +55,8 @@ export function registerSteerCommand(parent: Command): void {
         }
 
         outputJson(result);
-        process.exit(SUCCESS);
+        // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+        process.exitCode = SUCCESS;
       } catch (err) {
         outputError(INFRA_ERROR, (err as Error).message);
         process.exit(INFRA_ERROR);

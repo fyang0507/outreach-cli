@@ -10,6 +10,7 @@ This repository is a pure utility CLI for outbound calls, SMS/iMessage, Gmail, D
 - Do not add generic wrappers around filesystem data. Agents can read/write their own workflow data directly.
 - Prefer explicit channel identifiers: phone numbers, email addresses, Gmail message IDs, and Gmail thread IDs.
 - Keep command output JSON-only via `outputJson()` / `outputError()`.
+- End a success path with `process.exitCode = SUCCESS`, never `process.exit(SUCCESS)`. When stdout is a pipe the write is async and `process.exit()` does not wait for it to drain, so a payload past the pipe buffer (64KB on macOS) reaches the caller truncated mid-string with exit 0 — unparseable JSON wearing a success code, the worst failure shape a JSON-only CLI has. Redirecting to a file hides this, because file writes are synchronous. `outputError()` paths keep their immediate `process.exit()`: those payloads are one short line. `call init` is the one success path that still exits explicitly — it `fork()`s the daemon with an `"ipc"` stdio channel, and that channel holds the parent's event loop open even after `child.unref()`, so a natural exit would hang the CLI on its own daemon; its payload is bounded. `tests/unit/stdout-flush.test.mjs` holds the whole command surface to this, including commands that need live credentials.
 - Keep TypeScript ESM imports with `.js` extensions.
 - Do not reintroduce `outreach setup`; config/workspace files are external inputs.
 
@@ -66,7 +67,6 @@ Ranking details worth knowing before changing them:
 - Records with no `ZEXTERNALUUID` fall back to a `name|organization` dedupe key, but two rows sharing that key *inside one store* stay two contacts. Cross-store it is the stale mirror the key exists to fold; within a store it is two cards in the user's own Contacts.app, and merging them hands back one contact carrying two strangers' phone numbers.
 - One unreadable store is skipped, not fatal: `loadContacts` collects it into `options.unreadable`, `contacts find` reports it as `unreadable_sources`, and `health` reports the contacts it *could* read rather than 0. Only losing every store throws. The Full Disk Access hint is attached to permission errors alone (`EPERM`/`EACCES`/`SQLITE_CANTOPEN`); a corrupt or truncated store says so instead, rather than sending the operator to grant a permission they already have.
 - The legacy top-level `AddressBook-v22.abcddb` is read last, after the per-account sources, so live data wins every conflicting field. It holds 0 `ABCDContact` rows on this machine while its own `Z_PRIMARYKEY` high-water mark records 7797 historical `ABCDRecord`s — it was the primary before the move to `Sources/`, and a machine that never migrated would otherwise be indistinguishable from an empty address book.
-- `contacts find` sets `process.exitCode` instead of calling `process.exit()` on the success path. `process.exit()` does not wait for an async stdout write to drain, so a result larger than the pipe buffer reached a piped caller truncated mid-string at exactly 64KB, with exit 0.
 
 ## Configuration Model
 

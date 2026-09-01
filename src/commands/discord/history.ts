@@ -96,7 +96,8 @@ export function registerHistoryCommand(parent: Command): void {
           if (!opts.count) envelope.messages = messages.map(serialize);
 
           outputJson(envelope);
-          process.exit(SUCCESS);
+          // process.exitCode, not process.exit(): see outputJson() in src/output.ts.
+          process.exitCode = SUCCESS;
         } catch (err) {
           const message = (err as Error).message;
           // --since parse failure is a user-input error.
