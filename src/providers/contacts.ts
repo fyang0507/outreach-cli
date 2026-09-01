@@ -13,14 +13,18 @@
  *   3. Filtering by entity is mandatory: one store holds 1618 `ABCDInfo` rows
  *      and a single real contact.
  *   4. Stores overlap heavily — one is a stale mirror — so records are deduped
- *      on `ZEXTERNALUUID` (falling back to a normalized name|organization key).
- *      Skipping this doubles roughly half the result set.
+ *      on `ZEXTERNALUUID` (falling back to a normalized name|organization key,
+ *      which only folds records from *different* stores). Skipping this doubles
+ *      roughly half the result set.
+ *
+ * A fifth store, the legacy top-level `AddressBook-v22.abcddb` beside
+ * `Sources/`, is read last; see `storePaths`.
  */
 
 import Database from "better-sqlite3";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { normalizePhone } from "./messages.js";
 import {
   TEXT_SIMILARITIES,
@@ -38,6 +42,14 @@ export interface ContactPhone {
   /** E.164-ish, via the shared `normalizePhone()` used by the sms channel. */
   number: string;
   label: string | null;
+  /**
+   * Digits dialed *after* the call connects, split off the stored number before
+   * normalization. `null` for the overwhelming majority of numbers; never
+   * folded into `number`, which would produce an E.164 string that dials
+   * nowhere (`(201) 820-1234 ext. 56` -> `+201820123456`, a valid-looking
+   * Egyptian number) and that the phone route could never match on suffix.
+   */
+  extension: string | null;
 }
 
 export interface ContactEmail {
@@ -120,6 +132,12 @@ export interface LoadContactsOptions {
   stores?: ContactStore[];
   /** Read `ZABCDNOTE` (default true). */
   includeNotes?: boolean;
+  /**
+   * Collects the stores that could not be read. A caller that passes this can
+   * report a partial answer honestly; one that does not still gets the
+   * contacts from every store that *was* readable.
+   */
+  unreadable?: ContactStoreFailure[];
 }
 
 export interface BuildContactIndexOptions {
@@ -131,6 +149,14 @@ export interface FindContactsOptions {
   limit?: number;
   /** Score note atoms too (they are only present if the index was built with them). */
   verbose?: boolean;
+}
+
+/** One store that could not be read, so a partial answer can say what it missed. */
+export interface ContactStoreFailure {
+  source: string;
+  message: string;
+  /** True when the failure looks like a permission denial rather than damage. */
+  permission: boolean;
 }
 
 export interface ContactsAccessReport {
@@ -172,6 +198,21 @@ const FULL_DISK_ACCESS_HINT =
   "Grant Full Disk Access to the terminal/Codex app for contact search.";
 
 /**
+ * A store that opens but does not behave like an AddressBook is damaged, not
+ * forbidden. Sending the operator to System Settings to grant a permission they
+ * already have is worse than saying nothing, so the two hints are kept apart
+ * and chosen by the actual error.
+ */
+const DAMAGED_STORE_HINT =
+  "The file is present but is not a readable Contacts database; Contacts.app can rebuild it.";
+
+/**
+ * Source name for the legacy top-level store, which has no `Sources/<uuid>`
+ * directory to be named after.
+ */
+const TOP_LEVEL_STORE_SOURCE = "top-level";
+
+/**
  * Record columns worth reading. `ZNICKNAME`, `ZMIDDLENAME` and `ZDEPARTMENT`
  * are deliberately absent: measured population is 0.0%, so they add SELECT
  * surface and atoms for nothing.
@@ -211,31 +252,80 @@ const HIGH_CONFIDENCE_TEXT_SCORE = 0.5;
  * wide and this sits in it.
  */
 const MIN_TEXT_SCORE = 0.25;
+/**
+ * Shortest local part that may match on the email substring tier. A one- or
+ * two-character local is a substring of half the address book, which fills the
+ * limit with flat-scored noise and hides the text fallback that would have
+ * answered the question — the same failure `MIN_TEXT_SCORE` exists to prevent.
+ */
+const MIN_EMAIL_SUBSTRING_LOCAL = 3;
 /** Width of the index n-grams; a query shorter than this cannot be prefiltered. */
 const GRAM_SIZE = 2;
 
 // --- Store discovery ---
 
-/** Every `Sources/<uuid>/AddressBook-v22.abcddb` present under `sourcesDir`. */
+/**
+ * Every `Sources/<uuid>/AddressBook-v22.abcddb` under `sourcesDir`, followed by
+ * the legacy top-level `AddressBook-v22.abcddb` that sits beside `Sources`.
+ *
+ * The top-level store is the pre-Sources primary. On this machine it holds 0
+ * `ABCDContact` rows while its own `Z_PRIMARYKEY` still records a high-water
+ * mark of 7797 `ABCDRecord`s, i.e. it was the primary once and everything has
+ * since moved into per-account sources. It is read anyway because a machine
+ * that never migrated would otherwise be indistinguishable from an empty
+ * address book, and reading it is nearly free: `readStore` resolves `Z_ENT`,
+ * intersects the SELECT list and filters by entity per store, and the merge
+ * dedupes whatever it finds. It is listed *last* so the live per-account stores
+ * win every conflicting field.
+ */
 export function storePaths(sourcesDir: string = contactsSourcesDir()): ContactStore[] {
-  if (!existsSync(sourcesDir)) return [];
-
-  let entries: string[];
-  try {
-    entries = readdirSync(sourcesDir);
-  } catch (err) {
-    throw new ContactsAccessError(
-      `Contacts sources directory exists but cannot be listed: ${(err as Error).message}. ${FULL_DISK_ACCESS_HINT}`,
-      FULL_DISK_ACCESS_HINT,
-    );
-  }
-
   const stores: ContactStore[] = [];
-  for (const source of entries) {
-    const path = join(sourcesDir, source, STORE_FILENAME);
-    if (existsSync(path)) stores.push({ source, path });
+
+  if (existsSync(sourcesDir)) {
+    let entries: string[];
+    try {
+      entries = readdirSync(sourcesDir);
+    } catch (err) {
+      throw new ContactsAccessError(
+        `Contacts sources directory exists but cannot be listed: ${(err as Error).message}. ${FULL_DISK_ACCESS_HINT}`,
+        FULL_DISK_ACCESS_HINT,
+      );
+    }
+
+    for (const source of entries) {
+      const path = join(sourcesDir, source, STORE_FILENAME);
+      if (existsSync(path)) stores.push({ source, path });
+    }
   }
+
+  const topLevel = join(dirname(sourcesDir), STORE_FILENAME);
+  if (existsSync(topLevel)) stores.push({ source: TOP_LEVEL_STORE_SOURCE, path: topLevel });
+
   return stores;
+}
+
+/**
+ * Whether an error is the machine refusing access rather than the file being
+ * damaged. `EPERM`/`EACCES` is the sandbox; `SQLITE_CANTOPEN` ("unable to open
+ * database file") is what better-sqlite3 reports for the same denial.
+ */
+function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (code === "EACCES" || code === "EPERM" || code === "SQLITE_CANTOPEN") return true;
+  return /permission denied|operation not permitted|unable to open database file/i.test(
+    (err as Error | null)?.message ?? "",
+  );
+}
+
+function storeFailure(store: ContactStore, err: unknown): ContactStoreFailure {
+  const permission = isPermissionError(err);
+  return {
+    source: store.source,
+    permission,
+    message: `Contacts store "${store.source}" could not be read: ${(err as Error).message}. ${
+      permission ? FULL_DISK_ACCESS_HINT : DAMAGED_STORE_HINT
+    }`,
+  };
 }
 
 // --- Store reading ---
@@ -245,6 +335,29 @@ function decodeLabel(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
   const match = /^_\$!<(.+)>!\$_$/.exec(raw);
   return (match ? match[1] : raw).toLowerCase();
+}
+
+/**
+ * A trailing extension, and the digits that are actually dialable without it.
+ *
+ * `normalizePhone` keeps only digits, so an extension stored in the same field
+ * lands inside the E.164 string: `(201) 820-1234 ext. 56` becomes
+ * `+201820123456` — twelve digits, no longer the contact's number, and a
+ * subscriber tail the phone route can never share a suffix with. Splitting the
+ * extension off first restores both. `contacts find` is the first place in this
+ * repo that runs `normalizePhone` over *stored* AddressBook text rather than an
+ * operator-supplied argument, which is why this is needed here and nowhere else.
+ */
+const EXTENSION_SUFFIX = /(?:[,;]|\b(?:ext|extn|x)\.?)\s*(\d[\d\s.-]*)\s*$/i;
+
+export function splitExtension(raw: string): { dialable: string; extension: string | null } {
+  const match = EXTENSION_SUFFIX.exec(raw);
+  if (!match) return { dialable: raw, extension: null };
+  const dialable = raw.slice(0, match.index);
+  const extension = phoneDigits(match[1]);
+  // "x1234" on its own is a number, not an extension of nothing.
+  if (!phoneDigits(dialable) || !extension) return { dialable: raw, extension: null };
+  return { dialable, extension };
 }
 
 function text(row: Record<string, unknown>, column: string): string | null {
@@ -281,9 +394,10 @@ function readStore(store: ContactStore, includeNotes: boolean): RawContact[] {
   try {
     db = new Database(store.path, { readonly: true });
   } catch (err) {
+    const hint = isPermissionError(err) ? FULL_DISK_ACCESS_HINT : DAMAGED_STORE_HINT;
     throw new ContactsAccessError(
-      `Contacts database exists but cannot be opened: ${(err as Error).message}. ${FULL_DISK_ACCESS_HINT}`,
-      FULL_DISK_ACCESS_HINT,
+      `Contacts database exists but cannot be opened: ${(err as Error).message}. ${hint}`,
+      hint,
     );
   }
 
@@ -335,9 +449,11 @@ function readStore(store: ContactStore, includeNotes: boolean): RawContact[] {
         if (typeof owner !== "number" || typeof raw !== "string") continue;
         // A number with no digits is a formatting artifact, not a phone number.
         if (!phoneDigits(raw)) continue;
+        const { dialable, extension } = splitExtension(raw);
         byPk.get(owner)?.phones.push({
-          number: normalizePhone(raw),
+          number: normalizePhone(dialable),
           label: decodeLabel(phoneRow["ZLABEL"]),
+          extension,
         });
       }
     }
@@ -387,15 +503,26 @@ function readStore(store: ContactStore, includeNotes: boolean): RawContact[] {
  * Trap 4. `ZEXTERNALUUID` is the real cross-store identity (verified 79/79
  * overlap). Records without one fall back to name|organization — but only when
  * there is something to key on: an unnamed, organization-less record (a bare
- * phone number) would otherwise collapse together with every other one.
+ * phone number) would otherwise collapse together with every other one. The
+ * fallback is flagged as such because it is only safe *across* stores; see
+ * `loadContacts` for the same-store case.
  */
-function dedupeKey(raw: RawContact): string {
-  if (raw.uuid) return `uuid:${raw.uuid}`;
+interface DedupeKey {
+  key: string;
+  /**
+   * True for the name|organization key, which is a guess at identity rather
+   * than an identity: two rows can share it and still be two people.
+   */
+  fallback: boolean;
+}
+
+function dedupeKey(raw: RawContact): DedupeKey {
+  if (raw.uuid) return { key: `uuid:${raw.uuid}`, fallback: false };
   const parts = [raw.first, raw.last, raw.organization].map((value) =>
     (value ?? "").toLowerCase().trim(),
   );
-  if (!parts.some(Boolean)) return `row:${raw.source}:${raw.pk}`;
-  return `name:${parts.join("|")}`;
+  if (!parts.some(Boolean)) return { key: `row:${raw.source}:${raw.pk}`, fallback: true };
+  return { key: `name:${parts.join("|")}`, fallback: true };
 }
 
 /**
@@ -405,10 +532,14 @@ function dedupeKey(raw: RawContact): string {
  * First occurrence wins, so the label that was seen first is kept.
  */
 function unionPhones(into: ContactPhone[], incoming: readonly ContactPhone[]): void {
-  const known = new Set(into.map((phone) => phone.number));
+  // The extension is part of the identity: one main number with two extensions
+  // is two endpoints, not a duplicated row.
+  const keyOf = (phone: ContactPhone): string => `${phone.number}|${phone.extension ?? ""}`;
+  const known = new Set(into.map(keyOf));
   for (const phone of incoming) {
-    if (known.has(phone.number)) continue;
-    known.add(phone.number);
+    const key = keyOf(phone);
+    if (known.has(key)) continue;
+    known.add(key);
     into.push(phone);
   }
 }
@@ -459,20 +590,60 @@ function mergeContact(into: Contact, raw: RawContact): void {
   if (!into.sources.includes(raw.source)) into.sources.push(raw.source);
 }
 
-/** Read every store and fold the overlapping records into one contact list. */
+/**
+ * Read every store and fold the overlapping records into one contact list.
+ *
+ * A store that throws is skipped rather than fatal — `readStore` is already
+ * per-store tolerant of a missing entity, a missing table and missing columns,
+ * and a store that is damaged at query time is the same class of problem: one
+ * bad source must not turn every other source's contacts into an error. The
+ * skipped stores are reported through `options.unreadable` so the answer can
+ * say what it missed. Only losing *every* store is fatal, because then there is
+ * no answer to give at all.
+ */
 export function loadContacts(options: LoadContactsOptions = {}): Contact[] {
   const includeNotes = options.includeNotes ?? true;
   const stores = options.stores ?? storePaths();
+  const unreadable = options.unreadable ?? [];
 
   const merged = new Map<string, Contact>();
+  let readable = 0;
+
   for (const store of stores) {
-    for (const raw of readStore(store, includeNotes)) {
-      const key = dedupeKey(raw);
+    let records: RawContact[];
+    try {
+      records = readStore(store, includeNotes);
+    } catch (err) {
+      unreadable.push(storeFailure(store, err));
+      continue;
+    }
+    readable++;
+
+    for (const raw of records) {
+      const { key, fallback } = dedupeKey(raw);
       const existing = merged.get(key);
-      if (existing) mergeContact(existing, raw);
-      else merged.set(key, toContact(raw));
+      // A name collision *inside one store* is two cards in the user's own
+      // Contacts.app — two different John Smiths, not the stale cross-store
+      // mirror the fallback key exists to fold. Merging them would hand back
+      // one contact carrying two strangers' phone numbers.
+      if (existing && fallback && existing.sources.includes(raw.source)) {
+        merged.set(`row:${raw.source}:${raw.pk}`, toContact(raw));
+      } else if (existing) {
+        mergeContact(existing, raw);
+      } else {
+        merged.set(key, toContact(raw));
+      }
     }
   }
+
+  if (stores.length > 0 && readable === 0) {
+    const failure = unreadable[0];
+    throw new ContactsAccessError(
+      failure.message,
+      failure.permission ? FULL_DISK_ACCESS_HINT : DAMAGED_STORE_HINT,
+    );
+  }
+
   return [...merged.values()];
 }
 
@@ -598,6 +769,13 @@ export function matchPhone(index: ContactIndex, queryDigits: string): RoutedHit[
  * A substring-only hit is a guess about a different domain, so it is reported
  * low confidence while the two equality tiers are high.
  *
+ * The substring tier needs a local part of at least `MIN_EMAIL_SUBSTRING_LOCAL`
+ * characters and scores by how much of the stored local the query covered, so
+ * "a@nowhere.example" no longer returns every contact with an "a" in its
+ * address at an identical 0.7 — which both filled the limit with noise (the
+ * text fallback would have answered better) and broke the "array order is the
+ * rank" contract, since a field of exact ties is in load order, not rank order.
+ *
  * The two local-part tiers compare *dotless* locals whenever the domains
  * differ. Dot handling is a per-provider rule (only Google ignores dots), so
  * canonicalization can only apply it to the address's own domain — and then
@@ -614,6 +792,7 @@ export function matchEmail(index: ContactIndex, query: string): RoutedHit[] {
   const hits: Array<RoutedHit & { rank: number }> = [];
   for (const entry of index) {
     let rank = 0;
+    let coverage = 0;
     for (const address of entry.emails) {
       const candidate = canonicalizeEmail(address);
       const sameDomain = candidate.domain === target.domain;
@@ -621,19 +800,27 @@ export function matchEmail(index: ContactIndex, query: string): RoutedHit[] {
       const candidateLocal = sameDomain ? candidate.local : candidate.localDotless;
       if (candidate.canonical === target.canonical) rank = Math.max(rank, 3);
       else if (targetLocal && candidateLocal === targetLocal) rank = Math.max(rank, 2);
-      else if (targetLocal && candidateLocal.includes(targetLocal)) rank = Math.max(rank, 1);
+      else if (
+        targetLocal.length >= MIN_EMAIL_SUBSTRING_LOCAL &&
+        candidateLocal.includes(targetLocal)
+      ) {
+        rank = Math.max(rank, 1);
+        coverage = Math.max(coverage, targetLocal.length / candidateLocal.length);
+      }
     }
     if (!rank) continue;
     hits.push({
       entry,
       rank,
-      score: rank === 3 ? 1 : rank === 2 ? 0.9 : 0.7,
+      // A substring hit stays under the equal-local tier's 0.9 whatever it
+      // covered, so the score never contradicts the rank it was sorted by.
+      score: rank === 3 ? 1 : rank === 2 ? 0.9 : 0.7 * coverage,
       confidence: rank >= 2 ? "high" : "low",
       matched_on: ["email"],
     });
   }
 
-  return hits.sort((a, b) => b.rank - a.rank);
+  return hits.sort((a, b) => b.rank - a.rank || b.score - a.score);
 }
 
 // --- Text route ---
@@ -730,6 +917,34 @@ function toMatches(hits: RoutedHit[], route: MatchRoute, limit: number): Contact
 }
 
 /**
+ * Cap a fallback hit that "matched" the very field the structured route just
+ * rejected.
+ *
+ * The phone route is exact: it either shares a subscriber tail with a stored
+ * number or it does not. When it does not, `matchText` still scores the query's
+ * digit string against the phone atoms as characters, and one mistyped digit
+ * scores well above the high-confidence threshold — so a query that matches
+ * *nothing* came back as `high` while the same query fully covered by a stored
+ * number correctly came back as `low`. `high` is the field the skill doc calls
+ * "safe to use directly", so this is the difference between an agent dialing a
+ * stranger and asking the operator.
+ *
+ * Only evidence entirely from that field is capped. A fallback that matched the
+ * contact's *name* (`ashley.parker@nowhere.example` -> Ashley Parker) is a
+ * legitimate high-confidence answer; character similarity between two identifier
+ * strings never is.
+ */
+function capFallbackConfidence(hits: RoutedHit[], kind: QueryKind): RoutedHit[] {
+  if (kind !== "phone" && kind !== "email") return hits;
+  const rejected: ContactField = kind;
+  return hits.map((hit) =>
+    hit.matched_on.length > 0 && hit.matched_on.every((field) => field === rejected)
+      ? { ...hit, confidence: "low" as const }
+      : hit,
+  );
+}
+
+/**
  * Route the query, then rank. A structured route that finds nothing falls back
  * to text: a phone-shaped query with no suffix hit may still be an extension
  * or an account number written in a name, and an unknown address often shares
@@ -753,7 +968,7 @@ export function findContacts(
 
   const textFallback = (): FindContactsResult => {
     const matches = toMatches(
-      matchText(index, query, { includeNotes, candidates }),
+      capFallbackConfidence(matchText(index, query, { includeNotes, candidates }), kind),
       "text_fallback",
       limit,
     );
@@ -812,7 +1027,20 @@ export function checkContactsAccess(
   }
 
   try {
-    const contacts = loadContacts({ stores, includeNotes: false });
+    const unreadable: ContactStoreFailure[] = [];
+    const contacts = loadContacts({ stores, includeNotes: false, unreadable });
+    // Some stores read and some did not: not ready, but the contact count is
+    // the number actually readable rather than a flat 0.
+    if (unreadable.length > 0) {
+      return {
+        ok: false,
+        stores: stores.length,
+        contacts: contacts.length,
+        hint: `${unreadable.length} of ${stores.length} Contacts stores could not be read. ${unreadable
+          .map((failure) => failure.message)
+          .join(" ")}`,
+      };
+    }
     return { ok: true, stores: stores.length, contacts: contacts.length };
   } catch (err) {
     return {
@@ -822,7 +1050,9 @@ export function checkContactsAccess(
       hint:
         err instanceof ContactsAccessError
           ? err.message
-          : `Contacts database could not be read: ${(err as Error).message}. ${FULL_DISK_ACCESS_HINT}`,
+          : `Contacts database could not be read: ${(err as Error).message}. ${
+              isPermissionError(err) ? FULL_DISK_ACCESS_HINT : DAMAGED_STORE_HINT
+            }`,
     };
   }
 }

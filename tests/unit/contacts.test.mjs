@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -16,6 +16,7 @@ import {
   matchEmail,
   matchPhone,
   matchText,
+  splitExtension,
   storePaths,
 } from "../../dist/providers/contacts.js";
 import {
@@ -52,10 +53,8 @@ const DEFAULT_RECORD_COLUMNS = [
   "ZEXTERNALUUID",
 ];
 
-function createStore(root, spec) {
-  const dir = join(root, spec.source);
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, "AddressBook-v22.abcddb");
+/** Write one AddressBook-shaped store at an exact path. */
+function writeStore(path, spec) {
   const db = new Database(path);
   const recordColumns = spec.recordColumns ?? DEFAULT_RECORD_COLUMNS;
 
@@ -150,8 +149,32 @@ function createStore(root, spec) {
   } finally {
     db.close();
   }
+}
 
+function createStore(sourcesDir, spec) {
+  const dir = join(sourcesDir, spec.source);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "AddressBook-v22.abcddb");
+  writeStore(path, spec);
   return { source: spec.source, path };
+}
+
+/**
+ * The legacy store that sits *beside* `Sources` rather than inside it — the
+ * pre-Sources primary, which `storePaths` names `top-level`.
+ */
+function createTopLevelStore(root, spec) {
+  const path = join(root, "AddressBook-v22.abcddb");
+  writeStore(path, spec);
+  return { source: "top-level", path };
+}
+
+/** A file that exists where a store belongs but is not a database. */
+function createDamagedStore(sourcesDir, source) {
+  mkdirSync(join(sourcesDir, source), { recursive: true });
+  const path = join(sourcesDir, source, "AddressBook-v22.abcddb");
+  writeFileSync(path, "not a database");
+  return { source, path };
 }
 
 /** Build the fixture stores, run `body` against them, then delete the temp dir. */
@@ -163,11 +186,17 @@ function withStores(specs, body) {
  * Same, but hands the body the Sources *directory* as well — what
  * `OUTREACH_CONTACTS_SOURCES_DIR` points the CLI at, so the command itself can
  * be exercised without touching the machine's own AddressBook.
+ *
+ * The fixture mirrors the real layout — `<root>/Sources/<uuid>/` with the
+ * legacy store's slot at `<root>/` — so the top-level store `storePaths` also
+ * reads is reachable from a test as `dirname(sourcesDir)`.
  */
 function withSourcesDir(specs, body) {
   const root = mkdtempSync(join(tmpdir(), "outreach-contacts-test-"));
+  const sourcesDir = join(root, "Sources");
+  mkdirSync(sourcesDir, { recursive: true });
   try {
-    return body(root, specs.map((spec) => createStore(root, spec)));
+    return body(sourcesDir, specs.map((spec) => createStore(sourcesDir, spec)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -259,7 +288,7 @@ test("stores with different ZABCDRECORD column sets load without throwing", () =
   const brian = found.get("Brian Davis");
   assert.equal(brian?.job_title, null);
   assert.equal(brian?.organization, "Designer Appliances");
-  assert.deepEqual(brian?.phones, [{ number: "+12018200370", label: "work" }]);
+  assert.deepEqual(brian?.phones, [{ number: "+12018200370", label: "work", extension: null }]);
   assert.deepEqual(brian?.emails, []);
 });
 
@@ -290,7 +319,7 @@ test("ABCDInfo and ABCDGroup rows are excluded from the contact list", () => {
 
   assert.equal(contacts.length, 1);
   assert.equal(contacts[0].name, "Ashley Parker");
-  assert.deepEqual(contacts[0].phones, [{ number: "+15512613888", label: "mobile" }]);
+  assert.deepEqual(contacts[0].phones, [{ number: "+15512613888", label: "mobile", extension: null }]);
 });
 
 // --- Trap 4: cross-store dedup ---
@@ -334,8 +363,8 @@ test("the same ZEXTERNALUUID across two stores yields one merged contact", () =>
   assert.equal(fred.organization, "Outreach Labs");
   assert.equal(fred.job_title, "Operator");
   assert.deepEqual(fred.phones, [
-    { number: "+15512613888", label: "mobile" },
-    { number: "+16285557712", label: "home" },
+    { number: "+15512613888", label: "mobile", extension: null },
+    { number: "+16285557712", label: "home", extension: null },
   ]);
   // The duplicate address differs only in case and is not added twice.
   assert.deepEqual(fred.emails, [{ address: "fred@example.com", label: "work" }]);
@@ -390,8 +419,8 @@ test("records without ZEXTERNALUUID dedupe on name|organization", () => {
   assert.equal(insulation.length, 1);
   assert.equal(insulation[0].name, "Karen Bell");
   assert.deepEqual(insulation[0].phones, [
-    { number: "+14155550143", label: "mobile" },
-    { number: "+16285557712", label: "home" },
+    { number: "+14155550143", label: "mobile", extension: null },
+    { number: "+16285557712", label: "home", extension: null },
   ]);
   assert.deepEqual(insulation[0].sources.sort(), ["store-a", "store-b"]);
   // A different organization is a different person, not a merge target.
@@ -422,6 +451,50 @@ test("nameless, organization-less records do not collapse into one contact", () 
 
 // --- Duplicate child rows inside a single record ---
 
+test("two same-name records inside one store stay two contacts", () => {
+  // The name|organization key exists to fold the stale *cross-store* mirror of
+  // a record that has no ZEXTERNALUUID. Applied inside a single store it merges
+  // two cards the user's own Contacts.app shows separately, and hands back one
+  // contact carrying two strangers' phone numbers — at high confidence, since
+  // the name matches perfectly.
+  const contacts = loadFrom([
+    {
+      source: "store-namesakes",
+      records: [
+        { pk: 1, ZFIRSTNAME: "John", ZLASTNAME: "Smith" },
+        { pk: 2, ZFIRSTNAME: "John", ZLASTNAME: "Smith" },
+      ],
+      phones: [
+        { owner: 1, number: "+1 (415) 555-0101", label: null },
+        { owner: 2, number: "+1 (628) 555-0202", label: null },
+      ],
+    },
+  ]);
+
+  assert.equal(contacts.length, 2);
+  assert.deepEqual(
+    contacts.map((contact) => contact.phones.map((phone) => phone.number)),
+    [["+14155550101"], ["+16285550202"]],
+  );
+
+  // ...while the same two names in *different* stores are still the one
+  // cross-store record the fallback key is for (covered above as well).
+  const mirrored = loadFrom([
+    {
+      source: "store-a",
+      records: [{ pk: 1, ZFIRSTNAME: "John", ZLASTNAME: "Smith" }],
+      phones: [{ owner: 1, number: "+1 (415) 555-0101", label: null }],
+    },
+    {
+      source: "store-b",
+      records: [{ pk: 9, ZFIRSTNAME: "John", ZLASTNAME: "Smith" }],
+      phones: [{ owner: 9, number: "+1 (415) 555-0101", label: null }],
+    },
+  ]);
+  assert.equal(mirrored.length, 1);
+  assert.deepEqual(mirrored[0].sources, ["store-a", "store-b"]);
+});
+
 test("duplicate phone and email rows inside one record are emitted once", () => {
   // Not a cross-store merge: one store, one record, two identical child rows —
   // which the real AddressBook genuinely contains. The union has to run on the
@@ -446,8 +519,8 @@ test("duplicate phone and email rows inside one record are emitted once", () => 
   assert.equal(contacts.length, 1);
   assert.equal(contacts[0].sources.length, 1, "this contact must never have been merged");
   assert.deepEqual(contacts[0].phones, [
-    { number: "+18135001416", label: "mobile" },
-    { number: "+16285557712", label: "home" },
+    { number: "+18135001416", label: "mobile", extension: null },
+    { number: "+16285557712", label: "home", extension: null },
   ]);
   assert.deepEqual(contacts[0].emails, [
     { address: "Brian.Davis@Designerappliances.com", label: "work" },
@@ -473,11 +546,76 @@ test("phone labels are decoded from Apple's encoding", () => {
   ]);
 
   assert.deepEqual(contacts[0].phones, [
-    { number: "+15512613888", label: "mobile" },
-    { number: "+14155550143", label: null },
-    { number: "+16285557712", label: null },
-    { number: "+12018200370", label: "beach house" },
+    { number: "+15512613888", label: "mobile", extension: null },
+    { number: "+14155550143", label: null, extension: null },
+    { number: "+16285557712", label: null, extension: null },
+    { number: "+12018200370", label: "beach house", extension: null },
   ]);
+});
+
+// --- Stored extensions ---
+
+test("splitExtension separates a trailing extension from the dialable number", () => {
+  for (const [raw, dialable, extension] of [
+    ["(201) 820-1234 ext. 56", "(201) 820-1234", "56"],
+    ["201-820-1234 x56", "201-820-1234", "56"],
+    ["+1 201 820 1234, 56", "+1 201 820 1234", "56"],
+    ["555-1234;9", "555-1234", "9"],
+  ]) {
+    const split = splitExtension(raw);
+    assert.equal(split.dialable.trim(), dialable, raw);
+    assert.equal(split.extension, extension, raw);
+  }
+
+  // Nothing that is not an extension may be shortened: an international number
+  // and a bare "x1234" (an extension of nothing) stay whole.
+  for (const raw of ["+44 20 7946 0958", "(201) 820-1234", "x1234", "---"]) {
+    assert.deepEqual(splitExtension(raw), { dialable: raw, extension: null }, raw);
+  }
+});
+
+test("a stored extension is kept out of the E.164 number and stays findable", () => {
+  const contacts = loadFrom([
+    {
+      source: "store-extension",
+      records: [{ pk: 1, ZFIRSTNAME: "Ext", ZLASTNAME: "Person", ZEXTERNALUUID: "u-ext" }],
+      phones: [{ owner: 1, number: "(201) 820-1234 ext. 56", label: "_$!<Work>!$_" }],
+    },
+  ]);
+
+  // Folding the extension into the digits produced "+201820123456": twelve
+  // digits, a valid-looking Egyptian number, and not this contact's number.
+  assert.deepEqual(contacts[0].phones, [
+    { number: "+12018201234", label: "work", extension: "56" },
+  ]);
+
+  // And the phone route can reach it again: the indexed digits used to end in
+  // the extension, so the query shared no suffix with them at all.
+  const index = buildContactIndex(contacts);
+  const result = findContacts(index, "2018201234");
+  assert.equal(result.route, "phone");
+  assert.equal(result.matches[0].contact.name, "Ext Person");
+  assert.equal(result.matches[0].confidence, "high");
+  assert.equal(matchPhone(index, "2018201234").length, 1);
+});
+
+test("one number with two extensions is two endpoints, not a duplicate row", () => {
+  const contacts = loadFrom([
+    {
+      source: "store-two-extensions",
+      records: [{ pk: 1, ZORGANIZATION: "Front Desk Inc", ZEXTERNALUUID: "u-desk" }],
+      phones: [
+        { owner: 1, number: "(201) 820-1234 ext. 56", label: "_$!<Work>!$_" },
+        { owner: 1, number: "(201) 820-1234 ext. 57", label: "_$!<Work>!$_" },
+        { owner: 1, number: "(201) 820-1234 ext. 56", label: "_$!<Work>!$_" },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(
+    contacts[0].phones.map((phone) => phone.extension),
+    ["56", "57"],
+  );
 });
 
 // --- The shared search fixture ---
@@ -735,6 +873,50 @@ test("a local-part substring is a low-confidence email hit", () => {
   assert.equal(result.matches[0].confidence, "low");
 });
 
+test("a one-character local part is not a substring hit for half the book", () => {
+  // Every address containing an "a" used to come back at an identical 0.7, so
+  // the limit filled with noise, "array order is the rank" was not true of a
+  // field of exact ties, and the text fallback that would have answered was
+  // never reached. Same failure `MIN_TEXT_SCORE` exists to prevent.
+  assert.deepEqual(matchEmail(SEARCH_INDEX, "a@nowhere.example"), []);
+
+  const result = findContacts(SEARCH_INDEX, "a@nowhere.example", { limit: 50 });
+  assert.equal(result.kind, "email");
+  assert.equal(result.route, "text_fallback");
+  const scores = result.matches.map((match) => match.score);
+  assert.deepEqual([...new Set(scores)], scores, "a rank cannot be a field of ties");
+});
+
+test("substring email hits rank by how much of the stored local they cover", () => {
+  const contacts = loadFrom([
+    {
+      source: "store-coverage",
+      records: [
+        { pk: 1, ZFIRSTNAME: "Dev", ZLASTNAME: "Short", ZEXTERNALUUID: "u-short" },
+        { pk: 2, ZFIRSTNAME: "Dev", ZLASTNAME: "Long", ZEXTERNALUUID: "u-long" },
+      ],
+      emails: [
+        { owner: 1, address: "devx@a.example", label: null },
+        { owner: 2, address: "devlongername@b.example", label: null },
+      ],
+    },
+  ]);
+  const index = buildContactIndex(contacts);
+
+  const hits = matchEmail(index, "dev@nowhere.example");
+  assert.deepEqual(
+    hits.map((hit) => hit.entry.contact.name),
+    ["Dev Short", "Dev Long"],
+  );
+  // "dev" is three quarters of one local and a fifth of the other: a real rank,
+  // not two hits tied at a flat 0.7 in load order.
+  assert.ok(hits[0].score > hits[1].score);
+  // A guess about a different domain is still only a guess.
+  assert.ok(hits.every((hit) => hit.confidence === "low"));
+  // And it never outranks an equal-local hit, whatever it covered.
+  assert.ok(hits[0].score < 0.9);
+});
+
 // --- Text route ---
 
 test("an exact organization ranks first", () => {
@@ -793,6 +975,57 @@ test("an unknown address falls back to text and can still find the person", () =
   assert.equal(result.kind, "email");
   assert.equal(result.route, "text_fallback");
   assert.equal(result.matches[0].contact.name, "Ashley Parker");
+});
+
+test("a phone query the phone route rejected is never high confidence as text", () => {
+  // One mistyped digit falls out of the exact phone route into fuzzy text,
+  // where the digit string scores well against the stored number *as
+  // characters*. The asymmetry is the bug: a query a stored number fully
+  // covers is correctly "low", so a query that matches nothing must not be
+  // "high" — the field the skill doc calls safe to dial directly.
+  const result = findContacts(SEARCH_INDEX, "5512613887", { limit: 50 });
+  assert.equal(result.kind, "phone");
+  assert.equal(result.route, "text_fallback");
+  assert.equal(result.matches[0].contact.name, "Fred Yang");
+  assert.deepEqual(result.matches[0].matched_on, ["phone"]);
+  // The score is untouched: the fix is the confidence rule, not a new floor.
+  assert.ok(result.matches[0].score >= 0.5, `score was ${result.matches[0].score}`);
+  assert.ok(
+    result.matches.every((match) => match.confidence === "low"),
+    "a phone fallback that matched only phone atoms is never high confidence",
+  );
+
+  // The number nobody has, from the phone-route test above, behaves the same.
+  const unknown = findContacts(SEARCH_INDEX, "+1 (312) 555-1234", { limit: 50 });
+  assert.equal(unknown.route, "text_fallback");
+  assert.ok(unknown.matches.every((match) => match.confidence === "low"));
+});
+
+test("an email query the email route rejected is not high confidence on email atoms", () => {
+  // A typo'd local part at the right domain: the email route is exact and says
+  // no, so the fuzzy hit on the same address string cannot say "safe to use".
+  const result = findContacts(SEARCH_INDEX, "brain.davis@designerappliances.com", { limit: 50 });
+  assert.equal(result.route, "text_fallback");
+  assert.equal(result.matches[0].contact.name, "Brian Davis");
+  assert.deepEqual(result.matches[0].matched_on, ["email"]);
+  assert.ok(result.matches[0].score >= 0.5, `score was ${result.matches[0].score}`);
+  assert.equal(result.matches[0].confidence, "low");
+});
+
+test("a structured query that falls back onto a name keeps its confidence", () => {
+  // The cap is about evidence, not about the route: an address that matched the
+  // person's *name* is a legitimate high-confidence answer, and so is a number
+  // that turned out to be part of an organization name.
+  const byName = findContacts(SEARCH_INDEX, "ashley.parker@nowhere.example");
+  assert.equal(byName.route, "text_fallback");
+  assert.equal(byName.matches[0].contact.name, "Ashley Parker");
+  assert.ok(byName.matches[0].matched_on.includes("name"));
+  assert.equal(byName.matches[0].confidence, "high");
+
+  const digits = findContacts(SEARCH_INDEX, "90210");
+  assert.equal(digits.route, "text_fallback");
+  assert.equal(digits.matches[0].contact.name, "Corner Market 90210");
+  assert.equal(digits.matches[0].confidence, "high");
 });
 
 // --- Notes ---
@@ -906,8 +1139,12 @@ test("a nonsense query with only incidental character overlap returns nothing", 
   }
 });
 
-test("every reported text match clears the score floor", () => {
-  // Mirrors MIN_TEXT_SCORE in contacts.ts: anything weaker is not a candidate.
+test("every reported text match clears the score floor and is classified by it", () => {
+  // Mirrors MIN_TEXT_SCORE and HIGH_CONFIDENCE_TEXT_SCORE in contacts.ts:
+  // anything weaker than the floor is not a candidate, and `confidence` — the
+  // one field the skill doc tells agents to act on — is pinned to the
+  // threshold rather than left to whatever the classifier happens to do.
+  const seen = new Set();
   for (const query of ["Fred", "Designer Appliances", "insultion expert", "Bell", "Yang Fred"]) {
     const result = findContacts(SEARCH_INDEX, query, { limit: 50 });
     assert.ok(result.count > 0, query);
@@ -915,7 +1152,18 @@ test("every reported text match clears the score floor", () => {
       result.matches.every((match) => match.score >= 0.25),
       `${query}: ${JSON.stringify(result.matches.map((m) => m.score))}`,
     );
+    for (const match of result.matches) {
+      assert.equal(
+        match.confidence,
+        match.score >= 0.5 ? "high" : "low",
+        `${query}: ${match.contact.name} scored ${match.score}`,
+      );
+      seen.add(match.confidence);
+    }
   }
+  // Both sides of the threshold have to be exercised, or a classifier stuck on
+  // one answer would satisfy the loop above.
+  assert.deepEqual([...seen].sort(), ["high", "low"]);
 });
 
 // --- Prefilter and candidate limit ---
@@ -1081,12 +1329,86 @@ test("checkContactsAccess explains an empty sources directory", () => {
 
 test("checkContactsAccess reports an unreadable store rather than throwing", () => {
   withSourcesDir([], (dir) => {
-    mkdirSync(join(dir, "broken-source"), { recursive: true });
-    writeFileSync(join(dir, "broken-source", "AddressBook-v22.abcddb"), "not a database");
+    createDamagedStore(dir, "broken-source");
     const report = checkContactsAccess({ sourcesDir: dir });
     assert.equal(report.ok, false);
     assert.equal(report.stores, 1);
     assert.ok(report.hint.length > 0);
+    // A truncated or corrupt file is damage, not a denied permission: sending
+    // the operator to System Settings to grant access they already have is a
+    // worse answer than saying what actually happened.
+    assert.doesNotMatch(report.hint, /Full Disk Access/);
+    assert.match(report.hint, /not a readable Contacts database/);
+    assert.match(report.hint, /broken-source/);
+  });
+});
+
+test("one damaged store does not take the readable ones down with it", () => {
+  withSourcesDir(SEARCH_STORES, (dir, stores) => {
+    const damaged = createDamagedStore(dir, "broken-source");
+    const unreadable = [];
+    const contacts = loadContacts({
+      stores: [...stores, damaged],
+      includeNotes: false,
+      unreadable,
+    });
+
+    // readStore is already per-store tolerant of a missing entity, table and
+    // columns; a store that throws at query time is the same class of problem.
+    assert.equal(contacts.length, 9);
+    assert.deepEqual(
+      unreadable.map((failure) => failure.source),
+      ["broken-source"],
+    );
+    assert.equal(unreadable[0].permission, false);
+    assert.doesNotMatch(unreadable[0].message, /Full Disk Access/);
+  });
+});
+
+test("checkContactsAccess counts what it could read when one store is damaged", () => {
+  withSourcesDir(SEARCH_STORES, (dir) => {
+    createDamagedStore(dir, "broken-source");
+    const report = checkContactsAccess({ sourcesDir: dir });
+    assert.equal(report.ok, false);
+    assert.equal(report.stores, 2);
+    // Not 0: nine contacts were readable and reporting none of them hides
+    // which half of the address book is actually missing.
+    assert.equal(report.contacts, 9);
+    assert.match(report.hint, /broken-source/);
+    assert.doesNotMatch(report.hint, /Full Disk Access/);
+  });
+});
+
+test("the legacy top-level store is read, and ranks behind the per-account sources", () => {
+  withSourcesDir(SEARCH_STORES, (dir) => {
+    createTopLevelStore(dirname(dir), {
+      records: [
+        { pk: 1, ZFIRSTNAME: "Legacy", ZLASTNAME: "Only", ZEXTERNALUUID: "u-legacy" },
+        // The same person the live source holds, with a stale organization.
+        {
+          pk: 2,
+          ZFIRSTNAME: "Fred",
+          ZLASTNAME: "Yang",
+          ZORGANIZATION: "Stale Labs",
+          ZEXTERNALUUID: "u-fred",
+        },
+      ],
+      phones: [{ owner: 1, number: "+1 (312) 555-1234", label: "_$!<Mobile>!$_" }],
+    });
+
+    // Listed last, so the live per-account stores win every conflicting field.
+    assert.deepEqual(
+      storePaths(dir).map((store) => store.source),
+      ["search-primary", "top-level"],
+    );
+
+    const contacts = loadContacts({ stores: storePaths(dir), includeNotes: false });
+    const found = byName(contacts);
+    assert.equal(contacts.length, 10);
+    assert.deepEqual(found.get("Legacy Only").phones, [
+      { number: "+13125551234", label: "mobile", extension: null },
+    ]);
+    assert.equal(found.get("Fred Yang").organization, "Outreach Labs");
   });
 });
 
@@ -1201,6 +1523,90 @@ test("contacts find rejects a missing query and a bad limit as INPUT_ERROR", () 
   });
 });
 
+test("contacts find emits an extension only when the stored number has one", () => {
+  withSourcesDir(
+    [
+      {
+        source: "ext-store",
+        records: [
+          { pk: 1, ZFIRSTNAME: "Ext", ZLASTNAME: "Person", ZEXTERNALUUID: "u-ext" },
+          { pk: 2, ZFIRSTNAME: "Plain", ZLASTNAME: "Person", ZEXTERNALUUID: "u-plain" },
+        ],
+        phones: [
+          { owner: 1, number: "(201) 820-1234 ext. 56", label: "_$!<Work>!$_" },
+          { owner: 2, number: "(415) 555-0143", label: null },
+        ],
+      },
+    ],
+    (dir) => {
+      const ext = JSON.parse(runFind(dir, ["--query", "Ext Person", "--limit", "1"]).stdout);
+      assert.deepEqual(ext.matches[0].phones, [
+        { number: "+12018201234", label: "work", extension: "56" },
+      ]);
+
+      const plain = JSON.parse(runFind(dir, ["--query", "Plain Person", "--limit", "1"]).stdout);
+      assert.deepEqual(plain.matches[0].phones, [{ number: "+14155550143" }]);
+    },
+  );
+});
+
+test("contacts find answers from the readable stores and names the one it skipped", () => {
+  withSourcesDir(CLI_STORES, (dir) => {
+    createDamagedStore(dir, "broken-source");
+    const run = runFind(dir, ["--query", "Ashley", "--limit", "1"]);
+
+    // One damaged source used to abort the whole lookup with an INFRA_ERROR.
+    assert.equal(run.status, 0, run.stderr);
+    const payload = JSON.parse(run.stdout);
+    assert.equal(payload.count, 1);
+    assert.equal(payload.matches[0].name, "Ashley Parker");
+    // A partial answer has to say that it is partial.
+    assert.deepEqual(
+      payload.unreadable_sources.map((store) => store.source),
+      ["broken-source"],
+    );
+    assert.doesNotMatch(payload.unreadable_sources[0].message, /Full Disk Access/);
+  });
+});
+
+test("a result larger than the pipe buffer reaches a piped caller intact", () => {
+  // `outputJson()` followed by `process.exit()` does not wait for an async
+  // stdout write to drain: piped output stopped at exactly one 64KB buffer,
+  // mid-string, and still exited 0 — a caller had no signal the JSON it just
+  // failed to parse was truncated rather than malformed.
+  const filler = "Organization Number ".repeat(20);
+  withSourcesDir(
+    [
+      {
+        source: "big-store",
+        records: Array.from({ length: 300 }, (_, i) => ({
+          pk: i + 1,
+          ZFIRSTNAME: `Person${i}`,
+          ZLASTNAME: "Filler",
+          ZORGANIZATION: `${filler}${i}`,
+          ZEXTERNALUUID: `u-big-${i}`,
+        })),
+      },
+    ],
+    (dir) => {
+      // spawnSync gives the child a pipe, which is the failing case.
+      const run = runFind(dir, [
+        "--verbose",
+        "--limit",
+        "300",
+        "--query",
+        "Organization Number",
+      ]);
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(run.stdout.length > 65536, `expected > 64KB, got ${run.stdout.length}`);
+
+      const payload = JSON.parse(run.stdout);
+      assert.equal(payload.count, 300);
+      assert.equal(payload.matches.length, 300);
+    },
+  );
+});
+
 test("contacts find reports missing stores as INFRA_ERROR with a Full Disk Access hint", () => {
   withSourcesDir([], (dir) => {
     const run = runFind(dir, ["--query", "Ashley"]);
@@ -1214,8 +1620,7 @@ test("contacts find reports missing stores as INFRA_ERROR with a Full Disk Acces
 
 test("contacts find reports an unreadable store as INFRA_ERROR", () => {
   withSourcesDir([], (dir) => {
-    mkdirSync(join(dir, "broken-source"), { recursive: true });
-    writeFileSync(join(dir, "broken-source", "AddressBook-v22.abcddb"), "not a database");
+    createDamagedStore(dir, "broken-source");
     const run = runFind(dir, ["--query", "Ashley"]);
     assert.equal(run.status, 2);
     assert.equal(run.stdout, "");

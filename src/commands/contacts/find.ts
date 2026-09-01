@@ -8,6 +8,7 @@ import {
   checkContactsAccess,
   ContactsAccessError,
   type ContactMatch,
+  type ContactStoreFailure,
 } from "../../providers/contacts.js";
 import { outputJson, outputError } from "../../output.js";
 import { SUCCESS, INPUT_ERROR, INFRA_ERROR } from "../../exitCodes.js";
@@ -29,6 +30,9 @@ function serialize(match: ContactMatch, verbose: boolean): Record<string, unknow
     out.phones = contact.phones.map((phone) => {
       const entry: Record<string, unknown> = { number: phone.number };
       if (phone.label) entry.label = phone.label;
+      // Present only when the stored number carried one; `number` is always
+      // dialable on its own.
+      if (phone.extension) entry.extension = phone.extension;
       return entry;
     });
   }
@@ -106,9 +110,12 @@ export function registerFindCommand(parent: Command): void {
       }
 
       let contacts;
+      // Stores that could not be read. One damaged source does not fail the
+      // lookup, but a partial answer has to say that it is partial.
+      const unreadable: ContactStoreFailure[] = [];
       try {
         // Notes are verbose-only, so a plain search never pays to read them.
-        contacts = loadContacts({ stores, includeNotes: verbose });
+        contacts = loadContacts({ stores, includeNotes: verbose, unreadable });
       } catch (err) {
         if (err instanceof ContactsAccessError) {
           outputError(INFRA_ERROR, err.message);
@@ -138,9 +145,22 @@ export function registerFindCommand(parent: Command): void {
         payload.route = result.route;
       }
 
+      if (unreadable.length > 0) {
+        payload.unreadable_sources = unreadable.map((failure) => ({
+          source: failure.source,
+          message: failure.message,
+        }));
+      }
+
       payload.matches = result.matches.map((match) => serialize(match, verbose));
 
       outputJson(payload);
-      process.exit(SUCCESS);
+      // Deliberately not `process.exit(SUCCESS)`: exit() does not wait for an
+      // async stdout write to drain, so a payload larger than the pipe buffer
+      // (64KB on macOS) reached the caller truncated mid-string — valid-looking
+      // exit 0, unparseable JSON. Setting the code lets node exit once stdout
+      // has flushed. The error paths above keep their immediate exit: those
+      // payloads are one short line.
+      process.exitCode = SUCCESS;
     });
 }
