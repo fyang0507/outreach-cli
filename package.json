@@ -20,7 +20,7 @@
     "outreach.config.dev.yaml.example"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc && node scripts/install-agent-skill-symlinks.js",
+    "build": "rm -rf dist && tsc && chmod +x dist/cli.js",
     "test": "npm run build && node --test tests/unit/*.test.mjs"
   },
   "dependencies": {

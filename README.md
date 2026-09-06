@@ -81,7 +81,7 @@ node dist/cli.js health
 2. `outreach.config.dev.yaml` beside this checkout (`data_repo_path`)
 3. A `.agents/workspace.yaml` found by walking up from the current directory
 
-During development, invoke the compiled CLI as `node dist/cli.js …`. If you install the executable on your `PATH`, use `outreach …` instead. `npm run build` also makes the packaged `outreach` and `contact-operator` skills discoverable from the configured agent workspace when possible; the build still succeeds when no workspace is configured.
+During development, invoke the compiled CLI as `node dist/cli.js …`. If you install the executable on your `PATH`, use `outreach …` instead. `npm run build` compiles the CLI and makes it executable without reading workspace configuration or installing skills. The consuming workspace owns linking or installing the complete `skills/outreach/` and `skills/contact-operator/` bundles; their source remains in this repository.
 
 ### A careful first workflow
 
