@@ -5,6 +5,8 @@ description: Utility interface for outbound calls, SMS/iMessage, Gmail, Discord 
 
 Use `outreach` when an agent already has the recipient and the message or call objective. Run `outreach health` first when channel readiness is unknown.
 
+For deciding whether and how to proactively contact the operator during an unattended run, use the shared [contact-operator skill](../contact-operator/SKILL.md). It is co-shipped with Outreach for use across repositories; this capability skill covers the CLI mechanics once the contact objective is known.
+
 ## Channel References
 
 Load a channel note only when channel behavior matters, not just to copy command syntax:

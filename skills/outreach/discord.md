@@ -1,10 +1,6 @@
 # Discord Channel Manual
 
-Use this as the companion to `outreach discord --help`. It captures durable
-read semantics and intake gotchas; command flags and examples should stay in the CLI help.
-For *posting* to Discord and the call-vs-Discord decision when reaching the operator, see
-[operator.md](./operator.md). For scheduled capture processing, use the local
-`discord-intake` skill where it is installed.
+Use this as the companion to `outreach discord --help`. It captures durable read semantics and intake gotchas; use `outreach discord post --help` for posting syntax. For deciding whether and how to contact the operator during an unattended run, use the shared [contact-operator skill](../contact-operator/SKILL.md). For scheduled capture processing, use the local `discord-intake` skill where it is installed.
 
 `outreach discord history` reads a channel's messages back. It is a stateless, one-shot
 fetch: no polling, no watching, no stored cursor. The caller owns any cursor, digest, and

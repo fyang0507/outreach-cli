@@ -9,6 +9,8 @@ description: Decide whether and how a headless or non-interactive agent should p
 
 This skill governs proactive agent-to-human contact. Use it only when no live interactive session is attached; if the operator is present in the current chat, ask inline instead.
 
+This shared protocol is intentionally co-shipped with Outreach for use across repositories, including Fred Agent. Use the [Outreach capability skill](../outreach/SKILL.md) for CLI mechanics; keep the task's workflow state and outcome in the consuming repository's own record.
+
 ## Decision Rule
 
 One heuristic decides the channel:
@@ -31,7 +33,7 @@ outreach call place --call-operator --objective '<what you need decided>'
 
 Write the objective so the voice agent can present the decision clearly and capture a concrete answer. Prefer yes/no or bounded choices, and include enough context for the operator to decide without reading logs.
 
-When channel readiness is unknown, run `outreach health` first. If call mechanics or objective-writing details matter, read `.agents/skills/outreach/call.md`.
+When channel readiness is unknown, run `outreach health` first. If call mechanics or objective-writing details matter, read the [call guide](../outreach/call.md).
 
 ## Discord Path
 
@@ -59,7 +61,7 @@ Use `--silent` for low-priority digests or routine progress that should not push
 
 ## Recording the Outcome
 
-Placing the call or posting the update is not the end of this skill's responsibility. `outreach` has no campaign, contact, or task model of its own — it is a transport utility and will not remember why this contact happened. Once a call reaches `"ended"` (see `.agents/skills/outreach/call.md`'s reporting requirements for the required full-transcript read first), or once a Discord update is posted, write the outcome — including any loose ends — back into whatever record started this task: the issue, the ticket, the run's own task queue entry. That record, not the outreach transcript, is this skill's canonical home for the result.
+Placing the call or posting the update is not the end of this skill's responsibility. `outreach` has no campaign, contact, or task model of its own — it is a transport utility and will not remember why this contact happened. Once a call reaches `"ended"` (see the [call guide's reporting requirements](../outreach/call.md) for the required full-transcript read first), or once a Discord update is posted, write the outcome — including any loose ends — back into whatever record started this task: the issue, the ticket, the run's own task queue entry. That record, not the outreach transcript, is this skill's canonical home for the result.
 
 ## Boundaries
 
