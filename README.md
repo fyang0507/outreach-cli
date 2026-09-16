@@ -52,7 +52,7 @@ This is communication infrastructure, so its constraints are part of the product
 
 ## Requirements
 
-- A current Node.js runtime (the dependency graph requires Node.js 20 or newer) and npm.
+- Node.js 22 or newer and npm (the locked `better-sqlite3` dependency requires Node.js 22+).
 - macOS for the Messages.app channel. SMS history needs Full Disk Access for the terminal/agent host; sending needs the relevant macOS accessibility permission. Messages.app must be signed in.
 - `contacts find` reads the local Contacts stores and needs that same Full Disk Access grant—no additional permission, and no Contacts (`kTCCServiceAddressBook`) consent prompt. Only contacts synced to this Mac are visible.
 - Optional channel credentials only for the channels you enable: Twilio + a Google Generative AI key for calls, Gmail OAuth credentials for email, and a Discord bot token/guild for Discord. Voice calls use a local `ngrok` tunnel by default, or a manually supplied public webhook URL.
