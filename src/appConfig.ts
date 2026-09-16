@@ -193,9 +193,6 @@ export async function loadAppConfig(): Promise<AppConfig> {
   if (!speech.voice_name || typeof speech.voice_name !== "string") {
     throw new Error(`outreach: ${configPath} — gemini.speech.voice_name is required`);
   }
-  if ("thinking" in gemini) {
-    throw new Error(`outreach: ${configPath} — gemini.thinking is no longer supported. Remove the gemini.thinking section; Gemini 3.8 Live does not accept configurable thinking.`);
-  }
   if (!gemini.turn_taking || typeof gemini.turn_taking !== "object") {
     throw new Error(`outreach: ${configPath} — gemini.turn_taking is required`);
   }

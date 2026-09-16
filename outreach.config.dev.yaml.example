@@ -35,14 +35,13 @@ voice_agent:
   default_persona: "Stay goal-oriented. Be natural, polite, and concise. Don't over-explain or repeat yourself."
 
 gemini:
-  # Standard low-latency Gemini Live model; configurable thinking is unsupported.
+  # Live API model for low-latency voice calls.
   model: "gemini-3.8-live"
 
   speech:
     # Prebuilt voice name. Options: Aoede, Puck, Charon, Kore, Fenrir, Leda, Orus, Zephyr
     voice_name: "Aoede"
-    # BCP-47 language code for TTS output (e.g., "en-US", "es-ES").
-    # null = auto-detect, which handles multilingual calls correctly.
+    # Keep null for native audio's automatic language selection.
     language_code: null
 
   generation:
@@ -66,7 +65,7 @@ gemini:
     # Speech end detection. "END_SENSITIVITY_HIGH" = model responds sooner after silence,
     # but may cut off mid-sentence pauses. null = API default (LOW).
     end_of_speech_sensitivity: null
-    # Min ms of speech before start-of-speech fires. Lower = more responsive.
+    # Required detected-speech duration before committing start-of-speech, in ms.
     # null = API default.
     prefix_padding_ms: null
     # Min ms of silence before end-of-speech fires. KEY LATENCY KNOB.
