@@ -190,9 +190,8 @@ async function checkGeminiLive(
   });
   try {
     await withTimeout(session.connect(), GEMINI_CONNECT_TIMEOUT_MS, "Gemini Live connect");
-    // connect() resolves when the socket opens, which a bad API key and a rejected
-    // model/voice both survive — the rejection arrives as a close ~50ms later.
-    // Without this settle window the check is a false green.
+    // connect() waits for setupComplete. Keep a short observation window for a
+    // session that the server accepts and then immediately closes.
     await new Promise((resolve) => setTimeout(resolve, GEMINI_SETTLE_MS));
     if (session.isClosed) {
       return fail(

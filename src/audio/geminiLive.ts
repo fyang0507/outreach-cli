@@ -1,5 +1,6 @@
-import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Tool, type ThinkingLevel, type ActivityHandling } from "@google/genai";
+import { Behavior, Modality, Type, type LiveServerMessage, type Tool, type ActivityHandling, type Session } from "@google/genai";
 import type { GeminiConfig } from "../appConfig.js";
+import { createGeminiLive } from "./geminiConnection.js";
 
 export interface GeminiLiveSessionOptions {
   apiKey: string;
@@ -15,9 +16,12 @@ export interface GeminiLiveSessionOptions {
   onEnd: () => void;
 }
 
+// Gemini 3.8 Live defaults to async tools. Call-control operations must finish
+// before the model continues: DTMF replaces the stream, and hangup drains audio.
 const DEFAULT_TOOLS: Tool[] = [{
   functionDeclarations: [{
     name: "send_dtmf",
+    behavior: Behavior.BLOCKING,
     description: "Send DTMF keypad tones to navigate phone menus (IVR systems). Use when you hear options like 'press 1 for...'",
     parameters: {
       type: Type.OBJECT,
@@ -28,6 +32,7 @@ const DEFAULT_TOOLS: Tool[] = [{
     }
   }, {
     name: "end_call",
+    behavior: Behavior.BLOCKING,
     description: "End the phone call. Use when your objective is met or the conversation is naturally over.",
     parameters: {
       type: Type.OBJECT,
@@ -40,22 +45,25 @@ const DEFAULT_TOOLS: Tool[] = [{
 }];
 
 export class GeminiLiveSession {
-  private session: Awaited<ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>> | null = null;
+  private session: Session | null = null;
   private opts: GeminiLiveSessionOptions;
   private closed = false;
   private closeReasonText: string | undefined;
+  private rejectConnect: ((error: Error) => void) | null = null;
+  private cancelConnect: (() => void) | null = null;
 
   constructor(opts: GeminiLiveSessionOptions) {
     this.opts = opts;
   }
 
   async connect(): Promise<void> {
-    const ai = new GoogleGenAI({ apiKey: this.opts.apiKey });
+    if (this.closed) throw new Error("Gemini session is closed");
+    const { live, cancel } = createGeminiLive(this.opts.apiKey);
+    this.cancelConnect = cancel;
     const gc = this.opts.geminiConfig;
 
     // Build generation config — only include non-null values
     const generationConfig: Record<string, unknown> = {};
-    if (gc.generation.temperature !== null) generationConfig.temperature = gc.generation.temperature;
     if (gc.generation.top_p !== null) generationConfig.topP = gc.generation.top_p;
     if (gc.generation.top_k !== null) generationConfig.topK = gc.generation.top_k;
     if (gc.generation.max_output_tokens !== null) generationConfig.maxOutputTokens = gc.generation.max_output_tokens;
@@ -73,7 +81,12 @@ export class GeminiLiveSession {
     const outputTranscription: Record<string, unknown> = {};
     if (gc.transcription.output_language_codes) outputTranscription.languageCodes = gc.transcription.output_language_codes;
 
-    const session = await ai.live.connect({
+    // The SDK waits for setupComplete, but does not reject that wait when the
+    // socket fails. Surface setup failures through connect() instead.
+    const setupFailure = new Promise<never>((_, reject) => {
+      this.rejectConnect = reject;
+    });
+    const connection = live.connect({
       model: gc.model,
       config: {
         responseModalities: [Modality.AUDIO],
@@ -89,13 +102,6 @@ export class GeminiLiveSession {
         tools: DEFAULT_TOOLS,
         inputAudioTranscription: inputTranscription,
         outputAudioTranscription: outputTranscription,
-        // Thinking config
-        ...(gc.thinking.thinking_level !== "minimal" || gc.thinking.include_thoughts ? {
-          thinkingConfig: {
-            thinkingLevel: gc.thinking.thinking_level.toUpperCase() as ThinkingLevel,
-            includeThoughts: gc.thinking.include_thoughts,
-          },
-        } : {}),
         // Generation config overrides
         ...generationConfig,
         // VAD config
@@ -112,20 +118,26 @@ export class GeminiLiveSession {
       },
       callbacks: {
         onopen: () => {
-          console.log("[gemini-live] Connected");
+          console.log("[gemini-live] WebSocket opened");
         },
         onmessage: (msg: LiveServerMessage) => {
           this.handleMessage(msg);
         },
         onerror: (e: ErrorEvent) => {
+          if (this.closed) return;
           console.error("[gemini-live] Error:", e.error ?? e.message ?? e);
-          this.opts.onError?.(String(e.error ?? e.message ?? e));
+          const message = String(e.error ?? e.message ?? e);
+          if (this.rejectConnect) this.rejectConnect(new Error(message));
+          else this.opts.onError?.(message);
         },
         onclose: (e: CloseEvent) => {
-          // A rejected API key, model or voice never fails connect() — it arrives
-          // here, as a close a moment later. Keep the reason so callers can report it.
           this.closeReasonText = e?.reason || undefined;
           console.log(`[gemini-live] Connection closed${e?.reason ? `: ${e.reason}` : ""}`);
+          if (this.rejectConnect) {
+            this.rejectConnect(new Error(`Gemini closed during setup${e?.reason ? `: ${e.reason}` : ""}`));
+            this.closed = true;
+            return;
+          }
           if (!this.closed) {
             this.closed = true;
             this.opts.onEnd();
@@ -134,17 +146,24 @@ export class GeminiLiveSession {
       },
     });
 
-    // close() may have run while the handshake was in flight (a caller that gave
-    // up on a slow connect); adopting the socket now would leak it.
-    if (this.closed) {
-      try {
-        session.close();
-      } catch {
-        // ignore close errors
+    try {
+      const session = await Promise.race([connection, setupFailure]);
+      if (this.closed) {
+        try { session.close(); } catch { /* ignore close errors */ }
+        return;
       }
-      return;
+      this.session = session;
+    } catch (error) {
+      this.close();
+      // A cancelled handshake can still finish later; do not orphan its socket.
+      void connection.then((session) => {
+        try { session.close(); } catch { /* ignore close errors */ }
+      }, () => {});
+      throw error;
+    } finally {
+      this.rejectConnect = null;
+      this.cancelConnect = null;
     }
-    this.session = session;
   }
 
   private handleMessage(msg: LiveServerMessage): void {
@@ -257,6 +276,8 @@ export class GeminiLiveSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.rejectConnect?.(new Error("Gemini session closed before setup completed"));
+    this.cancelConnect?.();
     if (this.session) {
       try {
         this.session.close();

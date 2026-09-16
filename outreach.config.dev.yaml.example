@@ -1,5 +1,5 @@
 # Outreach CLI — Application Config
-# See docs/plan/tuning-reference.md for full parameter documentation.
+# See docs/done/call-internals.md for the Gemini Live configuration contract.
 # Secrets (API keys, creds) live in .env, not here.
 
 # Path to the external data repo where outreach data (transcripts) is stored.
@@ -35,36 +35,23 @@ voice_agent:
   default_persona: "Stay goal-oriented. Be natural, polite, and concise. Don't over-explain or repeat yourself."
 
 gemini:
-  # Model ID for Gemini Live API.
-  model: "models/gemini-3.1-flash-live-preview"
+  # Live API model for low-latency voice calls.
+  model: "gemini-3.8-live"
 
   speech:
     # Prebuilt voice name. Options: Aoede, Puck, Charon, Kore, Fenrir, Leda, Orus, Zephyr
     voice_name: "Aoede"
-    # BCP-47 language code for TTS output (e.g., "en-US", "es-ES").
-    # null = auto-detect, which handles multilingual calls correctly.
+    # Keep null for native audio's automatic language selection.
     language_code: null
 
   generation:
-    # Range (0.0, 2.0]. Lower = more deterministic, higher = more creative.
-    # null = API default (~1.0). For business calls, try 0.7.
-    temperature: null
+    # Voice output uses the model's default temperature.
     # Nucleus sampling threshold. null = API default.
     top_p: null
     # Top-k sampling. null = API default.
     top_k: null
     # Max tokens per response. null = API default.
     max_output_tokens: null
-
-  thinking:
-    # Reasoning depth: minimal, low, medium, high.
-    # Higher = smarter responses but more latency.
-    # "low" rather than "minimal": emitting speech and a tool call in the same turn is a
-    # planning step, and end_call was being dropped about half the time under "minimal"
-    # (see issue #98). Revisit if per-turn latency regresses.
-    thinking_level: "low"
-    # Return thought tokens in the response. Only useful for debugging.
-    include_thoughts: false
 
   vad:
     # Voice Activity Detection controls turn-taking speed.
@@ -76,7 +63,7 @@ gemini:
     # Speech end detection. "END_SENSITIVITY_HIGH" = model responds sooner after silence,
     # but may cut off mid-sentence pauses. null = API default (LOW).
     end_of_speech_sensitivity: null
-    # Min ms of speech before start-of-speech fires. Lower = more responsive.
+    # Required detected-speech duration before committing start-of-speech, in ms.
     # null = API default.
     prefix_padding_ms: null
     # Min ms of silence before end-of-speech fires. KEY LATENCY KNOB.

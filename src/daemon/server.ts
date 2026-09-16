@@ -921,10 +921,9 @@ async function handleCallPlace(params: Record<string, unknown>): Promise<object>
     onEnd: () => {
       session.preGeneratedGreetingSessionClosedAt = isoNow();
       console.log(`[daemon] Pre-connected Gemini session ended before media stream for call ${id}`);
-      // Only fires when the remote end closed the socket — our own close() never
-      // calls back. A rejected key/model/quota arrives exactly this way, after a
-      // connect() that already resolved, so record it as the recoverable
-      // pre-connect failure it is (pickup falls back to a fresh session).
+      // A ready session closed remotely during ringing; our own close() never
+      // calls back. Record the recoverable failure so pickup can try a fresh
+      // session. Setup failures reach the connect() catch below instead.
       appendEvent(session, {
         type: "preconnect_failed",
         ts: session.preGeneratedGreetingSessionClosedAt,

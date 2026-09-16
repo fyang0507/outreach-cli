@@ -1,5 +1,11 @@
 # Integration Tests: IVR Tool Usage
 
+## Gemini-only upgrade smoke test
+
+After `npm run build`, run `node --env-file=.env tests/integration/gemini-live-smoke.mjs` to test the shipped Gemini model with synthetic prompts. The script uses the public example configuration, requests audio/transcription and both call-control tools, echoes simulated tool responses, and closes the session within a 30-second budget. It requires `GOOGLE_GENERATIVE_AI_API_KEY` and incurs Gemini usage, but does not place phone calls, start the daemon, or load private operator context. This verifies the Gemini integration; it does not measure telephone latency or prove Twilio playback/DTMF delivery.
+
+## Telephone integration tests
+
 Live integration tests that exercise the voice agent's ability to navigate IVR menus using `send_dtmf` function calling and terminate calls using `end_call`.
 
 **These tests make real phone calls and cost money.**
