@@ -33,7 +33,6 @@ export interface GeminiConfig {
     language_code: string | null;
   };
   generation: {
-    temperature: number | null;
     top_p: number | null;
     top_k: number | null;
     max_output_tokens: number | null;

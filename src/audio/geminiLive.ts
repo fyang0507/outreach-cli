@@ -64,7 +64,6 @@ export class GeminiLiveSession {
 
     // Build generation config — only include non-null values
     const generationConfig: Record<string, unknown> = {};
-    if (gc.generation.temperature !== null) generationConfig.temperature = gc.generation.temperature;
     if (gc.generation.top_p !== null) generationConfig.topP = gc.generation.top_p;
     if (gc.generation.top_k !== null) generationConfig.topK = gc.generation.top_k;
     if (gc.generation.max_output_tokens !== null) generationConfig.maxOutputTokens = gc.generation.max_output_tokens;

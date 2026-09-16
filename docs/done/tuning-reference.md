@@ -54,11 +54,10 @@ Shorter silence thresholds can reduce response delay but cut off natural pauses.
 
 ## Generation settings
 
-Settings under `gemini.generation` use the API default when `null`:
+Voice output uses the model's default temperature. Settings under `gemini.generation` use the API default when `null`:
 
 | Config field | Effect |
 |---|---|
-| `temperature` | Sampling variation |
 | `top_p` | Nucleus sampling threshold |
 | `top_k` | Top-k sampling limit |
 | `max_output_tokens` | Maximum tokens per response |

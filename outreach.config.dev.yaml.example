@@ -45,9 +45,7 @@ gemini:
     language_code: null
 
   generation:
-    # Range (0.0, 2.0]. Lower = more deterministic, higher = more creative.
-    # null = API default (~1.0). For business calls, try 0.7.
-    temperature: null
+    # Voice output uses the model's default temperature.
     # Nucleus sampling threshold. null = API default.
     top_p: null
     # Top-k sampling. null = API default.

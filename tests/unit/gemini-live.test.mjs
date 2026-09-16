@@ -8,7 +8,7 @@ function geminiConfig() {
   return {
     model: "gemini-3.8-live",
     speech: { voice_name: "Aoede", language_code: null },
-    generation: { temperature: null, top_p: null, top_k: null, max_output_tokens: null },
+    generation: { top_p: null, top_k: null, max_output_tokens: null },
     vad: {
       start_of_speech_sensitivity: null,
       end_of_speech_sensitivity: null,
@@ -77,7 +77,7 @@ test("Gemini 3.8 setup enables audio, transcripts, and blocking call tools", asy
 test("Gemini setup preserves configured voice, generation, VAD, and transcription values", async (t) => {
   const config = geminiConfig();
   config.speech = { voice_name: "Kore", language_code: "en-US" };
-  config.generation = { temperature: 0, top_p: 0.8, top_k: 16, max_output_tokens: 512 };
+  config.generation = { top_p: 0.8, top_k: 16, max_output_tokens: 512 };
   config.vad = {
     start_of_speech_sensitivity: "START_SENSITIVITY_HIGH",
     end_of_speech_sensitivity: "END_SENSITIVITY_LOW",
@@ -91,7 +91,7 @@ test("Gemini setup preserves configured voice, generation, VAD, and transcriptio
     voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
     languageCode: "en-US",
   });
-  assert.equal(request.config.temperature, 0);
+  assert.equal(Object.hasOwn(request.config, "temperature"), false);
   assert.equal(request.config.topP, 0.8);
   assert.equal(request.config.topK, 16);
   assert.equal(request.config.maxOutputTokens, 512);
