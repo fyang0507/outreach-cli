@@ -38,10 +38,6 @@ export interface GeminiConfig {
     top_k: number | null;
     max_output_tokens: number | null;
   };
-  thinking: {
-    thinking_level: "minimal" | "low" | "medium" | "high";
-    include_thoughts: boolean;
-  };
   vad: {
     start_of_speech_sensitivity: "START_SENSITIVITY_LOW" | "START_SENSITIVITY_HIGH" | null;
     end_of_speech_sensitivity: "END_SENSITIVITY_LOW" | "END_SENSITIVITY_HIGH" | null;
@@ -197,12 +193,8 @@ export async function loadAppConfig(): Promise<AppConfig> {
   if (!speech.voice_name || typeof speech.voice_name !== "string") {
     throw new Error(`outreach: ${configPath} — gemini.speech.voice_name is required`);
   }
-  if (!gemini.thinking || typeof gemini.thinking !== "object") {
-    throw new Error(`outreach: ${configPath} — gemini.thinking is required`);
-  }
-  const thinking = gemini.thinking as Record<string, unknown>;
-  if (!thinking.thinking_level || typeof thinking.thinking_level !== "string") {
-    throw new Error(`outreach: ${configPath} — gemini.thinking.thinking_level is required`);
+  if ("thinking" in gemini) {
+    throw new Error(`outreach: ${configPath} — gemini.thinking is no longer supported. Remove the gemini.thinking section; Gemini 3.8 Live does not accept configurable thinking.`);
   }
   if (!gemini.turn_taking || typeof gemini.turn_taking !== "object") {
     throw new Error(`outreach: ${configPath} — gemini.turn_taking is required`);

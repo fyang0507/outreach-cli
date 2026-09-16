@@ -19,6 +19,14 @@ webhook tunnel; `call place` connects Twilio Media Streams to Gemini Live; the
 remaining call commands inspect, steer, measure or close that one session. The
 daemon stays up until `call teardown`.
 
+## Gemini Live configuration
+
+The shipped model is `gemini-3.8-live`, the standard low-latency model. When updating an existing installation, set `gemini.model: gemini-3.8-live` in `<data_repo>/outreach/config.yaml` and remove the entire `gemini.thinking` section (also from a local dev config if it is the active source). The loader rejects that obsolete section; sessions omit `thinkingConfig`. After deploying and updating the configuration, finish active calls, run `outreach call teardown`, then `outreach call init` to start a fresh daemon and validate the new model through preflight. Configuration is cached for the daemon's lifetime.
+
+Per Google's [3.8 migration guide](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live), function calls default to asynchronous execution. Both `send_dtmf` and `end_call` explicitly use `BLOCKING` so the model waits for the existing tool response. The bridge still owns stream replacement and farewell playback drain. Realtime `steer` nudges remain interleaved input; `sendTextTurn` sends an explicit user turn with `turnComplete: true`, which interrupts generation. Proactive audio is always enabled by the model; no proactivity or affective-dialogue options are sent. Audio output and both transcription streams remain enabled.
+
+The pinned SDK already supports these session fields, so this upgrade does not require a dependency change. Historical 3.1 thinking/latency measurements in `latency-analysis.md` and `tuning-reference.md` do not describe 3.8 behavior; tool reliability and telephone latency still need live measurement on the new model.
+
 ## Daemon lifecycle and readiness
 
 - `call init` starts the daemon and tunnel, then runs a preflight *inside the daemon* (`daemon.preflight` over IPC) so it validates the exact process, env, config and credentials a call will use: required `.env` variables, `config.yaml`, the rendered system instruction, the transcripts directory, Twilio auth, both caller IDs, a real Gemini Live connect, and a round trip through the public webhook URL back to this daemon's `instance_id`. Any failing check is an `INFRA_ERROR` carrying the whole report; on a fresh start init tears down only what it started and writes no `runtime.json`. `--skip-preflight` bypasses it. The preflight also runs on the "Already initialized" path — a healthy daemon is not a ready one — but there it leaves the running daemon and the existing `runtime.json` alone, so a failure has to be resolved with `teardown` + `init`. The whole run is bounded (`PREFLIGHT_BUDGET_MS`) so a stalling probe returns a partial report instead of an IPC timeout.

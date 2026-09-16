@@ -83,6 +83,8 @@ node dist/cli.js health
 
 During development, invoke the compiled CLI as `node dist/cli.js …`. If you install the executable on your `PATH`, use `outreach …` instead. `npm run build` also makes the packaged `outreach` and `contact-operator` skills discoverable from the configured agent workspace when possible; the build still succeeds when no workspace is configured.
 
+Calls use **Gemini 3.8 Live**. For an existing installation, set `gemini.model: gemini-3.8-live` and remove `gemini.thinking` from the active configuration; the model no longer accepts configurable thinking. After deploying, finish active calls and restart with `outreach call teardown` followed by `outreach call init` so preflight validates the new session. See the [call configuration contract](docs/done/call-internals.md#gemini-live-configuration) for the tool and steering behavior.
+
 ### A careful first workflow
 
 Start with an observation, keep the decision in the caller, then make one explicit action:

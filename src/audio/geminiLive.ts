@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Tool, type ThinkingLevel, type ActivityHandling } from "@google/genai";
+import { Behavior, GoogleGenAI, Modality, Type, type LiveServerMessage, type Tool, type ActivityHandling } from "@google/genai";
 import type { GeminiConfig } from "../appConfig.js";
 
 export interface GeminiLiveSessionOptions {
@@ -15,9 +15,12 @@ export interface GeminiLiveSessionOptions {
   onEnd: () => void;
 }
 
+// Gemini 3.8 Live defaults to async tools. Call-control operations must finish
+// before the model continues: DTMF replaces the stream, and hangup drains audio.
 const DEFAULT_TOOLS: Tool[] = [{
   functionDeclarations: [{
     name: "send_dtmf",
+    behavior: Behavior.BLOCKING,
     description: "Send DTMF keypad tones to navigate phone menus (IVR systems). Use when you hear options like 'press 1 for...'",
     parameters: {
       type: Type.OBJECT,
@@ -28,6 +31,7 @@ const DEFAULT_TOOLS: Tool[] = [{
     }
   }, {
     name: "end_call",
+    behavior: Behavior.BLOCKING,
     description: "End the phone call. Use when your objective is met or the conversation is naturally over.",
     parameters: {
       type: Type.OBJECT,
@@ -89,13 +93,6 @@ export class GeminiLiveSession {
         tools: DEFAULT_TOOLS,
         inputAudioTranscription: inputTranscription,
         outputAudioTranscription: outputTranscription,
-        // Thinking config
-        ...(gc.thinking.thinking_level !== "minimal" || gc.thinking.include_thoughts ? {
-          thinkingConfig: {
-            thinkingLevel: gc.thinking.thinking_level.toUpperCase() as ThinkingLevel,
-            includeThoughts: gc.thinking.include_thoughts,
-          },
-        } : {}),
         // Generation config overrides
         ...generationConfig,
         // VAD config

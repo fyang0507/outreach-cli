@@ -58,7 +58,7 @@ Its ranking rules — the four-voter ensemble and why it is four, the score floo
 ## Configuration Model
 
 - `.env` holds provider secrets. Calls require all five of `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `GOOGLE_GENERATIVE_AI_API_KEY`, `PERSONAL_CALLER_ID` and `TWILIO_DEFAULT_FROM_NUMBER` (`REQUIRED_CALL_ENV` in `src/config.ts`; `call init` refuses without them). Both caller IDs are required because `call place` dials from `PERSONAL_CALLER_ID` by default and from `TWILIO_DEFAULT_FROM_NUMBER` for `--from-twilio`/`--call-operator`. `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` and `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID` / `DISCORD_DEFAULT_CHANNEL` are needed only for those channels.
-- Runtime behavior lives at `<data_repo>/outreach/config.yaml`: operator identity, `voice_agent.default_persona`, `call.max_duration_seconds`, and the Gemini model, speech/voice, generation, thinking, VAD, turn-taking and transcription settings.
+- Runtime behavior lives at `<data_repo>/outreach/config.yaml`: operator identity, `voice_agent.default_persona`, `call.max_duration_seconds`, and the Gemini model, speech/voice, generation, VAD, turn-taking and transcription settings. Use `gemini-3.8-live`; `gemini.thinking` is no longer supported.
 - The daemon's stdout and stderr go to `~/.outreach/daemon.log` (path echoed by `call init` and recorded in `runtime.json`), rotated once at 10MB. Without it the bridge's own logs are discarded, and a call that went wrong cannot be diagnosed after the fact.
 - `outreach.config.dev.yaml` is a gitignored local dev escape hatch next to the CLI, and the only place `data_repo_path` is meaningful.
 - Resolution order: `OUTREACH_DATA_REPO`, dev config, walk-up for `.agents/workspace.yaml`.

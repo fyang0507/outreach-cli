@@ -1,9 +1,6 @@
 # Tuning Reference — Gemini Live Voice Call Parameters
 
-> **Archived / historical.** The `--no-amd` and `--experimental-local-vad` flags
-> referenced below were removed in the production cleanup: calls always enable Twilio
-> AMD and rely on Gemini automatic VAD. The rest of this reference (config architecture,
-> VAD/thinking/generation parameters) still applies.
+> **Archived / historical (Gemini 3.1).** The thinking settings and unavailable-feature list below are obsolete for Gemini 3.8 Live. Use the current [configuration example](../../outreach.config.dev.yaml.example) and [call configuration contract](call-internals.md#gemini-live-configuration). The `--no-amd` and `--experimental-local-vad` flags were also removed: calls always enable Twilio AMD and rely on Gemini automatic VAD.
 
 This doc covers all tunable parameters that affect voice call quality, latency, and naturalness. Use it as a reference for iterating on the call experience.
 
