@@ -136,6 +136,6 @@ node dist/cli.js call place --help
 
 `npm test` builds first and then runs `tests/unit/*.test.mjs` against `dist/` with `node --test`; the bridge tests drive `MediaStreamsBridge` with fake Twilio-WS/Gemini objects and mocked timers. `tests/integration/` is manual.
 
-`npm run build` compiles TypeScript, marks `dist/cli.js` executable, and best-effort installs shipped skills as symlinks under `.agents/skills/` in the configured agent workspace. It should still succeed when no data workspace is configured.
+`npm run build` compiles TypeScript and marks `dist/cli.js` executable. Build hooks must not read workspace configuration or install skills outside this checkout; tests use isolated fixtures. The consuming workspace owns installation of the complete `skills/outreach/` and `skills/contact-operator/` bundles; edit their source here.
 
 `CLAUDE.md` is a symlink to this file — keep documentation here.
